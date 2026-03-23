@@ -12,3 +12,4 @@ dist/
 /office-shot-*.html
 /artifacts/tmp/
 artifacts/validation
+.codex-agents

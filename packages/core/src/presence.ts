@@ -98,12 +98,15 @@ export async function loadFreshPresenceAgents(projectRoot: string): Promise<Dash
       updatedAt: entry.updatedAt,
       paths: entry.cwd ? [entry.cwd] : [],
       activityEvent: null,
+      latestMessage: null,
       threadId: null,
       taskId: null,
       resumeCommand: null,
       url: null,
       git: null,
       provenance: "presence",
-      confidence: "typed"
+      confidence: "typed",
+      needsUser: null,
+      liveSubscription: "readOnly"
     }));
 }

@@ -147,13 +147,30 @@ export interface AgentActivityEvent {
 export type AgentProvenanceSource = "codex" | "claude" | "cloud" | "presence";
 export type AgentConfidence = "typed" | "inferred";
 
+// Stores live approval/input waits from app-server.
+// Stores live approval/input waits from the app-server observer.
+export interface NeedsUserState {
+  kind: "approval" | "input";
+  requestId: string;
+  turnId?: string;
+  itemId?: string;
+  reason?: string;
+  command?: string;
+  cwd?: string;
+  grantRoot?: string;
+}
+
 export interface DashboardEvent {
   id: string;
   source: AgentProvenanceSource;
   confidence: AgentConfidence;
   threadId: string | null;
   createdAt: string;
-  kind: "turn" | "item" | "approval" | "input" | "command" | "fileChange" | "subagent" | "status" | "message" | "other";
+  method: string;
+  turnId?: string;
+  itemId?: string;
+  requestId?: string;
+  kind: "turn" | "item" | "approval" | "input" | "command" | "fileChange" | "subagent" | "status" | "message" | "tool" | "other";
   phase: "started" | "completed" | "interrupted" | "failed" | "waiting" | "updated";
   title: string;
   detail: string;
@@ -162,6 +179,12 @@ export interface DashboardEvent {
   isImage?: boolean;
   linesAdded?: number;
   linesRemoved?: number;
+  reason?: string;
+  command?: string;
+  cwd?: string;
+  grantRoot?: string;
+  availableDecisions?: string[];
+  networkApprovalContext?: Record<string, unknown> | null;
 }
 
 export interface DashboardAgent {
@@ -184,6 +207,7 @@ export interface DashboardAgent {
   updatedAt: string;
   paths: string[];
   activityEvent: AgentActivityEvent | null;
+  latestMessage: string | null;
   threadId: string | null;
   taskId: string | null;
   resumeCommand: string | null;
@@ -191,6 +215,8 @@ export interface DashboardAgent {
   git: GitInfo | null;
   provenance: AgentProvenanceSource;
   confidence: AgentConfidence;
+  needsUser: NeedsUserState | null;
+  liveSubscription: "subscribed" | "readOnly";
 }
 
 export interface DashboardSnapshot {

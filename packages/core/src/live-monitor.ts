@@ -1,47 +1,113 @@
 import { EventEmitter } from "node:events";
 import { watch, watchFile, unwatchFile, type FSWatcher } from "node:fs";
-import { getRoomsFilePath } from "./room-config";
+import { open } from "node:fs/promises";
 
-import { type AppServerNotification, CodexAppServerClient } from "./app-server";
+import {
+  type AppServerNotification,
+  type AppServerServerRequest,
+  CodexAppServerClient
+} from "./app-server";
 import { listCloudTasks } from "./cloud";
 import { canonicalizeProjectPath, filterThreadsForProject } from "./project-paths";
+import { getRoomsFilePath } from "./room-config";
 import { buildDashboardSnapshotFromState, filterProjectCloudTasks } from "./snapshot";
-import type { CloudTask, CodexThread, DashboardEvent, DashboardSnapshot } from "./types";
+import type {
+  CloudTask,
+  CodexThread,
+  DashboardEvent,
+  DashboardSnapshot,
+  NeedsUserState
+} from "./types";
 
 const DISCOVERY_INTERVAL_MS = 4000;
 const CLOUD_REFRESH_INTERVAL_MS = 30000;
 const FILE_WATCH_INTERVAL_MS = 1000;
 const SNAPSHOT_DEBOUNCE_MS = 150;
 const THREAD_READ_DEBOUNCE_MS = 250;
+const ACTIVE_SUBSCRIPTION_WINDOW_MS = 10 * 60 * 1000;
+const MAX_SUBSCRIBED_THREADS = 8;
 const MAX_RECENT_EVENTS = 64;
+// Desktop-backed threads can take noticeably longer to resume than simple CLI
+// sessions, and a too-short timeout drops the live item stream we need for
+// `item/agentMessage/*` notifications.
+const APP_SERVER_SUBSCRIPTION_TIMEOUT_MS = 12000;
+const ROLLOUT_TAIL_BYTES = 512 * 1024;
+
+interface PendingUserRequest extends NeedsUserState {
+  threadId: string;
+  createdAt: string;
+  availableDecisions?: string[];
+  networkApprovalContext?: Record<string, unknown> | null;
+}
+
+interface DashboardEventContext {
+  projectRoot: string;
+  createdAt?: string;
+  pendingRequest?: PendingUserRequest | null;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value ? (value as Record<string, unknown>) : null;
 }
 
-function collectThreadIds(value: unknown, output = new Set<string>()): Set<string> {
-  if (typeof value === "string" && /^[0-9a-f-]{16,}$/i.test(value)) {
-    output.add(value);
-    return output;
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function shorten(text: string, maxLength = 88): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
   }
-  if (Array.isArray(value)) {
-    value.forEach((entry) => collectThreadIds(entry, output));
-    return output;
-  }
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      promise.finally(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
+    })
+  ]);
+}
+
+function extractNumberValue(value: unknown, ...keys: string[]): number | undefined {
   const record = asRecord(value);
   if (!record) {
-    return output;
+    return undefined;
   }
-  for (const [key, entry] of Object.entries(record)) {
-    if (/thread/i.test(key)) {
-      collectThreadIds(entry, output);
-      continue;
-    }
-    if (typeof entry === "object" && entry) {
-      collectThreadIds(entry, output);
+
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
     }
   }
-  return output;
+
+  return undefined;
+}
+
+function extractThreadId(value: unknown): string | null {
+  const record = asRecord(value);
+  const direct = record ? asString(record.threadId ?? record.thread_id) : undefined;
+  return direct ?? null;
+}
+
+function extractTurnId(value: unknown): string | undefined {
+  const record = asRecord(value);
+  return record ? asString(record.turnId ?? record.turn_id) : undefined;
+}
+
+function extractItemId(value: unknown): string | undefined {
+  const record = asRecord(value);
+  return record ? asString(record.itemId ?? record.item_id ?? record.id) : undefined;
 }
 
 function collectPaths(value: unknown, output = new Set<string>()): Set<string> {
@@ -61,7 +127,7 @@ function collectPaths(value: unknown, output = new Set<string>()): Set<string> {
     return output;
   }
   for (const [key, entry] of Object.entries(record)) {
-    if (/(path|cwd|file)/i.test(key)) {
+    if (/(path|cwd|file|grantRoot)/i.test(key)) {
       collectPaths(entry, output);
       continue;
     }
@@ -72,51 +138,55 @@ function collectPaths(value: unknown, output = new Set<string>()): Set<string> {
   return output;
 }
 
-function extractNumberValue(value: unknown, ...keys: string[]): number | undefined {
-  const record = asRecord(value);
-  if (!record) {
-    return undefined;
-  }
-
-  for (const key of keys) {
-    const candidate = record[key];
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return candidate;
-    }
-  }
-
-  return undefined;
+function primaryPath(value: unknown): string | null {
+  return [...collectPaths(value)][0] ?? null;
 }
 
-function summarizeFileChangeItem(item: Record<string, unknown>, fallbackPath: string | null): {
-  action: DashboardEvent["action"];
-  path: string | null;
-  title: string;
-  detail: string;
-  isImage: boolean;
-  linesAdded?: number;
-  linesRemoved?: number;
-} {
+function buildEventId(input: {
+  projectRoot: string;
+  method: string;
+  threadId?: string | null;
+  turnId?: string;
+  itemId?: string;
+  requestId?: string;
+  path?: string | null;
+}): string {
+  return [
+    input.projectRoot,
+    input.method,
+    input.threadId ?? "",
+    input.turnId ?? "",
+    input.itemId ?? "",
+    input.requestId ?? "",
+    input.path ?? ""
+  ].join("::");
+}
+
+function summarizeFileChange(item: Record<string, unknown>, fallbackPath: string | null) {
   const changes = Array.isArray(item.changes) ? item.changes : [];
   const primaryChange = changes.find((entry) => {
     const record = asRecord(entry);
     return Boolean(record && typeof record.path === "string");
   });
   const changeRecord = asRecord(primaryChange);
-  const rawPath = typeof changeRecord?.path === "string" ? changeRecord.path : fallbackPath;
+  const rawPath = asString(changeRecord?.path) ?? fallbackPath ?? null;
   const path = rawPath ? canonicalizeProjectPath(rawPath) ?? rawPath : null;
-  const changeKind = typeof changeRecord?.kind === "string" ? changeRecord.kind : "edit";
-  const action =
+  const changeKind = asString(changeRecord?.kind) ?? "edit";
+  const action: DashboardEvent["action"] =
     changeKind === "create" ? "created"
     : changeKind === "delete" ? "deleted"
     : changeKind === "move" || changeKind === "rename" ? "moved"
     : "edited";
 
   return {
-    action,
     path,
-    title: path ? `${changeKind} ${path}` : "File changed",
-    detail: typeof item.status === "string" ? item.status : "updated",
+    action,
+    title:
+      action === "created" ? "File created"
+      : action === "deleted" ? "File deleted"
+      : action === "moved" ? "File moved"
+      : "File edited",
+    detail: path ?? "Files",
     isImage: Boolean(path && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path)),
     linesAdded:
       extractNumberValue(changeRecord, "linesAdded", "lines_added", "added")
@@ -127,86 +197,101 @@ function summarizeFileChangeItem(item: Record<string, unknown>, fallbackPath: st
   };
 }
 
-function buildEventId(projectRoot: string, notification: AppServerNotification, createdAt: string, threadId: string | null): string {
-  return [projectRoot, notification.method, threadId ?? "", createdAt].join("::");
+function summarizeCommand(item: Record<string, unknown>, method: string) {
+  const command = asString(item.command) ?? method;
+  const cwd = asString(item.cwd) ?? null;
+  const status = asString(item.status) ?? "inProgress";
+  const phase =
+    status === "failed" || status === "declined" ? "failed"
+    : status === "completed" || status === "success" ? "completed"
+    : "started";
+  return { command, cwd, phase };
 }
 
-function buildDashboardEvent(
-  projectRoot: string,
-  notification: AppServerNotification,
-  threadId: string | null
+function summarizeTool(item: Record<string, unknown>, fallbackLabel = "MCP tool") {
+  const tool =
+    asString(item.tool)
+    ?? asString(item.name)
+    ?? asString(item.server)
+    ?? fallbackLabel;
+  const status = asString(item.status) ?? "inProgress";
+  const phase =
+    status === "failed" || status === "declined" ? "failed"
+    : status === "completed" || status === "success" ? "completed"
+    : "started";
+  return {
+    tool,
+    phase,
+    detail: shorten(tool)
+  };
+}
+
+function eventBase(
+  context: DashboardEventContext,
+  method: string,
+  params: Record<string, unknown>,
+  overrides: Partial<DashboardEvent>
+): DashboardEvent {
+  const threadId = overrides.threadId ?? extractThreadId(params) ?? null;
+  const turnId = overrides.turnId ?? extractTurnId(params);
+  const itemId = overrides.itemId ?? extractItemId(params.item ?? params);
+  const requestId = overrides.requestId;
+  const path = overrides.path ?? primaryPath(params);
+  return {
+    id: buildEventId({
+      projectRoot: context.projectRoot,
+      method,
+      threadId,
+      turnId,
+      itemId,
+      requestId,
+      path
+    }),
+    source: "codex",
+    confidence: "typed",
+    threadId,
+    createdAt: context.createdAt ?? new Date().toISOString(),
+    method,
+    turnId,
+    itemId,
+    requestId,
+    kind: "other",
+    phase: "updated",
+    title: method,
+    detail: method,
+    path,
+    ...overrides
+  };
+}
+
+function buildEventFromItem(
+  context: DashboardEventContext,
+  method: string,
+  params: Record<string, unknown>
 ): DashboardEvent | null {
-  const method = notification.method.toLowerCase();
-  const params = asRecord(notification.params) ?? {};
-  const item = asRecord(params.item) ?? params;
-  const itemType = typeof item.type === "string" ? item.type : null;
-  const createdAt = new Date().toISOString();
-  const path = [...collectPaths(params)][0] ?? null;
-
-  if (/approval/.test(method)) {
-    return {
-      id: buildEventId(projectRoot, notification, createdAt, threadId),
-      source: "codex",
-      confidence: "typed",
-      threadId,
-      createdAt,
-      kind: "approval",
-      phase: "waiting",
-      title: "Needs approval",
-      detail: "Approval requested",
-      path
-    };
+  const item = asRecord(params.item);
+  if (!item) {
+    return eventBase(context, method, params, {
+      kind: "item",
+      title: "Item updated",
+      detail: method
+    });
   }
 
-  if (/user.?input|input/.test(method) && /wait|request|needed|need/.test(method)) {
-    return {
-      id: buildEventId(projectRoot, notification, createdAt, threadId),
-      source: "codex",
-      confidence: "typed",
-      threadId,
-      createdAt,
-      kind: "input",
-      phase: "waiting",
-      title: "Needs input",
-      detail: "User input requested",
-      path
-    };
-  }
-
-  if (method.includes("turn")) {
-    const phase =
-      /fail/.test(method) ? "failed"
-      : /interrupt/.test(method) ? "interrupted"
-      : /complete|finish/.test(method) ? "completed"
-      : "started";
-    return {
-      id: buildEventId(projectRoot, notification, createdAt, threadId),
-      source: "codex",
-      confidence: "typed",
-      threadId,
-      createdAt,
-      kind: "turn",
-      phase,
-      title:
-        phase === "failed" ? "Turn failed"
-        : phase === "interrupted" ? "Turn interrupted"
-        : phase === "completed" ? "Turn completed"
-        : "Turn started",
-      detail: typeof params.turnId === "string" ? params.turnId : notification.method,
-      path
-    };
-  }
+  const itemType = asString(item.type) ?? "item";
+  const itemId = extractItemId(item);
+  const phase =
+    method === "item/started" ? "started"
+    : method === "item/completed"
+      ? (asString(item.status) === "failed" || asString(item.status) === "declined" ? "failed" : "completed")
+      : "updated";
 
   if (itemType === "fileChange") {
-    const change = summarizeFileChangeItem(item, path);
-    return {
-      id: buildEventId(projectRoot, notification, createdAt, threadId),
-      source: "codex",
-      confidence: "typed",
-      threadId,
-      createdAt,
+    const change = summarizeFileChange(item, primaryPath(params));
+    return eventBase(context, method, params, {
+      itemId,
       kind: "fileChange",
-      phase: "updated",
+      phase,
       title: change.title,
       detail: change.detail,
       path: change.path,
@@ -214,76 +299,622 @@ function buildDashboardEvent(
       isImage: change.isImage,
       linesAdded: change.linesAdded,
       linesRemoved: change.linesRemoved
-    };
+    });
   }
 
   if (itemType === "commandExecution") {
-    const phase =
-      typeof item.status === "string" && /failed|declined/i.test(item.status)
-        ? "failed"
-        : typeof item.status === "string" && /completed|success/i.test(item.status)
-        ? "completed"
-        : "started";
-    return {
-      id: buildEventId(projectRoot, notification, createdAt, threadId),
-      source: "codex",
-      confidence: "typed",
-      threadId,
-      createdAt,
+    const summary = summarizeCommand(item, method);
+    return eventBase(context, method, params, {
+      itemId,
       kind: "command",
       phase,
-      title: phase === "failed" ? "Command failed" : phase === "completed" ? "Command finished" : "Command started",
-      detail: typeof item.command === "string" ? item.command : notification.method,
-      path
-    };
+      title:
+        phase === "failed" ? "Command failed"
+        : phase === "completed" ? "Command completed"
+        : "Command started",
+      detail: summary.command,
+      command: summary.command,
+      cwd: summary.cwd ?? undefined,
+      path: summary.cwd
+    });
+  }
+
+  if (itemType === "enteredReviewMode" || itemType === "exitedReviewMode") {
+    return eventBase(context, method, params, {
+      itemId,
+      kind: "item",
+      phase,
+      title: itemType === "enteredReviewMode" ? "Review started" : "Review finished",
+      detail: shorten(asString(item.review) ?? itemType)
+    });
   }
 
   if (itemType === "collabToolCall" || itemType === "collabAgentToolCall") {
-    return {
-      id: buildEventId(projectRoot, notification, createdAt, threadId),
-      source: "codex",
-      confidence: "typed",
-      threadId,
-      createdAt,
+    return eventBase(context, method, params, {
+      itemId,
       kind: "subagent",
-      phase: "started",
-      title: "Subagent activity",
-      detail: notification.method,
-      path
-    };
+      phase,
+      title: phase === "completed" ? "Subagent updated" : "Subagent started",
+      detail: shorten(asString(item.tool) ?? itemType)
+    });
   }
 
   if (itemType === "agentMessage") {
-    return {
-      id: buildEventId(projectRoot, notification, createdAt, threadId),
-      source: "codex",
-      confidence: "typed",
-      threadId,
-      createdAt,
+    return eventBase(context, method, params, {
+      itemId,
       kind: "message",
+      phase,
+      title: phase === "completed" ? "Reply completed" : "Reply updated",
+      detail: shorten(asString(item.text) ?? itemType)
+    });
+  }
+
+  if (itemType === "plan") {
+    return eventBase(context, method, params, {
+      itemId,
+      kind: "turn",
       phase: "updated",
-      title: "Agent update",
-      detail: notification.method,
-      path
+      title: "Plan updated",
+      detail: shorten(asString(item.text) ?? "Plan")
+    });
+  }
+
+  if (itemType === "dynamicToolCall" || itemType === "mcpToolCall") {
+    return eventBase(context, method, params, {
+      itemId,
+      kind: "tool",
+      phase,
+      title:
+        phase === "failed" ? "MCP tool failed"
+        : phase === "completed" ? "MCP tool completed"
+        : "MCP tool started",
+      detail: summarizeTool(item).detail
+    });
+  }
+
+  return eventBase(context, method, params, {
+    itemId,
+    kind: "item",
+    phase,
+    title: `Item ${phase}`,
+    detail: itemType
+  });
+}
+
+export function buildDashboardEventFromAppServerMessage(
+  context: DashboardEventContext,
+  message: AppServerNotification | AppServerServerRequest
+): DashboardEvent | null {
+  const method = message.method;
+  const params = asRecord(message.params) ?? {};
+  const requestId = "id" in message ? String(message.id) : undefined;
+
+  switch (method) {
+    case "thread/status/changed": {
+      const status = asRecord(params.status);
+      const type = asString(status?.type) ?? "unknown";
+      const activeFlags = asStringArray(status?.activeFlags);
+      return eventBase(context, method, params, {
+        kind: "status",
+        phase:
+          activeFlags.includes("waitingOnApproval") || activeFlags.includes("waitingOnUserInput")
+            ? "waiting"
+            : "updated",
+        title:
+          activeFlags.includes("waitingOnApproval") ? "Waiting on approval"
+          : activeFlags.includes("waitingOnUserInput") ? "Waiting on input"
+          : `Thread ${type}`,
+        detail: activeFlags.length > 0 ? activeFlags.join(", ") : type
+      });
+    }
+    case "turn/started": {
+      const turn = asRecord(params.turn);
+      const turnId = extractTurnId(turn ?? params);
+      return eventBase(context, method, params, {
+        turnId,
+        kind: "turn",
+        phase: "started",
+        title: "Turn started",
+        detail: turnId ?? method
+      });
+    }
+    case "turn/completed": {
+      const turn = asRecord(params.turn);
+      const turnId = extractTurnId(turn ?? params);
+      const turnStatus = asString(turn?.status) ?? "completed";
+      const phase =
+        turnStatus === "failed" ? "failed"
+        : turnStatus === "interrupted" ? "interrupted"
+        : "completed";
+      const error = asRecord(turn?.error);
+      return eventBase(context, method, params, {
+        turnId,
+        kind: "turn",
+        phase,
+        title:
+          phase === "failed" ? "Turn failed"
+          : phase === "interrupted" ? "Turn interrupted"
+          : "Turn completed",
+        detail:
+          phase === "failed"
+            ? shorten(asString(error?.message) ?? turnId ?? method)
+            : turnId ?? method
+      });
+    }
+    case "turn/interrupted":
+      return eventBase(context, method, params, {
+        kind: "turn",
+        phase: "interrupted",
+        title: "Turn interrupted",
+        detail: extractTurnId(params) ?? method
+      });
+    case "turn/failed":
+      return eventBase(context, method, params, {
+        kind: "turn",
+        phase: "failed",
+        title: "Turn failed",
+        detail: shorten(asString(params.message) ?? extractTurnId(params) ?? method)
+      });
+    case "turn/plan/updated":
+      return eventBase(context, method, params, {
+        kind: "turn",
+        phase: "updated",
+        title: "Plan updated",
+        detail: shorten(asString(params.text) ?? "Plan")
+      });
+    case "turn/diff/updated":
+      return eventBase(context, method, params, {
+        kind: "turn",
+        phase: "updated",
+        title: "Diff updated",
+        detail: shorten(asString(params.text) ?? "Diff")
+      });
+    case "item/started":
+    case "item/completed":
+      return buildEventFromItem(context, method, params);
+    case "item/agentMessage/delta":
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        kind: "message",
+        phase: "updated",
+        title: "Reply streaming",
+        detail: shorten(asString(params.delta) ?? asString(params.textDelta) ?? "Agent response")
+      });
+    case "item/plan/delta":
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        kind: "turn",
+        phase: "updated",
+        title: "Plan streaming",
+        detail: shorten(asString(params.delta) ?? asString(params.textDelta) ?? "Plan")
+      });
+    case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/summaryPartAdded":
+    case "item/reasoning/textDelta":
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        kind: "message",
+        phase: "updated",
+        title: "Reasoning updated",
+        detail: shorten(asString(params.delta) ?? asString(params.textDelta) ?? "Reasoning")
+      });
+    case "item/commandExecution/outputDelta":
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        kind: "command",
+        phase: "updated",
+        title: "Command output",
+        detail: shorten(asString(params.delta) ?? asString(params.textDelta) ?? "Command output")
+      });
+    case "item/fileChange/outputDelta":
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        kind: "fileChange",
+        phase: "updated",
+        title: "Patch updated",
+        detail: shorten(asString(params.delta) ?? asString(params.textDelta) ?? "Patch output")
+      });
+    case "item/commandExecution/requestApproval": {
+      const networkApprovalContext = asRecord(params.networkApprovalContext) ?? null;
+      return eventBase(context, method, params, {
+        requestId,
+        itemId: extractItemId(params),
+        kind: "approval",
+        phase: "waiting",
+        title: networkApprovalContext ? "Network approval requested" : "Command approval requested",
+        detail: shorten(asString(params.command) ?? asString(params.reason) ?? "Approval requested"),
+        command: asString(params.command),
+        cwd: asString(params.cwd),
+        reason: asString(params.reason),
+        availableDecisions: asStringArray(params.availableDecisions),
+        networkApprovalContext
+      });
+    }
+    case "item/fileChange/requestApproval":
+      return eventBase(context, method, params, {
+        requestId,
+        itemId: extractItemId(params),
+        kind: "approval",
+        phase: "waiting",
+        title: "File approval requested",
+        detail: shorten(asString(params.reason) ?? primaryPath(params) ?? "Approval requested"),
+        reason: asString(params.reason),
+        grantRoot: asString(params.grantRoot),
+        availableDecisions: asStringArray(params.availableDecisions)
+      });
+    case "item/tool/requestUserInput":
+      return eventBase(context, method, params, {
+        requestId,
+        itemId: extractItemId(params),
+        kind: "input",
+        phase: "waiting",
+        title: "User input requested",
+        detail: shorten(asString(params.reason) ?? asString(params.prompt) ?? "Needs input"),
+        reason: asString(params.reason),
+        availableDecisions: asStringArray(params.availableDecisions)
+      });
+    case "item/tool/call":
+      return eventBase(context, method, params, {
+        requestId,
+        itemId: extractItemId(params),
+        kind: "tool",
+        phase: "started",
+        title: "MCP tool call",
+        detail: shorten(asString(params.tool) ?? asString(params.name) ?? "MCP tool")
+      });
+    case "serverRequest/resolved": {
+      const pending = context.pendingRequest ?? null;
+      const resolvedRequestId = asString(params.requestId) ?? requestId;
+      if (pending) {
+        return eventBase(context, method, params, {
+          requestId: resolvedRequestId ?? pending.requestId,
+          threadId: pending.threadId,
+          turnId: pending.turnId,
+          itemId: pending.itemId,
+          kind: pending.kind === "approval" ? "approval" : "input",
+          phase: "completed",
+          title: pending.kind === "approval" ? "Approval resolved" : "Input resolved",
+          detail: pending.reason ?? pending.command ?? pending.kind
+        });
+      }
+      return eventBase(context, method, params, {
+        requestId: resolvedRequestId,
+        kind: "other",
+        phase: "completed",
+        title: "Request resolved",
+        detail: resolvedRequestId ?? method
+      });
+    }
+    default:
+      return null;
+  }
+}
+
+function buildNeedsUserStateFromServerRequest(message: AppServerServerRequest): PendingUserRequest | null {
+  const params = asRecord(message.params) ?? {};
+  const threadId = extractThreadId(params);
+  if (!threadId) {
+    return null;
+  }
+
+  const requestId = String(message.id);
+  if (message.method === "item/commandExecution/requestApproval") {
+    return {
+      kind: "approval",
+      requestId,
+      threadId,
+      createdAt: new Date().toISOString(),
+      turnId: extractTurnId(params),
+      itemId: extractItemId(params),
+      reason: asString(params.reason),
+      command: asString(params.command),
+      cwd: asString(params.cwd),
+      availableDecisions: asStringArray(params.availableDecisions),
+      networkApprovalContext: asRecord(params.networkApprovalContext) ?? null
     };
   }
 
-  if (method.includes("item")) {
+  if (message.method === "item/fileChange/requestApproval") {
     return {
-      id: buildEventId(projectRoot, notification, createdAt, threadId),
-      source: "codex",
-      confidence: "typed",
+      kind: "approval",
+      requestId,
       threadId,
-      createdAt,
-      kind: "item",
-      phase: "updated",
-      title: itemType ? `Item: ${itemType}` : "Item updated",
-      detail: notification.method,
-      path
+      createdAt: new Date().toISOString(),
+      turnId: extractTurnId(params),
+      itemId: extractItemId(params),
+      reason: asString(params.reason),
+      grantRoot: asString(params.grantRoot),
+      availableDecisions: asStringArray(params.availableDecisions)
+    };
+  }
+
+  if (message.method === "item/tool/requestUserInput") {
+    return {
+      kind: "input",
+      requestId,
+      threadId,
+      createdAt: new Date().toISOString(),
+      turnId: extractTurnId(params),
+      itemId: extractItemId(params),
+      reason: asString(params.reason) ?? asString(params.prompt),
+      availableDecisions: asStringArray(params.availableDecisions)
     };
   }
 
   return null;
+}
+
+function parseJsonLine(rawLine: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(rawLine);
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+export function parseApplyPatchInput(input: string): {
+  path: string | null;
+  action: DashboardEvent["action"];
+  title: string;
+  linesAdded?: number;
+  linesRemoved?: number;
+} | null {
+  const lines = input.split(/\r?\n/);
+  let path: string | null = null;
+  let action: DashboardEvent["action"] = "edited";
+  let linesAdded = 0;
+  let linesRemoved = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("*** Update File: ")) {
+      path = canonicalizeProjectPath(line.slice("*** Update File: ".length).trim()) ?? line.slice("*** Update File: ".length).trim();
+      action = "edited";
+      continue;
+    }
+    if (line.startsWith("*** Add File: ")) {
+      path = canonicalizeProjectPath(line.slice("*** Add File: ".length).trim()) ?? line.slice("*** Add File: ".length).trim();
+      action = "created";
+      continue;
+    }
+    if (line.startsWith("*** Delete File: ")) {
+      path = canonicalizeProjectPath(line.slice("*** Delete File: ".length).trim()) ?? line.slice("*** Delete File: ".length).trim();
+      action = "deleted";
+      continue;
+    }
+    if (line.startsWith("*** Move to: ")) {
+      path = canonicalizeProjectPath(line.slice("*** Move to: ".length).trim()) ?? line.slice("*** Move to: ".length).trim();
+      action = "moved";
+      continue;
+    }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      linesAdded += 1;
+      continue;
+    }
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      linesRemoved += 1;
+    }
+  }
+
+  if (!path) {
+    return null;
+  }
+
+  return {
+    path,
+    action,
+    title:
+      action === "created" ? "File created"
+      : action === "deleted" ? "File deleted"
+      : action === "moved" ? "File moved"
+      : "File edited",
+    linesAdded: linesAdded > 0 ? linesAdded : undefined,
+    linesRemoved: linesRemoved > 0 ? linesRemoved : undefined
+  };
+}
+
+function parseExecCommandArguments(argumentsText: string): {
+  command: string;
+  cwd?: string;
+} | null {
+  try {
+    const parsed = JSON.parse(argumentsText) as Record<string, unknown>;
+    const command = asString(parsed.cmd);
+    if (!command) {
+      return null;
+    }
+    return {
+      command,
+      cwd: asString(parsed.workdir)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseFunctionCallOutputMetadata(output: string): {
+  command?: string;
+  phase: DashboardEvent["phase"];
+} {
+  const commandMatch = output.match(/Command:\s+([^\n]+)/);
+  const exitMatch = output.match(/Process exited with code\s+(\d+)/);
+  const runningMatch = output.match(/Process running with session ID\s+\d+/);
+  return {
+    command: commandMatch?.[1]?.trim(),
+    phase:
+      exitMatch
+        ? (exitMatch[1] === "0" ? "completed" : "failed")
+        : runningMatch
+          ? "started"
+          : "updated"
+  };
+}
+
+export function buildRolloutHookEvent(
+  projectRoot: string,
+  threadId: string,
+  entry: Record<string, unknown>,
+  pendingCommands = new Map<string, { command: string; cwd?: string }>()
+): DashboardEvent | null {
+  const payload = asRecord(entry.payload);
+  const timestamp = asString(entry.timestamp) ?? new Date().toISOString();
+  if (!payload) {
+    return null;
+  }
+
+  if (payload.type === "custom_tool_call" && payload.name === "apply_patch" && payload.status === "completed") {
+    const parsedPatch = parseApplyPatchInput(asString(payload.input) ?? "");
+    if (!parsedPatch) {
+      return null;
+    }
+    return {
+      id: buildEventId({
+        projectRoot,
+        method: "rollout/apply_patch/completed",
+        threadId,
+        itemId: asString(payload.call_id),
+        path: parsedPatch.path
+      }),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt: timestamp,
+      method: "rollout/apply_patch/completed",
+      itemId: asString(payload.call_id),
+      kind: "fileChange",
+      phase: "completed",
+      title: parsedPatch.title,
+      detail: parsedPatch.path ?? parsedPatch.title,
+      path: parsedPatch.path,
+      action: parsedPatch.action,
+      isImage: Boolean(parsedPatch.path && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(parsedPatch.path)),
+      linesAdded: parsedPatch.linesAdded,
+      linesRemoved: parsedPatch.linesRemoved
+    };
+  }
+
+  if (payload.type === "function_call" && payload.name === "exec_command") {
+    const callId = asString(payload.call_id);
+    const parsedCommand = parseExecCommandArguments(asString(payload.arguments) ?? "");
+    if (!callId || !parsedCommand) {
+      return null;
+    }
+    pendingCommands.set(callId, parsedCommand);
+    return {
+      id: buildEventId({
+        projectRoot,
+        method: "rollout/exec_command/started",
+        threadId,
+        itemId: callId,
+        path: parsedCommand.cwd ?? null
+      }),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt: timestamp,
+      method: "rollout/exec_command/started",
+      itemId: callId,
+      kind: "command",
+      phase: "started",
+      title: "Command started",
+      detail: parsedCommand.command,
+      path: parsedCommand.cwd ?? null,
+      action: "ran",
+      command: parsedCommand.command,
+      cwd: parsedCommand.cwd
+    };
+  }
+
+  if (payload.type === "function_call_output") {
+    const callId = asString(payload.call_id);
+    const rawOutput = asString(payload.output) ?? "";
+    const startedCommand = callId ? pendingCommands.get(callId) : null;
+    const parsedOutput = parseFunctionCallOutputMetadata(rawOutput);
+    const command = startedCommand?.command ?? parsedOutput.command;
+    if (!callId || !command) {
+      return null;
+    }
+    return {
+      id: buildEventId({
+        projectRoot,
+        method: `rollout/exec_command/${parsedOutput.phase}`,
+        threadId,
+        itemId: callId,
+        path: startedCommand?.cwd ?? null
+      }),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt: timestamp,
+      method: `rollout/exec_command/${parsedOutput.phase}`,
+      itemId: callId,
+      kind: "command",
+      phase: parsedOutput.phase,
+      title:
+        parsedOutput.phase === "failed" ? "Command failed"
+        : parsedOutput.phase === "completed" ? "Command completed"
+        : parsedOutput.phase === "started" ? "Command started"
+        : "Command output",
+      detail: command,
+      path: startedCommand?.cwd ?? null,
+      action: "ran",
+      command,
+      cwd: startedCommand?.cwd
+    };
+  }
+
+  return null;
+}
+
+async function readRecentRolloutHookEvents(
+  projectRoot: string,
+  threadId: string,
+  rolloutPath: string | null,
+  threadUpdatedAt: number
+): Promise<DashboardEvent[]> {
+  if (!rolloutPath) {
+    return [];
+  }
+
+  try {
+    const handle = await open(rolloutPath, "r");
+    try {
+      const stats = await handle.stat();
+      const start = Math.max(0, stats.size - ROLLOUT_TAIL_BYTES);
+      const length = stats.size - start;
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, start);
+      const raw = buffer.toString("utf8");
+      const lines = raw.split(/\r?\n/);
+      const relevantLines = start > 0 ? lines.slice(1) : lines;
+      const events: DashboardEvent[] = [];
+      const updatedAtMs = threadUpdatedAt * 1000;
+      const pendingCommands = new Map<string, { command: string; cwd?: string }>();
+
+      for (const rawLine of relevantLines) {
+        const entry = parseJsonLine(rawLine);
+        if (!entry) {
+          continue;
+        }
+        const event = buildRolloutHookEvent(projectRoot, threadId, entry, pendingCommands);
+        const createdAtMs = event ? Date.parse(event.createdAt) : Number.NaN;
+        if (
+          event
+          && Number.isFinite(createdAtMs)
+          && createdAtMs >= updatedAtMs - (2 * 60 * 1000)
+          && createdAtMs <= updatedAtMs + 15 * 1000
+        ) {
+          events.push(event);
+        }
+      }
+
+      return events.slice(-12);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return [];
+  }
 }
 
 export interface ProjectLiveMonitorOptions {
@@ -302,6 +933,8 @@ export class ProjectLiveMonitor extends EventEmitter {
   private readonly threadPaths = new Map<string, string>();
   private readonly notes = new Set<string>();
   private readonly roomConfigPath: string;
+  private readonly pendingUserRequests = new Map<string, PendingUserRequest>();
+  private readonly subscribedThreadIds = new Set<string>();
   private roomWatcher: FSWatcher | null = null;
   private snapshot: DashboardSnapshot | null = null;
   private cloudTasks: CloudTask[] = [];
@@ -311,6 +944,7 @@ export class ProjectLiveMonitor extends EventEmitter {
   private snapshotTimer: NodeJS.Timeout | null = null;
   private recentEvents: DashboardEvent[] = [];
   private unsubscribeNotifications: (() => void) | null = null;
+  private unsubscribeServerRequests: (() => void) | null = null;
 
   constructor(options: ProjectLiveMonitorOptions) {
     super();
@@ -377,8 +1011,11 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.threadPaths.clear();
     this.unsubscribeNotifications?.();
     this.unsubscribeNotifications = null;
+    this.unsubscribeServerRequests?.();
+    this.unsubscribeServerRequests = null;
     this.client?.close();
     this.client = null;
+    this.subscribedThreadIds.clear();
   }
 
   private async ensureClient(): Promise<void> {
@@ -389,8 +1026,12 @@ export class ProjectLiveMonitor extends EventEmitter {
     try {
       this.client = await CodexAppServerClient.create();
       this.unsubscribeNotifications?.();
+      this.unsubscribeServerRequests?.();
       this.unsubscribeNotifications = this.client.onNotification((notification) => {
         this.handleAppServerNotification(notification);
+      });
+      this.unsubscribeServerRequests = this.client.onServerRequest((request) => {
+        this.handleAppServerServerRequest(request);
       });
       this.clearMatchingNote("Local Codex app-server unavailable:");
     } catch (error) {
@@ -449,13 +1090,93 @@ export class ProjectLiveMonitor extends EventEmitter {
         }
       }
 
+      await this.syncThreadSubscriptions();
       this.scheduleSnapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.addNote(`Local Codex app-server unavailable: ${message}`);
       this.client?.close();
       this.client = null;
+      this.subscribedThreadIds.clear();
       this.scheduleSnapshot();
+    }
+  }
+
+  private async syncThreadSubscriptions(): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    this.clearMatchingNote("Live subscription sync degraded:");
+    this.clearMatchingNote("Thread subscribe failed (");
+
+    const now = Date.now();
+    const candidates = [...this.threads.values()]
+      .filter((thread) => (
+        thread.status.type === "active"
+        || (now - thread.updatedAt * 1000) <= ACTIVE_SUBSCRIPTION_WINDOW_MS
+      ))
+      .sort((left, right) => {
+        const leftActive = left.status.type === "active" ? 1 : 0;
+        const rightActive = right.status.type === "active" ? 1 : 0;
+        return rightActive - leftActive || right.updatedAt - left.updatedAt;
+      })
+      .slice(0, MAX_SUBSCRIBED_THREADS);
+
+    const targetIds = new Set(candidates.map((thread) => thread.id));
+    const loadedThreadIds = new Set(
+      await withTimeout(
+        this.client.listLoadedThreads().catch(() => []),
+        APP_SERVER_SUBSCRIPTION_TIMEOUT_MS,
+        "thread/loaded/list"
+      ).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.addNote(`Live subscription sync degraded: ${message}`);
+        return [];
+      })
+    );
+
+    await Promise.all(
+      [...targetIds]
+        .filter((threadId) => !this.subscribedThreadIds.has(threadId))
+        .map(async (threadId) => {
+          try {
+            await withTimeout(
+              this.client?.resumeThread(threadId) ?? Promise.reject(new Error("client unavailable")),
+              APP_SERVER_SUBSCRIPTION_TIMEOUT_MS,
+              `thread/resume ${threadId.slice(0, 8)}`
+            );
+            this.subscribedThreadIds.add(threadId);
+            loadedThreadIds.add(threadId);
+            this.scheduleThreadRefresh(threadId);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.addNote(`Thread subscribe failed (${threadId.slice(0, 8)}): ${message}`);
+          }
+        })
+    );
+
+    await Promise.all(
+      [...this.subscribedThreadIds]
+        .filter((threadId) => !targetIds.has(threadId))
+        .map(async (threadId) => {
+          try {
+            await withTimeout(
+              this.client?.unsubscribeThread(threadId) ?? Promise.reject(new Error("client unavailable")),
+              APP_SERVER_SUBSCRIPTION_TIMEOUT_MS,
+              `thread/unsubscribe ${threadId.slice(0, 8)}`
+            );
+          } catch {
+            /* ignore unsubscribe failures */
+          }
+          this.subscribedThreadIds.delete(threadId);
+        })
+    );
+
+    for (const threadId of [...this.subscribedThreadIds]) {
+      if (!loadedThreadIds.has(threadId)) {
+        this.scheduleThreadRefresh(threadId);
+      }
     }
   }
 
@@ -523,13 +1244,22 @@ export class ProjectLiveMonitor extends EventEmitter {
       unwatchFile(path);
       this.threadPaths.delete(threadId);
     }
+
+    for (const [requestId, request] of this.pendingUserRequests.entries()) {
+      if (request.threadId === threadId) {
+        this.pendingUserRequests.delete(requestId);
+      }
+    }
+    this.subscribedThreadIds.delete(threadId);
   }
 
-  private belongsToProject(notification: AppServerNotification, threadIds: string[]): boolean {
-    if (threadIds.some((threadId) => this.threads.has(threadId))) {
+  private belongsToProject(message: AppServerNotification | AppServerServerRequest): boolean {
+    const threadId = extractThreadId(message.params);
+    if (threadId && this.threads.has(threadId)) {
       return true;
     }
-    const projectPaths = [...collectPaths(notification.params)];
+
+    const projectPaths = [...collectPaths(message.params)];
     return projectPaths.some((path) => path === this.projectRoot || path.startsWith(`${this.projectRoot}/`));
   }
 
@@ -546,18 +1276,61 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   private handleAppServerNotification(notification: AppServerNotification): void {
-    const threadIds = [...collectThreadIds(notification.params)];
-    if (!this.belongsToProject(notification, threadIds)) {
+    if (!this.belongsToProject(notification)) {
       return;
     }
 
-    const event = buildDashboardEvent(this.projectRoot, notification, threadIds[0] ?? null);
+    if (notification.method === "serverRequest/resolved") {
+      const params = asRecord(notification.params) ?? {};
+      const requestId = asString(params.requestId);
+      const pendingRequest = requestId ? this.pendingUserRequests.get(requestId) ?? null : null;
+      if (requestId) {
+        this.pendingUserRequests.delete(requestId);
+      }
+      const event = buildDashboardEventFromAppServerMessage(
+        { projectRoot: this.projectRoot, pendingRequest },
+        notification
+      );
+      if (event) {
+        this.pushRecentEvent(event);
+      }
+    } else {
+      const event = buildDashboardEventFromAppServerMessage({ projectRoot: this.projectRoot }, notification);
+      if (event) {
+        this.pushRecentEvent(event);
+      }
+    }
+
+    const threadId = extractThreadId(notification.params);
+    if (threadId) {
+      this.scheduleThreadRefresh(threadId);
+    } else {
+      void this.discoverThreads();
+    }
+    this.scheduleSnapshot();
+  }
+
+  private handleAppServerServerRequest(request: AppServerServerRequest): void {
+    if (!this.belongsToProject(request)) {
+      return;
+    }
+
+    const needsUser = buildNeedsUserStateFromServerRequest(request);
+    if (needsUser) {
+      this.pendingUserRequests.set(needsUser.requestId, needsUser);
+    }
+
+    const event = buildDashboardEventFromAppServerMessage(
+      { projectRoot: this.projectRoot, pendingRequest: needsUser },
+      request
+    );
     if (event) {
       this.pushRecentEvent(event);
     }
 
-    if (threadIds.length > 0) {
-      threadIds.forEach((threadId) => this.scheduleThreadRefresh(threadId));
+    const threadId = extractThreadId(request.params);
+    if (threadId) {
+      this.scheduleThreadRefresh(threadId);
     } else {
       void this.discoverThreads();
     }
@@ -574,6 +1347,10 @@ export class ProjectLiveMonitor extends EventEmitter {
       this.clearMatchingNote(`Thread refresh failed (${threadId.slice(0, 8)}):`);
       this.threads.set(threadId, thread);
       this.ensureThreadWatcher(threadId, thread.path);
+      const rolloutEvents = await readRecentRolloutHookEvents(this.projectRoot, threadId, thread.path, thread.updatedAt);
+      for (const event of rolloutEvents) {
+        this.pushRecentEvent(event);
+      }
       this.scheduleSnapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -630,12 +1407,19 @@ export class ProjectLiveMonitor extends EventEmitter {
 
   private async rebuildSnapshot(): Promise<void> {
     this.snapshotTimer = null;
+    const needsUserByThreadId = new Map<string, NeedsUserState>();
+    for (const pending of this.pendingUserRequests.values()) {
+      needsUserByThreadId.set(pending.threadId, pending);
+    }
+
     this.snapshot = await buildDashboardSnapshotFromState({
       projectRoot: this.projectRoot,
       threads: Array.from(this.threads.values()),
       cloudTasks: this.cloudTasks,
       events: this.recentEvents,
-      notes: Array.from(this.notes)
+      notes: Array.from(this.notes),
+      needsUserByThreadId,
+      subscribedThreadIds: this.subscribedThreadIds
     });
     this.emit("snapshot", this.snapshot);
   }

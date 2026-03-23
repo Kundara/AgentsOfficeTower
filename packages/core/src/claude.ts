@@ -580,6 +580,7 @@ export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise
       updatedAt: summary.updatedAt,
       paths: summary.paths,
       activityEvent: summary.activityEvent,
+      latestMessage: summary.activityEvent?.type === "agentMessage" ? summary.activityEvent.title : null,
       threadId: null,
       taskId: null,
       resumeCommand: null,
@@ -590,7 +591,9 @@ export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise
         originUrl: null
       },
       provenance: "claude",
-      confidence: "inferred"
+      confidence: "inferred",
+      needsUser: null,
+      liveSubscription: "readOnly"
     });
   }
 

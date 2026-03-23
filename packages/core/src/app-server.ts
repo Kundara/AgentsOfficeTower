@@ -16,6 +16,68 @@ export interface AppServerNotification {
   params?: Record<string, unknown>;
 }
 
+export interface AppServerServerRequest {
+  id: number;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+interface AppServerResponseMessage {
+  id: number;
+  result?: unknown;
+  error?: { message?: string };
+}
+
+type ParsedAppServerMessage =
+  | { kind: "response"; message: AppServerResponseMessage }
+  | { kind: "notification"; message: AppServerNotification }
+  | { kind: "serverRequest"; message: AppServerServerRequest }
+  | { kind: "unknown" };
+
+export function parseAppServerMessage(line: string): ParsedAppServerMessage {
+  const message = JSON.parse(line) as {
+    id?: number;
+    method?: string;
+    params?: Record<string, unknown>;
+    result?: unknown;
+    error?: { message?: string };
+  };
+
+  if (typeof message.id === "number" && typeof message.method === "string") {
+    return {
+      kind: "serverRequest",
+      message: {
+        id: message.id,
+        method: message.method,
+        params: message.params
+      }
+    };
+  }
+
+  if (typeof message.method === "string") {
+    return {
+      kind: "notification",
+      message: {
+        method: message.method,
+        params: message.params
+      }
+    };
+  }
+
+  if (typeof message.id === "number") {
+    return {
+      kind: "response",
+      message: {
+        id: message.id,
+        result: message.result,
+        error: message.error
+      }
+    };
+  }
+
+  return { kind: "unknown" };
+}
+
 export class CodexAppServerClient {
   private child: ChildProcessWithoutNullStreams;
   private buffer = "";
@@ -23,6 +85,7 @@ export class CodexAppServerClient {
   private pending = new Map<number, PendingRequest>();
   private stderr = "";
   private notificationListeners = new Set<(message: AppServerNotification) => void>();
+  private serverRequestListeners = new Set<(message: AppServerServerRequest) => void>();
 
   private constructor() {
     this.child = spawn("codex", ["app-server"], {
@@ -59,6 +122,9 @@ export class CodexAppServerClient {
         name: "codex_agents_office",
         title: "Codex Agents Office",
         version: "0.1.0"
+      },
+      capabilities: {
+        experimentalApi: true
       }
     });
     client.notify("initialized");
@@ -79,39 +145,35 @@ export class CodexAppServerClient {
         continue;
       }
 
-      const message = JSON.parse(line) as {
-        id?: number;
-        method?: string;
-        params?: Record<string, unknown>;
-        result?: unknown;
-        error?: { message?: string };
-      };
-
-      if (typeof message.method === "string" && typeof message.id !== "number") {
-        const notification: AppServerNotification = {
-          method: message.method,
-          params: message.params
-        };
+      const parsed = parseAppServerMessage(line);
+      if (parsed.kind === "notification") {
         for (const listener of this.notificationListeners) {
-          listener(notification);
+          listener(parsed.message);
         }
         continue;
       }
 
-      if (typeof message.id !== "number") {
+      if (parsed.kind === "serverRequest") {
+        for (const listener of this.serverRequestListeners) {
+          listener(parsed.message);
+        }
         continue;
       }
 
-      const pending = this.pending.get(message.id);
+      if (parsed.kind !== "response") {
+        continue;
+      }
+
+      const pending = this.pending.get(parsed.message.id);
       if (!pending) {
         continue;
       }
 
-      this.pending.delete(message.id);
-      if (message.error) {
-        pending.reject(new Error(message.error.message ?? "app-server request failed"));
+      this.pending.delete(parsed.message.id);
+      if (parsed.message.error) {
+        pending.reject(new Error(parsed.message.error.message ?? "app-server request failed"));
       } else {
-        pending.resolve(message.result);
+        pending.resolve(parsed.message.result);
       }
     }
   }
@@ -128,6 +190,13 @@ export class CodexAppServerClient {
     this.notificationListeners.add(listener);
     return () => {
       this.notificationListeners.delete(listener);
+    };
+  }
+
+  onServerRequest(listener: (message: AppServerServerRequest) => void): () => void {
+    this.serverRequestListeners.add(listener);
+    return () => {
+      this.serverRequestListeners.delete(listener);
     };
   }
 
@@ -169,6 +238,25 @@ export class CodexAppServerClient {
       includeTurns: true
     });
     return result.thread;
+  }
+
+  async resumeThread(threadId: string): Promise<CodexThread> {
+    const result = await this.request<{ thread: CodexThread }>("thread/resume", {
+      threadId
+    });
+    return result.thread;
+  }
+
+  async unsubscribeThread(threadId: string): Promise<"unsubscribed" | "notSubscribed" | "notLoaded"> {
+    const result = await this.request<{ status: "unsubscribed" | "notSubscribed" | "notLoaded" }>("thread/unsubscribe", {
+      threadId
+    });
+    return result.status;
+  }
+
+  async listLoadedThreads(): Promise<string[]> {
+    const result = await this.request<{ data: string[] }>("thread/loaded/list");
+    return Array.isArray(result.data) ? result.data : [];
   }
 
   close(): void {

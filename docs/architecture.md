@@ -44,11 +44,12 @@ Local session JSONL files are still useful as a fallback, and Codex can persist 
 
 The live browser path now uses a hybrid approach:
 
-- `thread/list` and `thread/read` stay authoritative for thread state
+- `thread/list` and `thread/read` stay authoritative for stable thread state
+- active and recent threads are resumed on the observer connection so the app can receive live `turn/*`, `item/*`, approval, input, and `serverRequest/resolved` events
 - watched thread JSONL paths trigger quick re-reads when a local session changes
 - periodic discovery still runs so newly created sessions appear without a page refresh
 
-That avoids attaching the visualization directly to a resumable thread connection, which keeps the observer sidecar separate from approval-routing concerns.
+The observer does attach to resumable threads now, but only for active/recent sessions and only to observe. It does not answer approval or input requests; it only visualizes them.
 
 Sources:
 
@@ -79,7 +80,10 @@ Sources:
   - live SSE updates for browser clients
   - map and terminal-style views through `?view=map|terminal`
   - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
-  - session panel includes a durable cross-project "needs you" queue for approval/input waits
+  - local threads still marked active by Codex remain seated even if they pause between visible events
+  - recently finished local threads remain seated for a short 5-second grace window so final replies are still readable
+- session panel includes a durable cross-project "needs you" queue for approval/input waits
+  these entries now come from typed request hooks, not from regexes over session detail
   - session cards expose provenance/confidence so Codex-native and Claude-inferred state stay distinguishable
   - snapshot-only rendering through `?screenshot=1`
   - session-card hover/focus dims unrelated agents so the visible thread cluster for that session stands out in the map
@@ -89,6 +93,31 @@ Sources:
   - repeated workstation rows for repeated Codex agent roles
   - workstation-anchored file-change notifications for current agents, showing filename-first copy and available `+/-` line deltas
 - hover/session detail surfaces for longer text instead of large scene overlays
+
+### Web package composition
+
+The web package now separates transport, lifecycle, and rendering concerns instead of keeping them in one oversized entry file.
+
+- `packages/web/src/server.ts`
+  Starts the HTTP server, wires shutdown, and delegates everything else.
+- `packages/web/src/server-options.ts`
+  Parses CLI args and normalizes project descriptors.
+- `packages/web/src/server-metadata.ts`
+  Builds `/api/server-meta` payloads and startup fleet placeholders.
+- `packages/web/src/fleet-live-service.ts`
+  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, and fans them out over SSE.
+- `packages/web/src/router.ts`
+  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, and room scaffolding.
+- `packages/web/src/render-html.ts`
+  Builds the HTML shell and injects the browser assets.
+- `packages/web/src/client-script.ts`
+  Holds the browser-side office/terminal renderer and live update client.
+- `packages/web/src/client-styles.ts`
+  Holds the browser CSS.
+- `packages/web/src/http-helpers.ts`
+  Centralizes JSON/body helpers and static/project-file response handling.
+
+This keeps the browser behavior the same, but makes the server easier to extend and test without threading unrelated concerns through the entrypoint.
 
 ## Room XML
 
@@ -126,12 +155,13 @@ The current implementation already has the right base surfaces:
 - thread status from `thread/list` and `thread/read`
 - active flags for approval waits and user-input waits
 - turn and item history for summarization
-- app-server notifications for live changes
+- app-server notifications and server requests for live changes
 - file-change driven activity events
 
 The browser now carries a stronger event attribution path:
 
 - raw app-server notifications are normalized into snapshot `events`
+- server-initiated approval/input requests are normalized into both snapshot `events` and per-agent `needsUser` state
 - browser notifications can react to those event-native records directly
 - approval and input waits are also surfaced in a durable cross-project "needs you" queue
 - Claude-derived sessions are explicitly marked as inferred through provenance/confidence metadata
@@ -150,12 +180,16 @@ Current mapping:
   waiting indicator, ask-user toast, and durable needs-you queue entry
 - `item/*` command execution
   running / completed / failed command notifications, rendered as a command-prompt style mini window with monospace command text
+- read-only shell inspection actions
+  short summary toasts such as `Read workload.ts` or `Exploring 2 files`, instead of replaying the full shell command string
 - `fileChange`
   workstation-anchored create / edit / delete / move toasts, with filename-first copy, optional `+/-` line deltas, and image preview when possible
 - `turn/*`
   turn started / finished / interrupted / failed status transitions
 - subagent spawn and completion
   parent-linked spawn/finish notifications and motion updates
+- exact app-server method icons
+  toast icons resolve from `/assets/pixel-office/sprites/icons/<method>.svg` when a matching pixel icon exists
 
 Remaining roadmap:
 

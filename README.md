@@ -14,7 +14,7 @@ Turn live Codex activity into a browser office, terminal snapshot, and VS Code p
 
 Codex already exposes real workload signals: threads, turns, item activity, approvals, file changes, and cloud tasks.
 
-What is still hard is reading that workload at a glance across multiple workspaces.
+What is still hard is reading that workload at a glance across multiple active projects.
 
 Codex Agents Office turns those signals into a current-state office view instead of a transcript replay. The goal is operational visibility:
 
@@ -52,7 +52,7 @@ It supports:
 - deep links into one project with `?project=/abs/project/path`
 - office and terminal-style rendering with `?view=map` and `?view=terminal`
 - live agents plus the 4 most recent lead sessions for each workspace
-- a durable cross-project `Needs You` queue for approval and input waits
+- a durable cross-project `Needs You` queue built from typed Codex approval and input requests
 - provenance/confidence detail in session cards so Codex-native and Claude-inferred entries do not read the same
 - static screenshot rendering through `?screenshot=1`
 
@@ -145,7 +145,7 @@ Codex Agents Office is an observability layer over real Codex work.
 It prefers official Codex surfaces first:
 
 - `codex app-server`
-  Local thread discovery, thread reads, status, approvals, commands, file changes, and live notifications.
+  Local thread discovery, hybrid live subscriptions for active/recent threads, thread reads for stable state, typed approvals/input requests, commands, file changes, and live notifications.
 - `codex cloud list --json`
   Cloud and web task visibility.
 - `.codex-agents/rooms.xml`
@@ -158,11 +158,14 @@ Claude local session logs are supported as a secondary source for discovery and 
 The normalized snapshot is then rendered into:
 
 - desks for active work
+  local Codex threads marked active stay on their desk even if there is a lull in fresh commentary or tool output
+  recently finished local threads linger for about 5 seconds so the final message can still be seen before the avatar leaves
 - rec-area placement for waiting, resting, and the 4 most recent lead sessions
 - hover cards and session panels for longer detail
 - live event-native notifications for file changes, commands, turn lifecycle, approval waits, and user-input waits
   File changes now rise from the workstation, showing the filename and any available `+/-` line deltas.
   Command notifications render as a tiny terminal-style window with monospace command text and a blinking cursor.
+  read-like shell actions such as `sed`, `cat`, `rg`, `ls`, `find`, and `tree` now collapse into short summary toasts like `Read workload.ts` or `Exploring 2 files` instead of echoing the raw shell command.
 - explicit provenance/confidence labels so Codex-native state and Claude-inferred state do not look equivalent
 
 ## Project layout
@@ -187,13 +190,38 @@ The current implementation already supports:
 - room placement from active paths
 - parent and subagent visibility
 - active, waiting, blocked, done, and idle state derivation
+- small typed file-change notifications for local Codex edits
+- real Codex exec edits produce typed file-change events
 - live browser refresh over SSE
 - raw app-server notification ingestion through the shared snapshot event stream
+- hybrid app-server observation:
+  active/recent threads are resumed for live `turn/*`, `item/*`, and request events, while older threads stay read-only
+- server-request visualization for approval and input waits without acting on those requests
 - anchored notifications for file changes, commands, turn lifecycle, approvals, and user-input waits
   File-change toasts anchor to the desk instead of the avatar and prefer filename-first rendering.
-- a durable cross-project "needs you" queue for approval and input waits
+- exact-method toast icons under `packages/web/public/pixel-office/sprites/icons/<app-server method>.svg`
+- short summary toasts for read-only shell actions instead of raw command text
+- active local Codex threads stay desk-present while Codex still reports them as active, and freshly done threads get a short 5-second leave delay
+- a durable cross-project "needs you" queue built from typed request hooks rather than inferred detail strings
 - provenance/confidence signaling for Codex, Claude, cloud, and presence-derived entries
 - fleet view and single-project office view
+
+The web layer is now split into smaller modules instead of one large server file:
+
+- [`packages/web/src/server.ts`](packages/web/src/server.ts)
+  Startup and shutdown only.
+- [`packages/web/src/router.ts`](packages/web/src/router.ts)
+  HTTP route handling for HTML, SSE, fleet/meta APIs, refresh, appearance cycling, and room scaffolding.
+- [`packages/web/src/fleet-live-service.ts`](packages/web/src/fleet-live-service.ts)
+  Project monitor lifecycle, fleet publication, and SSE fan-out.
+- [`packages/web/src/render-html.ts`](packages/web/src/render-html.ts)
+  HTML shell composition.
+- [`packages/web/src/client-script.ts`](packages/web/src/client-script.ts)
+  Browser-side office and terminal rendering logic.
+- [`packages/web/src/client-styles.ts`](packages/web/src/client-styles.ts)
+  Browser styles for the office surface.
+- [`packages/web/src/http-helpers.ts`](packages/web/src/http-helpers.ts)
+  Shared asset, project-file, JSON, and response helpers.
 
 The main gap is richer event-to-motion mapping. The project now carries more typed Codex event signal end-to-end, but it still needs stronger in-scene posture and movement differences for reading, planning, editing, validating, delegating, interrupted, and waiting work.
 

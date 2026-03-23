@@ -4,6 +4,7 @@ const ACTIVE_LOCAL_WINDOW_MS = 20 * 60 * 1000;
 const WAITING_LOCAL_WINDOW_MS = 45 * 60 * 1000;
 const ACTIVE_PRESENCE_WINDOW_MS = 3 * 60 * 1000;
 const ACTIVE_CLOUD_WINDOW_MS = 8 * 60 * 60 * 1000;
+const RECENT_DONE_GRACE_MS = 5 * 1000;
 
 const TERMINAL_CLOUD_STATUSES = new Set([
   "ready",
@@ -48,8 +49,18 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
     return !isTerminalCloudStatus(agent.statusText) && now - updatedAt <= ACTIVE_CLOUD_WINDOW_MS;
   }
 
-  if (agent.state === "done" || agent.state === "idle") {
+  if (agent.state === "idle") {
     return false;
+  }
+
+  if (agent.state === "done") {
+    return now - updatedAt <= RECENT_DONE_GRACE_MS;
+  }
+
+  // A live Codex thread marked active should keep occupying a desk even if
+  // there has not been a fresh toast/commentary update recently.
+  if (agent.source === "local" && agent.statusText === "active") {
+    return true;
   }
 
   if (agent.source === "presence") {

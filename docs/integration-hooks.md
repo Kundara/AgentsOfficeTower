@@ -55,15 +55,21 @@ Current use:
 
 - spawns `codex app-server`
 - initializes a JSON-RPC-like session
+- opts into `experimentalApi`
 - requests `thread/list`
 - requests `thread/read`
+- resumes active/recent threads with `thread/resume`
+- unsubscribes stale observer-owned subscriptions with `thread/unsubscribe`
 - parses app-server notifications
+- parses server-initiated JSON-RPC requests such as approvals and input prompts
 
 Important note:
 
 - raw notifications are parsed and exposed through `onNotification(...)`
-- `ProjectLiveMonitor` now consumes those raw notifications directly
+- server requests are parsed and exposed through `onServerRequest(...)`
+- `ProjectLiveMonitor` now consumes both streams directly
 - targeted `thread/read` refreshes still happen, but they are triggered behind the event stream instead of replacing it
+- the observer does not answer approval/input requests; it only visualizes them
 
 This means app-server is now both the main truth source and the first-class local event bus for browser notifications.
 
@@ -116,6 +122,21 @@ How we use it:
 - infer subagent parentage and depth
 - generate `resumeCommand`
 - map the session into project rooms using extracted paths
+- keep read-only visibility for older threads outside the live subscription window
+
+### `thread/resume` / `thread/unsubscribe`
+
+Used in:
+
+- `packages/core/src/app-server.ts`
+- `packages/core/src/live-monitor.ts`
+
+How we use it:
+
+- active threads and threads updated in the last 10 minutes are resumed on the observer connection
+- the observer keeps at most 8 project threads subscribed at once
+- stale observer-owned subscriptions are unsubscribed
+- subscribed threads surface as `liveSubscription = subscribed`; older threads stay `readOnly`
 
 ### Thread status and active flags
 
@@ -141,6 +162,12 @@ Representation today:
 - in-progress turn with no better signal -> `thinking`
 - recent completed answer -> `done`
 - old inactive thread -> `idle`
+
+Current-workload occupancy rules on top of that state:
+
+- a local thread with `statusText = active` stays `isCurrent` even if there is a lull in new visible events
+- a local thread in `done` stays `isCurrent` for about 5 seconds so its final reply can still be read before it leaves the desk
+- `idle` threads still drop out of current-workload filtering immediately
 
 In the browser this becomes:
 
@@ -175,7 +202,7 @@ Current item-to-state mapping:
 Mapped in:
 
 - `packages/core/src/snapshot.ts`
-- `packages/web/src/server.ts`
+- `packages/web/src/client-script.ts`
 
 What we read from Codex:
 
@@ -197,7 +224,7 @@ How we use it:
 Mapped in:
 
 - `packages/core/src/snapshot.ts`
-- `packages/web/src/server.ts`
+- `packages/web/src/client-script.ts`
 
 What we read from Codex:
 
@@ -212,6 +239,28 @@ How we use it:
 - failed or declined commands become `blocked`
 - render command notifications as a command-prompt style mini window with monospace text and a blinking cursor
 - render floating text such as `Ran npm run build`
+- collapse read-only shell inspection commands such as `sed`, `cat`, `head`, `tail`, `rg`, `grep`, `ls`, `find`, and `tree` into short summary toasts like `Read workload.ts` or `Exploring 2 files`
+
+### Tool call semantics
+
+Mapped in:
+
+- `packages/core/src/live-monitor.ts`
+- `packages/core/src/snapshot.ts`
+- `packages/web/src/pixel-office.ts`
+- `packages/web/src/client-script.ts`
+
+What we read from Codex:
+
+- `item/tool/call` server requests
+- `dynamicToolCall` / `mcpToolCall` items when present in thread data
+- exact app-server method names for typed snapshot events
+
+How we use it:
+
+- normalize tool-call requests into typed `DashboardEvent.kind = tool`
+- keep dynamic tool activity visible in the local thread summary path
+- resolve toast icons from exact method-shaped asset paths such as `sprites/icons/item/tool/call.svg`
 
 ### Subagent metadata
 
@@ -266,8 +315,10 @@ What is available:
 How we use it today:
 
 - `ProjectLiveMonitor` subscribes to the raw notification stream
+- `ProjectLiveMonitor` also listens for server-request messages carrying approval/input waits
 - notifications are filtered to the current project by known thread ids and discovered paths
 - matching notifications are converted into normalized `DashboardEvent` records
+- approval/input requests are also attached to the owning agent as typed `needsUser` state
 - those events are attached to the next `DashboardSnapshot`
 - matching threads are re-read so stable state and event detail stay aligned
 
@@ -275,6 +326,7 @@ Why it matters:
 
 - the browser can react to real event boundaries instead of only snapshot diffs
 - command, file, approval, input, subagent, and turn lifecycle transitions now arrive as typed events
+- the durable "needs you" queue now comes from real request hooks and `serverRequest/resolved`
 
 ### `codex cloud list --json`
 
@@ -403,7 +455,8 @@ Then it:
 
 Rendered in:
 
-- `packages/web/src/server.ts`
+- `packages/web/src/render-html.ts`
+- `packages/web/src/client-script.ts`
 
 How normalized fields become visuals:
 
@@ -413,6 +466,7 @@ How normalized fields become visuals:
 | `state` | desk pose, rec-room placement, waiting/blocked bubbles, session labels |
 | `activityEvent` | floating text notifications and image previews |
 | `events` | event-native command, file, approval, input, subagent, and turn notifications |
+| `needsUser` | durable per-agent approval/input state for queueing and waiting posture |
 | `isCurrent` | default current-workload filtering |
 | `parentThreadId` and `role` | grouping into lead clusters and role pods |
 | `detail` | hover summary and session-card text |
@@ -426,6 +480,18 @@ How normalized fields become visuals:
 ### Browser live updates
 
 Transport:
+
+- `packages/web/src/fleet-live-service.ts`
+- `packages/web/src/router.ts`
+- `packages/web/src/client-script.ts`
+
+How it works:
+
+- the browser loads the initial page shell from `render-html.ts`
+- `/api/fleet` provides the current normalized snapshot
+- `/api/events` streams live fleet updates over SSE
+- `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
+- browser-side rendering and event reaction live in `client-script.ts`
 
 - server-sent events from `/api/events`
 

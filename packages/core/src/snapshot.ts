@@ -16,11 +16,15 @@ import type {
   DashboardAgent,
   DashboardEvent,
   DashboardSnapshot,
+  NeedsUserState,
   SnapshotOptions,
   ThreadItem
 } from "./types";
 
 const DONE_WINDOW_MS = 15 * 60 * 1000;
+const COMMENTARY_ACTIVE_WINDOW_MS = 30 * 1000; // Keeps fresh commentary visibly active at desks.
+const EVENT_ACTIVITY_WINDOW_MS = 90 * 1000;
+const SNAPSHOT_EVENT_WINDOW_MS = 2 * 60 * 1000;
 
 function shorten(text: string, maxLength: number): string {
   const normalized = text.replace(/\s+/g, " ").trim();
@@ -135,6 +139,21 @@ function describeAgentMessage(item: ThreadItem): { detail: string; paths: string
   };
 }
 
+function latestAgentMessageForThread(thread: CodexThread): string | null {
+  for (const turn of [...thread.turns].reverse()) {
+    for (const item of [...turn.items].reverse()) {
+      if (item.type !== "agentMessage" || typeof item.text !== "string") {
+        continue;
+      }
+      const text = shorten(item.text, 240);
+      if (text.trim().length > 0) {
+        return text;
+      }
+    }
+  }
+  return null;
+}
+
 function extractPromptRole(text: string | null | undefined): string | null {
   if (typeof text !== "string" || text.length === 0) {
     return null;
@@ -220,6 +239,7 @@ function selectRelevantItem(items: ThreadItem[]): ThreadItem | null {
   const priority = [
     "fileChange",
     "commandExecution",
+    "dynamicToolCall",
     "mcpToolCall",
     "webSearch",
     "collabToolCall",
@@ -283,9 +303,9 @@ export function summariseThread(thread: CodexThread): {
     };
   }
 
-  const treatAsInProgress =
-    lastTurn.status === "inProgress"
-    || (lastTurn.status === "interrupted" && !turnHasFinalAnswer(lastTurn));
+  const treatAsInProgress = lastTurn.status === "inProgress";
+  const interruptedWithoutFinalAnswer =
+    lastTurn.status === "interrupted" && !turnHasFinalAnswer(lastTurn);
 
   if (lastTurn.status === "failed") {
     return {
@@ -298,9 +318,16 @@ export function summariseThread(thread: CodexThread): {
 
   const item = selectRelevantItem(lastTurn.items);
   if (!item) {
+    const ageMs = Date.now() - thread.updatedAt * 1000;
     return {
-      state: treatAsInProgress ? "thinking" : "idle",
-      detail: treatAsInProgress ? "Thinking" : "Idle",
+      state:
+        treatAsInProgress ? "thinking"
+        : interruptedWithoutFinalAnswer ? (ageMs <= DONE_WINDOW_MS ? "done" : "idle")
+        : "idle",
+      detail:
+        treatAsInProgress ? "Thinking"
+        : interruptedWithoutFinalAnswer ? (ageMs <= DONE_WINDOW_MS ? "Interrupted" : "Idle")
+        : "Idle",
       paths: [thread.cwd],
       activityEvent: null
     };
@@ -366,13 +393,17 @@ export function summariseThread(thread: CodexThread): {
         activityEvent: null
       };
     }
+    case "dynamicToolCall":
     case "mcpToolCall": {
       const server = typeof item.server === "string" ? item.server : "mcp";
-      const tool = typeof item.tool === "string" ? item.tool : "tool";
+      const tool =
+        typeof item.tool === "string" ? item.tool
+        : typeof item.name === "string" ? item.name
+        : "tool";
       const status = typeof item.status === "string" ? item.status : "inProgress";
       return {
         state: status === "failed" ? "blocked" : "scanning",
-        detail: `${server}.${tool}`,
+        detail: item.type === "dynamicToolCall" ? tool : `${server}.${tool}`,
         paths: [thread.cwd],
         activityEvent: null
       };
@@ -434,8 +465,10 @@ export function summariseThread(thread: CodexThread): {
     case "agentMessage":
       {
         const message = describeAgentMessage(item);
+        const ageMs = Date.now() - thread.updatedAt * 1000;
+        const commentaryIsFresh = item.phase === "commentary" && ageMs <= COMMENTARY_ACTIVE_WINDOW_MS;
         return {
-          state: treatAsInProgress ? "thinking" : "done",
+          state: treatAsInProgress || commentaryIsFresh ? "thinking" : "done",
           detail: message.detail,
           paths: message.paths.length > 0 ? message.paths : [thread.cwd],
           activityEvent: {
@@ -463,10 +496,107 @@ export function summariseThread(thread: CodexThread): {
 
   const ageMs = Date.now() - thread.updatedAt * 1000;
   return {
-    state: treatAsInProgress ? "thinking" : ageMs <= DONE_WINDOW_MS ? "done" : "idle",
-    detail: treatAsInProgress ? "Thinking" : ageMs <= DONE_WINDOW_MS ? "Finished recently" : "Idle",
+    state:
+      treatAsInProgress ? "thinking"
+      : interruptedWithoutFinalAnswer ? (ageMs <= DONE_WINDOW_MS ? "done" : "idle")
+      : ageMs <= DONE_WINDOW_MS ? "done"
+      : "idle",
+    detail:
+      treatAsInProgress ? "Thinking"
+      : interruptedWithoutFinalAnswer ? (ageMs <= DONE_WINDOW_MS ? "Interrupted" : "Idle")
+      : ageMs <= DONE_WINDOW_MS ? "Finished recently"
+      : "Idle",
     paths: [thread.cwd],
     activityEvent: null
+  };
+}
+
+function buildActivityEventFromDashboardEvent(event: DashboardEvent): AgentActivityEvent | null {
+  switch (event.kind) {
+    case "fileChange":
+      return {
+        type: "fileChange",
+        action: event.action ?? "edited",
+        path: event.path,
+        title: event.title,
+        isImage: Boolean(event.isImage),
+        linesAdded: event.linesAdded,
+        linesRemoved: event.linesRemoved
+      };
+    case "command":
+      return {
+        type: "commandExecution",
+        action: "ran",
+        path: event.path,
+        title: event.command ?? event.detail ?? event.title,
+        isImage: false
+      };
+    case "message":
+      return {
+        type: "agentMessage",
+        action: "said",
+        path: event.path,
+        title: event.detail || event.title,
+        isImage: false
+      };
+    default:
+      return null;
+  }
+}
+
+function applyRecentActivityEvent(
+  thread: CodexThread,
+  summary: ReturnType<typeof summariseThread>,
+  recentEvents: DashboardEvent[]
+): ReturnType<typeof summariseThread> {
+  if (recentEvents.length === 0) {
+    return summary;
+  }
+
+  const updatedAtMs = thread.updatedAt * 1000;
+  const preferredEvent = recentEvents
+    .filter((event) => {
+      if (event.threadId !== thread.id) {
+        return false;
+      }
+      if (!["fileChange", "command", "message"].includes(event.kind)) {
+        return false;
+      }
+      const createdAtMs = Date.parse(event.createdAt);
+      return Number.isFinite(createdAtMs) && createdAtMs >= updatedAtMs - EVENT_ACTIVITY_WINDOW_MS;
+    })
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .find((event) => event.kind === "fileChange" || event.kind === "command" || event.kind === "message");
+
+  if (!preferredEvent) {
+    return summary;
+  }
+
+  if (preferredEvent.kind === "message") {
+    return summary;
+  }
+
+  if (summary.state === "waiting" || summary.state === "blocked") {
+    return summary;
+  }
+
+  const activityEvent = buildActivityEventFromDashboardEvent(preferredEvent);
+  if (!activityEvent) {
+    return summary;
+  }
+
+  const nextPaths = preferredEvent.path
+    ? Array.from(new Set([preferredEvent.path, ...summary.paths.filter(Boolean)]))
+    : summary.paths;
+
+  return {
+    state: summary.state,
+    detail:
+      preferredEvent.kind === "fileChange"
+        ? preferredEvent.path ? `Edited ${preferredEvent.path}` : preferredEvent.title
+        : preferredEvent.command ?? preferredEvent.detail ?? preferredEvent.title,
+    paths: nextPaths,
+    activityEvent
   };
 }
 
@@ -514,16 +644,33 @@ export async function buildDashboardSnapshotFromState(input: {
   cloudTasks?: CloudTask[];
   events?: DashboardEvent[];
   notes?: string[];
+  needsUserByThreadId?: Map<string, NeedsUserState>;
+  subscribedThreadIds?: Set<string>;
 }): Promise<DashboardSnapshot> {
   const projectRoot = input.projectRoot;
   const roomConfig = await loadRoomConfig(projectRoot);
   const notes = [...(input.notes ?? [])];
   const agents: DashboardAgent[] = [];
+  const recentEventsByThreadId = new Map<string, DashboardEvent[]>();
+
+  for (const event of input.events ?? []) {
+    if (!event.threadId) {
+      continue;
+    }
+    const existing = recentEventsByThreadId.get(event.threadId) ?? [];
+    existing.push(event);
+    recentEventsByThreadId.set(event.threadId, existing);
+  }
 
   const threads = [...input.threads].sort((left, right) => right.updatedAt - left.updatedAt);
 
   for (const thread of threads) {
-    const summary = summariseThread(thread);
+    const summary = applyRecentActivityEvent(
+      thread,
+      summariseThread(thread),
+      recentEventsByThreadId.get(thread.id) ?? []
+    );
+    const latestMessage = latestAgentMessageForThread(thread);
     const appearance = await ensureAgentAppearance(projectRoot, thread.id);
     const sourceMeta = parseThreadSourceMeta(thread);
     const resolvedRole = inferThreadAgentRole(thread, sourceMeta.sourceKind);
@@ -547,13 +694,16 @@ export async function buildDashboardSnapshotFromState(input: {
       updatedAt: new Date(thread.updatedAt * 1000).toISOString(),
       paths: summary.paths,
       activityEvent: summary.activityEvent,
+      latestMessage,
       threadId: thread.id,
       taskId: null,
       resumeCommand: `codex resume ${thread.id}`,
       url: null,
       git: thread.gitInfo,
       provenance: "codex",
-      confidence: "typed"
+      confidence: "typed",
+      needsUser: input.needsUserByThreadId?.get(thread.id) ?? null,
+      liveSubscription: input.subscribedThreadIds?.has(thread.id) ? "subscribed" : "readOnly"
     });
   }
 
@@ -580,13 +730,16 @@ export async function buildDashboardSnapshotFromState(input: {
       updatedAt: task.updatedAt,
       paths: [],
       activityEvent: null,
+      latestMessage: null,
       threadId: null,
       taskId: task.id,
       resumeCommand: null,
       url: task.url,
       git: null,
       provenance: "cloud",
-      confidence: "typed"
+      confidence: "typed",
+      needsUser: null,
+      liveSubscription: "readOnly"
     });
   }
 
@@ -596,8 +749,11 @@ export async function buildDashboardSnapshotFromState(input: {
       ...presenceAgent,
       roomId: findRoomForPaths(roomConfig, projectRoot, presenceAgent.paths),
       activityEvent: null,
+      latestMessage: null,
       provenance: "presence",
-      confidence: "typed"
+      confidence: "typed",
+      needsUser: null,
+      liveSubscription: "readOnly"
     });
   }
 
@@ -619,7 +775,12 @@ export async function buildDashboardSnapshotFromState(input: {
     rooms: roomConfig,
     agents,
     cloudTasks,
-    events: [...(input.events ?? [])].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+    events: [...(input.events ?? [])]
+      .filter((event) => {
+        const createdAtMs = Date.parse(event.createdAt);
+        return Number.isFinite(createdAtMs) && Date.now() - createdAtMs <= SNAPSHOT_EVENT_WINDOW_MS;
+      })
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     notes
   };
 }

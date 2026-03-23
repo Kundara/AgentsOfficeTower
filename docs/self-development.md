@@ -39,14 +39,14 @@ A good iteration improves at least one of these:
 - Most Codex event types now reach the snapshot as explicit events, but many of them still share the same notification/motion treatment.
 - Room empty states are still visually heavier than ideal.
 - Live movement is still simpler than the intended office-life simulation.
-- History view and current view share most layout logic; some visual tuning should diverge.
+- Map and terminal browser views still share some presentation assumptions that should diverge further.
 
 ## Acceptance checks for future changes
 
 - `npm run build`
 - `npm run typecheck`
-- browser render for current mode
-- browser render for history mode
+- browser render for default map mode
+- browser render for terminal mode
 - browser render for explicit `web /abs/project/path` launch
 - `demo preview` creates a disposable workspace, serves it, and removes it when the run ends
 - verify workspace tabs show real Codex workspaces
