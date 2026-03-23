@@ -968,11 +968,11 @@ function renderHtml(options: ServerOptions): string {
       }
 
       .cubicle-cell.entering .desk-shell {
-        animation: workstation-spawn 260ms steps(1, end) both;
+        animation: workstation-spawn 180ms steps(1, end) both;
       }
 
       .cubicle-cell.departing .desk-shell {
-        animation: workstation-despawn 220ms steps(1, end) forwards;
+        animation: workstation-despawn 180ms steps(1, end) forwards;
       }
 
       .snapshot-mode .cubicle-cell.entering .desk-shell,
@@ -1194,11 +1194,11 @@ function renderHtml(options: ServerOptions): string {
       }
 
       .office-avatar-shell.entering .office-avatar {
-        --fx-animation: avatar-flash-in 180ms steps(1, end) 1;
+        --fx-animation: avatar-flash-in 150ms steps(1, end) 1;
       }
 
       .office-avatar-shell.departing .office-avatar {
-        --fx-animation: avatar-flash-out 180ms steps(1, end) 1;
+        --fx-animation: avatar-flash-out 150ms steps(1, end) 1;
       }
 
       .office-avatar.state-editing,
@@ -1213,7 +1213,7 @@ function renderHtml(options: ServerOptions): string {
 
       .office-avatar.state-idle,
       .office-avatar.state-done {
-        --state-animation: worker-idle 1.6s steps(2, end) infinite;
+        --state-animation: none;
       }
 
       .office-avatar.state-blocked {
@@ -1223,7 +1223,7 @@ function renderHtml(options: ServerOptions): string {
 
       .office-avatar.state-waiting {
         outline: 2px solid rgba(245, 183, 79, 0.55);
-        --state-animation: worker-idle 1.6s steps(2, end) infinite;
+        --state-animation: none;
       }
 
       .office-avatar.state-cloud {
@@ -1565,12 +1565,6 @@ function renderHtml(options: ServerOptions): string {
         100% { transform: translateY(0); }
       }
 
-      @keyframes worker-idle {
-        0% { transform: translateY(0); opacity: 1; }
-        50% { transform: translateY(-1px); opacity: 0.82; }
-        100% { transform: translateY(0); opacity: 1; }
-      }
-
       @keyframes worker-alert {
         0% { transform: translateX(0); }
         25% { transform: translateX(-1px); }
@@ -1586,20 +1580,19 @@ function renderHtml(options: ServerOptions): string {
 
       @keyframes workstation-spawn {
         0% { opacity: 0; }
-        18% { opacity: 1; }
+        16% { opacity: 1; }
         32% { opacity: 0; }
-        46% { opacity: 1; }
-        60% { opacity: 0; }
-        76% { opacity: 1; transform: translateY(-1px); }
-        100% { opacity: 1; transform: translateY(0); }
+        48% { opacity: 1; }
+        64% { opacity: 0; }
+        100% { opacity: 1; }
       }
 
       @keyframes workstation-despawn {
         0% { opacity: 1; }
-        24% { opacity: 0; }
-        42% { opacity: 1; }
-        64% { opacity: 0; }
-        82% { opacity: 1; }
+        18% { opacity: 0; }
+        36% { opacity: 1; }
+        54% { opacity: 0; }
+        72% { opacity: 1; }
         100% { opacity: 0; }
       }
 
@@ -1634,15 +1627,21 @@ function renderHtml(options: ServerOptions): string {
       }
 
       @keyframes avatar-flash-in {
-        0% { opacity: 0; filter: brightness(2.2) contrast(1.4) drop-shadow(0 0 0 rgba(255,255,255,0)); }
-        40% { opacity: 1; filter: brightness(2.8) contrast(1.6) drop-shadow(0 0 8px rgba(255,255,255,0.82)); }
-        100% { opacity: 1; filter: drop-shadow(0 3px 0 rgba(0,0,0,0.24)); }
+        0% { opacity: 0; }
+        16% { opacity: 1; }
+        32% { opacity: 0; }
+        48% { opacity: 1; }
+        64% { opacity: 0; }
+        100% { opacity: 1; }
       }
 
       @keyframes avatar-flash-out {
-        0% { opacity: 1; filter: drop-shadow(0 3px 0 rgba(0,0,0,0.24)); }
-        45% { opacity: 1; filter: brightness(2.6) contrast(1.5) drop-shadow(0 0 8px rgba(255,255,255,0.8)); }
-        100% { opacity: 0.2; filter: brightness(0.9) contrast(1) drop-shadow(0 0 0 rgba(255,255,255,0)); }
+        0% { opacity: 1; }
+        18% { opacity: 0; }
+        36% { opacity: 1; }
+        54% { opacity: 0; }
+        72% { opacity: 1; }
+        100% { opacity: 0; }
       }
 
       @media (max-width: 1240px) {
@@ -1749,8 +1748,9 @@ function renderHtml(options: ServerOptions): string {
       let enteringAgentKeys = new Set();
       let departingAgents = [];
       let notifications = [];
-      let notificationTicker = null;
+      let notificationPruneTimer = null;
       const seenNotificationKeys = new Set();
+      let lastSceneRenderToken = null;
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));
       function projectInfo(projectRoot) {
@@ -1884,6 +1884,26 @@ function renderHtml(options: ServerOptions): string {
 
       function busyCount(snapshot) {
         return snapshot.agents.filter(isBusyAgent).length;
+      }
+
+      function sceneAgentToken(agent) {
+        return [
+          agent.id,
+          agent.state,
+          agent.roomId || "",
+          agent.parentThreadId || "",
+          agent.isCurrent ? "1" : "0",
+          agent.appearance?.id || "",
+          agent.source,
+          agent.sourceKind || ""
+        ].join(":");
+      }
+
+      function sceneSnapshotToken(snapshot) {
+        return [
+          snapshot.projectRoot,
+          ...snapshot.agents.map(sceneAgentToken)
+        ].join("::");
       }
 
       function viewSnapshot(snapshot) {
@@ -2383,16 +2403,14 @@ function renderHtml(options: ServerOptions): string {
         }
 
         notifications = notifications.slice(-24);
-        ensureNotificationTicker();
+        scheduleNotificationPrune();
       }
 
       function pruneNotifications() {
         const now = Date.now();
         notifications = notifications.filter((entry) => now - entry.createdAt < 2400);
-        if (notifications.length === 0 && notificationTicker) {
-          clearInterval(notificationTicker);
-          notificationTicker = null;
-        }
+        scheduleNotificationPrune();
+        renderNotifications();
       }
 
       function renderNotifications() {
@@ -2412,11 +2430,12 @@ function renderHtml(options: ServerOptions): string {
             return true;
           });
           const stackByKey = new Map();
+          const renderedIds = new Set();
 
-          layer.innerHTML = visible.map((entry) => {
+          visible.forEach((entry) => {
             const anchor = wrapper.querySelector(\`[data-agent-key="\${CSS.escape(entry.key)}"]\`);
             if (!(anchor instanceof HTMLElement)) {
-              return "";
+              return;
             }
             const stackIndex = stackByKey.get(entry.key) ?? 0;
             stackByKey.set(entry.key, stackIndex + 1);
@@ -2424,22 +2443,57 @@ function renderHtml(options: ServerOptions): string {
             const left = rect.left - wrapperRect.left + rect.width / 2;
             const top = rect.top - wrapperRect.top - stackIndex * 18;
             const line = notificationLine(entry);
-            const image = entry.imageUrl
-              ? \`<img class="agent-toast-preview" src="\${escapeHtml(entry.imageUrl)}" alt="\${escapeHtml(entry.title)}" />\`
-              : "";
-            return \`<div class="agent-toast \${entry.kindClass}\${entry.imageUrl ? " image" : ""}" style="left:\${Math.round(left)}px; top:\${Math.round(top)}px;"><div class="agent-toast-copy"><div class="agent-toast-label">\${escapeHtml(line.label)}</div><div class="agent-toast-title">\${escapeHtml(line.title)}</div></div>\${image}</div>\`;
-          }).join("");
+            renderedIds.add(entry.id);
+            let toast = layer.querySelector(\`[data-toast-id="\${CSS.escape(entry.id)}"]\`);
+            if (!(toast instanceof HTMLElement)) {
+              toast = document.createElement("div");
+              toast.dataset.toastId = entry.id;
+              layer.appendChild(toast);
+            }
+
+            const className = \`agent-toast \${entry.kindClass}\${entry.imageUrl ? " image" : ""}\`;
+            if (toast.className !== className) {
+              toast.className = className;
+            }
+
+            const nextStyle = \`left:\${Math.round(left)}px; top:\${Math.round(top)}px;\`;
+            if (toast.getAttribute("style") !== nextStyle) {
+              toast.setAttribute("style", nextStyle);
+            }
+
+            const nextHtml = \`<div class="agent-toast-copy"><div class="agent-toast-label">\${escapeHtml(line.label)}</div><div class="agent-toast-title">\${escapeHtml(line.title)}</div></div>\${entry.imageUrl ? \`<img class="agent-toast-preview" src="\${escapeHtml(entry.imageUrl)}" alt="\${escapeHtml(entry.title)}" />\` : ""}\`;
+            if (toast.dataset.renderHtml !== nextHtml) {
+              toast.innerHTML = nextHtml;
+              toast.dataset.renderHtml = nextHtml;
+            }
+          });
+
+          layer.querySelectorAll("[data-toast-id]").forEach((node) => {
+            if (!(node instanceof HTMLElement)) {
+              return;
+            }
+            if (!renderedIds.has(node.dataset.toastId || "")) {
+              node.remove();
+            }
+          });
         });
       }
 
-      function ensureNotificationTicker() {
-        if (notificationTicker || screenshotMode) {
+      function scheduleNotificationPrune() {
+        if (notificationPruneTimer) {
+          clearTimeout(notificationPruneTimer);
+          notificationPruneTimer = null;
+        }
+        if (screenshotMode || notifications.length === 0) {
           return;
         }
-        notificationTicker = setInterval(() => {
+        const now = Date.now();
+        const nextExpiry = Math.min(...notifications.map((entry) => entry.createdAt + 2400));
+        const delay = Math.max(60, nextExpiry - now);
+        notificationPruneTimer = setTimeout(() => {
+          notificationPruneTimer = null;
           pruneNotifications();
-          renderNotifications();
-        }, 120);
+        }, delay);
       }
 
       function renderAgentHover(snapshot, agent) {
@@ -3658,8 +3712,13 @@ function renderHtml(options: ServerOptions): string {
         const selectedRawSnapshot = currentSnapshot();
         const snapshot = selectedRawSnapshot ? viewSnapshot(selectedRawSnapshot) : null;
         syncLiveAgentState(displayedProjects);
-        sceneStateDraft = new Map();
+        sceneStateDraft = null;
         const counts = fleetCounts({ projects: displayedProjects });
+        const nextSceneToken = state.view === "map"
+          ? (snapshot
+            ? \`project::\${sceneSnapshotToken(snapshot)}\`
+            : \`fleet::\${displayedProjects.map(sceneSnapshotToken).join("||")}\`)
+          : null;
 
         setTextIfChanged(stamp, \`Updated \${fleet.generatedAt}\`);
         setTextIfChanged(projectCount, \`\${fleet.projects.length} tracked · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live · 4 recent leads\`);
@@ -3687,14 +3746,22 @@ function renderHtml(options: ServerOptions): string {
 
         try {
           if (!snapshot) {
-            const centerChanged = setHtmlIfChanged(centerContent, renderWorkspaceScroll(displayedProjects), { preserveScroll: true });
+            const shouldRenderScene = state.view !== "map" || nextSceneToken !== lastSceneRenderToken;
+            const centerChanged = shouldRenderScene
+              ? setHtmlIfChanged(centerContent, renderWorkspaceScroll(displayedProjects), { preserveScroll: true })
+              : false;
+            if (shouldRenderScene) {
+              lastSceneRenderToken = nextSceneToken;
+            }
             setHtmlIfChanged(sessionList, renderFleetSessions(displayedProjects), { preserveScroll: true });
             setTextIfChanged(centerTitle, "All Workspaces");
             setTextIfChanged(roomsPath, "Live agents plus 4 recent lead sessions across tracked workspaces");
             if (centerChanged) {
               fitScenes();
             }
-            renderedAgentSceneState = sceneStateDraft;
+            if (centerChanged && sceneStateDraft) {
+              renderedAgentSceneState = sceneStateDraft;
+            }
             sceneStateDraft = null;
             syncSessionFocusFromDom();
             renderNotifications();
@@ -3702,17 +3769,28 @@ function renderHtml(options: ServerOptions): string {
           }
 
           setTextIfChanged(centerTitle, projectLabel(snapshot.projectRoot));
-          const sceneHtml = state.view === "terminal"
-            ? renderTerminalSnapshot(snapshot)
-            : renderRoomScene(snapshot, { liveOnly: state.activeOnly });
-          const centerChanged = setHtmlIfChanged(centerContent, sceneHtml, { preserveScroll: true });
+          const shouldRenderScene = state.view !== "map" || nextSceneToken !== lastSceneRenderToken;
+          const centerChanged = shouldRenderScene
+            ? setHtmlIfChanged(
+              centerContent,
+              state.view === "terminal"
+                ? renderTerminalSnapshot(snapshot)
+                : renderRoomScene(snapshot, { liveOnly: state.activeOnly }),
+              { preserveScroll: true }
+            )
+            : false;
+          if (shouldRenderScene) {
+            lastSceneRenderToken = nextSceneToken;
+          }
           const sessionsHtml = renderSessions(snapshot);
           setHtmlIfChanged(sessionList, sessionsHtml, { preserveScroll: true });
           setTextIfChanged(roomsPath, snapshot.rooms.generated ? "Auto rooms" : ".codex-agents/rooms.xml");
           if (centerChanged) {
             fitScenes();
           }
-          renderedAgentSceneState = sceneStateDraft;
+          if (centerChanged && sceneStateDraft) {
+            renderedAgentSceneState = sceneStateDraft;
+          }
           sceneStateDraft = null;
           syncSessionFocusFromDom();
           renderNotifications();
@@ -3722,6 +3800,7 @@ function renderHtml(options: ServerOptions): string {
           setHtmlIfChanged(centerContent, '<div class="empty">Render failed: ' + escapeHtml(message) + "</div>");
           setHtmlIfChanged(sessionList, '<div class="empty">Render failed: ' + escapeHtml(message) + "</div>");
           setConnection("offline");
+          lastSceneRenderToken = null;
           renderedAgentSceneState = new Map();
           sceneStateDraft = null;
         }
