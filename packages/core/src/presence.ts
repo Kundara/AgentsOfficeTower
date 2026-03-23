@@ -102,6 +102,8 @@ export async function loadFreshPresenceAgents(projectRoot: string): Promise<Dash
       taskId: null,
       resumeCommand: null,
       url: null,
-      git: null
+      git: null,
+      provenance: "presence",
+      confidence: "typed"
     }));
 }

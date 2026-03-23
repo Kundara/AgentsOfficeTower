@@ -2,17 +2,229 @@ import { EventEmitter } from "node:events";
 import { watch, watchFile, unwatchFile, type FSWatcher } from "node:fs";
 import { getRoomsFilePath } from "./room-config";
 
-import { CodexAppServerClient } from "./app-server";
+import { type AppServerNotification, CodexAppServerClient } from "./app-server";
 import { listCloudTasks } from "./cloud";
-import { filterThreadsForProject } from "./project-paths";
+import { canonicalizeProjectPath, filterThreadsForProject } from "./project-paths";
 import { buildDashboardSnapshotFromState, filterProjectCloudTasks } from "./snapshot";
-import type { CloudTask, CodexThread, DashboardSnapshot } from "./types";
+import type { CloudTask, CodexThread, DashboardEvent, DashboardSnapshot } from "./types";
 
 const DISCOVERY_INTERVAL_MS = 4000;
 const CLOUD_REFRESH_INTERVAL_MS = 30000;
 const FILE_WATCH_INTERVAL_MS = 1000;
 const SNAPSHOT_DEBOUNCE_MS = 150;
 const THREAD_READ_DEBOUNCE_MS = 250;
+const MAX_RECENT_EVENTS = 64;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value ? (value as Record<string, unknown>) : null;
+}
+
+function collectThreadIds(value: unknown, output = new Set<string>()): Set<string> {
+  if (typeof value === "string" && /^[0-9a-f-]{16,}$/i.test(value)) {
+    output.add(value);
+    return output;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectThreadIds(entry, output));
+    return output;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return output;
+  }
+  for (const [key, entry] of Object.entries(record)) {
+    if (/thread/i.test(key)) {
+      collectThreadIds(entry, output);
+      continue;
+    }
+    if (typeof entry === "object" && entry) {
+      collectThreadIds(entry, output);
+    }
+  }
+  return output;
+}
+
+function collectPaths(value: unknown, output = new Set<string>()): Set<string> {
+  if (typeof value === "string") {
+    const normalized = canonicalizeProjectPath(value);
+    if (normalized) {
+      output.add(normalized);
+    }
+    return output;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectPaths(entry, output));
+    return output;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return output;
+  }
+  for (const [key, entry] of Object.entries(record)) {
+    if (/(path|cwd|file)/i.test(key)) {
+      collectPaths(entry, output);
+      continue;
+    }
+    if (typeof entry === "object" && entry) {
+      collectPaths(entry, output);
+    }
+  }
+  return output;
+}
+
+function buildEventId(projectRoot: string, notification: AppServerNotification, createdAt: string, threadId: string | null): string {
+  return [projectRoot, notification.method, threadId ?? "", createdAt].join("::");
+}
+
+function buildDashboardEvent(
+  projectRoot: string,
+  notification: AppServerNotification,
+  threadId: string | null
+): DashboardEvent | null {
+  const method = notification.method.toLowerCase();
+  const params = asRecord(notification.params) ?? {};
+  const item = asRecord(params.item) ?? params;
+  const itemType = typeof item.type === "string" ? item.type : null;
+  const createdAt = new Date().toISOString();
+  const path = [...collectPaths(params)][0] ?? null;
+
+  if (/approval/.test(method)) {
+    return {
+      id: buildEventId(projectRoot, notification, createdAt, threadId),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt,
+      kind: "approval",
+      phase: "waiting",
+      title: "Needs approval",
+      detail: "Approval requested",
+      path
+    };
+  }
+
+  if (/user.?input|input/.test(method) && /wait|request|needed|need/.test(method)) {
+    return {
+      id: buildEventId(projectRoot, notification, createdAt, threadId),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt,
+      kind: "input",
+      phase: "waiting",
+      title: "Needs input",
+      detail: "User input requested",
+      path
+    };
+  }
+
+  if (method.includes("turn")) {
+    const phase =
+      /fail/.test(method) ? "failed"
+      : /interrupt/.test(method) ? "interrupted"
+      : /complete|finish/.test(method) ? "completed"
+      : "started";
+    return {
+      id: buildEventId(projectRoot, notification, createdAt, threadId),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt,
+      kind: "turn",
+      phase,
+      title:
+        phase === "failed" ? "Turn failed"
+        : phase === "interrupted" ? "Turn interrupted"
+        : phase === "completed" ? "Turn completed"
+        : "Turn started",
+      detail: typeof params.turnId === "string" ? params.turnId : notification.method,
+      path
+    };
+  }
+
+  if (itemType === "fileChange") {
+    return {
+      id: buildEventId(projectRoot, notification, createdAt, threadId),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt,
+      kind: "fileChange",
+      phase: "updated",
+      title: "File changed",
+      detail: typeof item.status === "string" ? item.status : "updated",
+      path
+    };
+  }
+
+  if (itemType === "commandExecution") {
+    const phase =
+      typeof item.status === "string" && /failed|declined/i.test(item.status)
+        ? "failed"
+        : typeof item.status === "string" && /completed|success/i.test(item.status)
+        ? "completed"
+        : "started";
+    return {
+      id: buildEventId(projectRoot, notification, createdAt, threadId),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt,
+      kind: "command",
+      phase,
+      title: phase === "failed" ? "Command failed" : phase === "completed" ? "Command finished" : "Command started",
+      detail: typeof item.command === "string" ? item.command : notification.method,
+      path
+    };
+  }
+
+  if (itemType === "collabToolCall" || itemType === "collabAgentToolCall") {
+    return {
+      id: buildEventId(projectRoot, notification, createdAt, threadId),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt,
+      kind: "subagent",
+      phase: "started",
+      title: "Subagent activity",
+      detail: notification.method,
+      path
+    };
+  }
+
+  if (itemType === "agentMessage") {
+    return {
+      id: buildEventId(projectRoot, notification, createdAt, threadId),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt,
+      kind: "message",
+      phase: "updated",
+      title: "Agent update",
+      detail: notification.method,
+      path
+    };
+  }
+
+  if (method.includes("item")) {
+    return {
+      id: buildEventId(projectRoot, notification, createdAt, threadId),
+      source: "codex",
+      confidence: "typed",
+      threadId,
+      createdAt,
+      kind: "item",
+      phase: "updated",
+      title: itemType ? `Item: ${itemType}` : "Item updated",
+      detail: notification.method,
+      path
+    };
+  }
+
+  return null;
+}
 
 export interface ProjectLiveMonitorOptions {
   projectRoot: string;
@@ -37,6 +249,8 @@ export class ProjectLiveMonitor extends EventEmitter {
   private discoveryTimer: NodeJS.Timeout | null = null;
   private cloudTimer: NodeJS.Timeout | null = null;
   private snapshotTimer: NodeJS.Timeout | null = null;
+  private recentEvents: DashboardEvent[] = [];
+  private unsubscribeNotifications: (() => void) | null = null;
 
   constructor(options: ProjectLiveMonitorOptions) {
     super();
@@ -101,6 +315,8 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
     this.threadWatchers.clear();
     this.threadPaths.clear();
+    this.unsubscribeNotifications?.();
+    this.unsubscribeNotifications = null;
     this.client?.close();
     this.client = null;
   }
@@ -112,6 +328,10 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     try {
       this.client = await CodexAppServerClient.create();
+      this.unsubscribeNotifications?.();
+      this.unsubscribeNotifications = this.client.onNotification((notification) => {
+        this.handleAppServerNotification(notification);
+      });
       this.clearMatchingNote("Local Codex app-server unavailable:");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -245,6 +465,45 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
   }
 
+  private belongsToProject(notification: AppServerNotification, threadIds: string[]): boolean {
+    if (threadIds.some((threadId) => this.threads.has(threadId))) {
+      return true;
+    }
+    const projectPaths = [...collectPaths(notification.params)];
+    return projectPaths.some((path) => path === this.projectRoot || path.startsWith(`${this.projectRoot}/`));
+  }
+
+  private pushRecentEvent(event: DashboardEvent): void {
+    this.recentEvents.unshift(event);
+    const seen = new Set<string>();
+    this.recentEvents = this.recentEvents.filter((entry) => {
+      if (seen.has(entry.id)) {
+        return false;
+      }
+      seen.add(entry.id);
+      return true;
+    }).slice(0, MAX_RECENT_EVENTS);
+  }
+
+  private handleAppServerNotification(notification: AppServerNotification): void {
+    const threadIds = [...collectThreadIds(notification.params)];
+    if (!this.belongsToProject(notification, threadIds)) {
+      return;
+    }
+
+    const event = buildDashboardEvent(this.projectRoot, notification, threadIds[0] ?? null);
+    if (event) {
+      this.pushRecentEvent(event);
+    }
+
+    if (threadIds.length > 0) {
+      threadIds.forEach((threadId) => this.scheduleThreadRefresh(threadId));
+    } else {
+      void this.discoverThreads();
+    }
+    this.scheduleSnapshot();
+  }
+
   private async refreshThread(threadId: string): Promise<void> {
     if (!this.client) {
       return;
@@ -315,6 +574,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       projectRoot: this.projectRoot,
       threads: Array.from(this.threads.values()),
       cloudTasks: this.cloudTasks,
+      events: this.recentEvents,
       notes: Array.from(this.notes)
     });
     this.emit("snapshot", this.snapshot);

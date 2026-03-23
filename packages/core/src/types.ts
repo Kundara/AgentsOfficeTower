@@ -142,6 +142,22 @@ export interface AgentActivityEvent {
   isImage: boolean;
 }
 
+export type AgentProvenanceSource = "codex" | "claude" | "cloud" | "presence";
+export type AgentConfidence = "typed" | "inferred";
+
+export interface DashboardEvent {
+  id: string;
+  source: AgentProvenanceSource;
+  confidence: AgentConfidence;
+  threadId: string | null;
+  createdAt: string;
+  kind: "turn" | "item" | "approval" | "input" | "command" | "fileChange" | "subagent" | "status" | "message" | "other";
+  phase: "started" | "completed" | "interrupted" | "failed" | "waiting" | "updated";
+  title: string;
+  detail: string;
+  path: string | null;
+}
+
 export interface DashboardAgent {
   id: string;
   label: string;
@@ -167,6 +183,8 @@ export interface DashboardAgent {
   resumeCommand: string | null;
   url: string | null;
   git: GitInfo | null;
+  provenance: AgentProvenanceSource;
+  confidence: AgentConfidence;
 }
 
 export interface DashboardSnapshot {
@@ -175,6 +193,7 @@ export interface DashboardSnapshot {
   rooms: RoomConfig;
   agents: DashboardAgent[];
   cloudTasks: CloudTask[];
+  events: DashboardEvent[];
   notes: string[];
 }
 

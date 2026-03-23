@@ -52,6 +52,8 @@ It supports:
 - deep links into one project with `?project=/abs/project/path`
 - office and terminal-style rendering with `?view=map` and `?view=terminal`
 - live agents plus the 4 most recent lead sessions for each workspace
+- a durable cross-project `Needs You` queue for approval and input waits
+- provenance/confidence detail in session cards so Codex-native and Claude-inferred entries do not read the same
 - static screenshot rendering through `?screenshot=1`
 
 ### Terminal
@@ -63,11 +65,13 @@ It groups sessions by room and shows:
 - state
 - recent useful action
 - active paths
+- provenance/confidence in the shared snapshot model
 - resume commands for local Codex threads when available
 
 ### VS Code
 
 The VS Code extension adds a `Codex Office` activity-bar entry with an `Agents Office` view for the current workspace.
+It rides the same normalized snapshot, including event-native notifications, approval/input state, and provenance metadata.
 
 ## Quick start
 
@@ -146,7 +150,8 @@ The normalized snapshot is then rendered into:
 - desks for active work
 - rec-area placement for waiting, resting, and the 4 most recent lead sessions
 - hover cards and session panels for longer detail
-- live notifications for file changes, commands, approval waits, and user-input waits
+- live event-native notifications for file changes, commands, turn lifecycle, approval waits, and user-input waits
+- explicit provenance/confidence labels so Codex-native state and Claude-inferred state do not look equivalent
 
 ## Project layout
 
@@ -169,10 +174,13 @@ The current implementation already supports:
 - parent and subagent visibility
 - active, waiting, blocked, done, and idle state derivation
 - live browser refresh over SSE
-- anchored notifications for file changes, commands, approvals, and user-input waits
+- raw app-server notification ingestion through the shared snapshot event stream
+- anchored notifications for file changes, commands, turn lifecycle, approvals, and user-input waits
+- a durable cross-project "needs you" queue for approval and input waits
+- provenance/confidence signaling for Codex, Claude, cloud, and presence-derived entries
 - fleet view and single-project office view
 
-The main gap is richer event-to-motion mapping. The project can already read more Codex signal than it currently animates, so the next level is making reading, planning, editing, validating, delegating, and waiting feel more explicit in-scene.
+The main gap is richer event-to-motion mapping. The project now carries more typed Codex event signal end-to-end, but it still needs stronger in-scene posture and movement differences for reading, planning, editing, validating, delegating, interrupted, and waiting work.
 
 ## Docs
 

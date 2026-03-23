@@ -74,6 +74,8 @@ Sources:
   - live SSE updates for browser clients
   - map and terminal-style views through `?view=map|terminal`
   - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
+  - session panel includes a durable cross-project "needs you" queue for approval/input waits
+  - session cards expose provenance/confidence so Codex-native and Claude-inferred state stay distinguishable
   - snapshot-only rendering through `?screenshot=1`
   - session-card hover/focus dims unrelated agents so the visible thread cluster for that session stands out in the map
   - HTTP endpoints for snapshot refresh, room scaffolding, and appearance cycling
@@ -122,19 +124,25 @@ The current implementation already has the right base surfaces:
 - app-server notifications for live changes
 - file-change driven activity events
 
-What is still missing is fuller event attribution in the UI. Right now the browser mostly renders a trustworthy current-state summary, with anchored file-change toasts as the clearest event-level notification path. Reaching a stronger transparency bar means exposing more of the live app-server event stream directly in motion and notification design.
-That gap is smaller now: command execution, approval waits, and user-input waits also emit anchored notification events in the browser.
+The browser now carries a stronger event attribution path:
 
-## Event-driven notification roadmap
+- raw app-server notifications are normalized into snapshot `events`
+- browser notifications can react to those event-native records directly
+- approval and input waits are also surfaced in a durable cross-project "needs you" queue
+- Claude-derived sessions are explicitly marked as inferred through provenance/confidence metadata
+
+What is still missing is richer motion and posture tied to those events. The product can now explain more of what changed; the next step is making those changes feel more visible in-scene.
+
+## Event-driven notification model
 
 Codex exposes enough signal for a more explicit notification model than the current one.
 
-The highest-value mapping is:
+Current mapping:
 
 - `waitingOnApproval`
-  strong blocked indicator and approval-needed toast
+  blocked indicator, approval-needed toast, and durable needs-you queue entry
 - `waitingOnUserInput`
-  waiting indicator and ask-user toast
+  waiting indicator, ask-user toast, and durable needs-you queue entry
 - `item/*` command execution
   running / completed / failed command notifications
 - `fileChange`
@@ -143,6 +151,12 @@ The highest-value mapping is:
   turn started / finished / interrupted / failed status transitions
 - subagent spawn and completion
   parent-linked spawn/finish notifications and motion updates
+
+Remaining roadmap:
+
+- stronger in-scene motion for turn and approval lifecycle
+- direct action affordances from queue items back into the originating Codex surface
+- clearer styling differences between typed Codex truth and Claude inference
 
 ## Current workstation model
 
@@ -170,7 +184,7 @@ Claude support uses a deliberately weaker contract than Codex:
 - project discovery merges Codex-discovered roots with roots inferred from `~/.claude/projects`
 - the snapshot builder can include recent Claude sessions for matching project roots
 - Claude session state is inferred from recent tool uses such as read, edit, bash, and task delegation
-- Claude agents are rendered in the same room model, but without pretending they have Codex-grade typed status
+- Claude agents are rendered in the same room model, but with explicit provenance/confidence so they do not pretend to have Codex-grade typed status
 
 This is useful because it broadens observability across the machine, but it should remain visually and architecturally secondary to the official Codex path.
 

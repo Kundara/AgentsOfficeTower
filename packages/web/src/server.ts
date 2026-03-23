@@ -234,7 +234,7 @@ function buildFleetResponse(
 ): FleetResponse {
   return {
     generatedAt: new Date().toISOString(),
-    projects: projects.map((project) => snapshotsByRoot.get(project.root) ?? {
+      projects: projects.map((project) => snapshotsByRoot.get(project.root) ?? {
       projectRoot: project.root,
       generatedAt: new Date().toISOString(),
       rooms: {
@@ -245,6 +245,7 @@ function buildFleetResponse(
       },
       agents: [],
       cloudTasks: [],
+      events: [],
       notes: [`Project ${project.label} is starting up.`]
     })
   };
@@ -1262,7 +1263,7 @@ function renderHtml(options: ServerOptions): string {
       .lounge-hover {
         position: absolute;
         left: 50%;
-        bottom: calc(100% + 8px);
+        bottom: calc(100% + 4px);
         z-index: 9;
         width: min(196px, calc(100vw - 20px));
         min-width: 128px;
@@ -1274,8 +1275,12 @@ function renderHtml(options: ServerOptions): string {
         box-shadow: 4px 4px 0 rgba(0,0,0,0.28);
         opacity: 0;
         pointer-events: none;
-        transform: translate(-50%, 6px);
+        transform: translate(-50%, 4px);
         transition: opacity 90ms linear, transform 90ms linear;
+      }
+
+      .cubicle-cell .agent-hover {
+        bottom: calc(100% - 12px);
       }
 
       .cubicle-cell:hover .agent-hover,
@@ -1890,6 +1895,9 @@ function renderHtml(options: ServerOptions): string {
         return [
           agent.id,
           agent.state,
+          agent.detail || "",
+          agent.updatedAt || "",
+          Array.isArray(agent.paths) ? agent.paths.join("|") : "",
           agent.roomId || "",
           agent.parentThreadId || "",
           agent.isCurrent ? "1" : "0",
@@ -2215,6 +2223,12 @@ function renderHtml(options: ServerOptions): string {
         return role;
       }
 
+      function agentProvenanceLabel(agent) {
+        return agent.confidence === "inferred"
+          ? titleCaseWords(agent.provenance) + " inferred"
+          : titleCaseWords(agent.provenance) + " typed";
+      }
+
       function agentHoverSummary(snapshot, agent) {
         const detail = String(agent.detail || "").trim();
         const focus = primaryFocusPath(snapshot, agent);
@@ -2352,6 +2366,59 @@ function renderHtml(options: ServerOptions): string {
         };
       }
 
+      function notificationDescriptorFromEvent(event) {
+        if (!event) {
+          return null;
+        }
+        switch (event.kind) {
+          case "approval":
+            return { kindClass: "blocked", label: "Needs", title: "approval", imageUrl: null };
+          case "input":
+            return { kindClass: "waiting", label: "Needs", title: "input", imageUrl: null };
+          case "turn":
+            return {
+              kindClass: event.phase === "failed" ? "blocked" : event.phase === "interrupted" ? "waiting" : "update",
+              label:
+                event.phase === "failed" ? "Failed"
+                : event.phase === "completed" ? "Done"
+                : event.phase === "interrupted" ? "Interrupted"
+                : "Turn",
+              title: event.title || event.detail,
+              imageUrl: null
+            };
+          case "command":
+            return {
+              kindClass: event.phase === "failed" ? "blocked" : "run",
+              label: event.phase === "failed" ? "Failed" : event.phase === "completed" ? "Done" : "Ran",
+              title: event.detail || event.title,
+              imageUrl: null
+            };
+          case "fileChange":
+            return {
+              kindClass: "edit",
+              label: "Changed",
+              title: event.path || event.detail || event.title,
+              imageUrl: null
+            };
+          case "subagent":
+            return {
+              kindClass: "update",
+              label: "Spawn",
+              title: event.detail || event.title,
+              imageUrl: null
+            };
+          case "message":
+            return {
+              kindClass: "update",
+              label: "Update",
+              title: event.detail || event.title,
+              imageUrl: null
+            };
+          default:
+            return null;
+        }
+      }
+
       function projectFileUrl(projectRoot, path) {
         return \`/api/project-file?projectRoot=\${encodeURIComponent(projectRoot)}&path=\${encodeURIComponent(path)}\`;
       }
@@ -2399,6 +2466,44 @@ function renderHtml(options: ServerOptions): string {
               imageUrl: descriptor.imageUrl
             });
             seenNotificationKeys.add(nextNotificationKey);
+          }
+        }
+
+        notifications = notifications.slice(-24);
+        scheduleNotificationPrune();
+      }
+
+      function queueSnapshotEvents(nextFleet) {
+        if (!nextFleet || screenshotMode) {
+          return;
+        }
+
+        for (const snapshot of nextFleet.projects || []) {
+          for (const event of snapshot.events || []) {
+            const descriptor = notificationDescriptorFromEvent(event);
+            if (!descriptor) {
+              continue;
+            }
+            const agent = snapshot.agents.find((candidate) => candidate.threadId && candidate.threadId === event.threadId);
+            if (!agent) {
+              continue;
+            }
+            const key = agentKey(snapshot.projectRoot, agent);
+            const notificationId = "event::" + event.id;
+            if (seenNotificationKeys.has(notificationId)) {
+              continue;
+            }
+            notifications.push({
+              id: notificationId,
+              key,
+              projectRoot: snapshot.projectRoot,
+              createdAt: Date.now(),
+              kindClass: descriptor.kindClass,
+              label: descriptor.label,
+              title: descriptor.title,
+              imageUrl: descriptor.imageUrl
+            });
+            seenNotificationKeys.add(notificationId);
           }
         }
 
@@ -2496,16 +2601,19 @@ function renderHtml(options: ServerOptions): string {
         }, delay);
       }
 
-      function renderAgentHover(snapshot, agent) {
+      function renderAgentHover(snapshot, agent, options = {}) {
         const lead = parentLabelFor(snapshot, agent);
         const summary = agentHoverSummary(snapshot, agent);
         const meta = [
           titleCaseWords(agentKindLabel(snapshot, agent)),
+          agentProvenanceLabel(agent),
           lead ? \`with \${lead}\` : "",
           formatUpdatedAt(agent.updatedAt)
         ].filter(Boolean).join(" · ");
+        const className = options.className || "agent-hover";
+        const styleAttr = options.style ? \` style="\${escapeHtml(options.style)}"\` : "";
 
-        return \`<div class="agent-hover"><div class="agent-hover-title"><strong>\${escapeHtml(agent.label)}</strong></div><div class="agent-hover-summary">\${escapeHtml(summary)}</div><div class="agent-hover-meta">\${escapeHtml(meta)}</div></div>\`;
+        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(agent.label)}</strong></div><div class="agent-hover-summary">\${escapeHtml(summary)}</div><div class="agent-hover-meta">\${escapeHtml(meta)}</div></div>\`;
       }
 
       function flattenRooms(rooms) {
@@ -3474,13 +3582,33 @@ function renderHtml(options: ServerOptions): string {
         }).join("")}</div>\`;
       }
 
+      function agentsNeedingUser(projects) {
+        return projects.flatMap((snapshot) =>
+          snapshot.agents
+            .filter((agent) => (
+              (agent.state === "waiting" && /input/i.test(agent.detail))
+              || (agent.state === "blocked" && /approval/i.test(agent.detail))
+            ))
+            .map((agent) => ({ snapshot, agent }))
+        ).sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
+      }
+
+      function renderNeedsAttention(projects) {
+        const entries = agentsNeedingUser(projects);
+        if (entries.length === 0) {
+          return "";
+        }
+
+        return \`<section class="session-card" style="border-color:rgba(245,183,79,0.32);background:rgba(245,183,79,0.05);"><strong>Needs You</strong><div class="muted" style="margin-top:6px;">\${entries.map(({ snapshot, agent }) => \`\${escapeHtml(projectLabel(snapshot.projectRoot))} · \${escapeHtml(agent.label)} · \${escapeHtml(agent.detail)}\`).join("<br />")}</div></section>\`;
+      }
+
       function renderSessions(snapshot) {
         if (!snapshot || snapshot.agents.length === 0) {
           return '<div class="empty">No live or recent lead sessions in the selected workspace right now.</div>';
         }
 
         const sorted = [...snapshot.agents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        return sorted.map((agent) => {
+        return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
           const primaryAction = agent.url
             ? \`<a href="\${escapeHtml(agent.url)}" target="_blank" rel="noreferrer"><button>Open task</button></a>\`
             : "";
@@ -3490,7 +3618,7 @@ function renderHtml(options: ServerOptions): string {
           const location = relativeLocation(snapshot.projectRoot, agent.cwd || agent.url || "");
           const parentLabel = parentLabelFor(snapshot, agent);
           const leaderText = parentLabel ? \` · lead=\${escapeHtml(parentLabel)}\` : "";
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:start;"><div><strong>\${escapeHtml(agent.label)}</strong><div class="muted">\${escapeHtml(agentRankLabel(snapshot, agent))} · \${escapeHtml(agentRole(agent))} · [\${escapeHtml(agent.state)}] \${escapeHtml(agent.detail)}</div></div><span class="muted">\${escapeHtml(agent.appearance.label)}</span></div><div class="inline-code" style="margin-top:8px;">\${escapeHtml(location)}</div><div class="inline-code" style="margin-top:6px;">room=\${escapeHtml(agent.roomId || "cloud")} · source=\${escapeHtml(agent.sourceKind)}\${leaderText}</div><div class="inline-code" style="margin-top:6px;">updated=\${escapeHtml(agent.updatedAt)}</div><div class="card-actions">\${primaryAction}\${appearanceAction}</div></article>\`;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:start;"><div><strong>\${escapeHtml(agent.label)}</strong><div class="muted">\${escapeHtml(agentRankLabel(snapshot, agent))} · \${escapeHtml(agentRole(agent))} · [\${escapeHtml(agent.state)}] \${escapeHtml(agent.detail)}</div></div><span class="muted">\${escapeHtml(agent.appearance.label)}</span></div><div class="inline-code" style="margin-top:8px;">\${escapeHtml(location)}</div><div class="inline-code" style="margin-top:6px;">room=\${escapeHtml(agent.roomId || "cloud")} · source=\${escapeHtml(agent.sourceKind)} · provenance=\${escapeHtml(agentProvenanceLabel(agent))}\${leaderText}</div><div class="inline-code" style="margin-top:6px;">updated=\${escapeHtml(agent.updatedAt)}</div><div class="card-actions">\${primaryAction}\${appearanceAction}</div></article>\`;
         }).join("");
       }
 
@@ -3504,7 +3632,7 @@ function renderHtml(options: ServerOptions): string {
         }
 
         entries.sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
-        return entries.map(({ snapshot, agent }) => {
+        return renderNeedsAttention(projects) + entries.map(({ snapshot, agent }) => {
           const primaryAction = agent.url
             ? \`<a href="\${escapeHtml(agent.url)}" target="_blank" rel="noreferrer"><button>Open task</button></a>\`
             : "";
@@ -3513,7 +3641,7 @@ function renderHtml(options: ServerOptions): string {
           const location = relativeLocation(snapshot.projectRoot, agent.cwd || agent.url || "");
           const parentLabel = parentLabelFor(snapshot, agent);
           const leaderText = parentLabel ? \` · lead=\${escapeHtml(parentLabel)}\` : "";
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:start;"><div><strong>\${escapeHtml(agent.label)}</strong><div class="muted">\${escapeHtml(projectLabel(snapshot.projectRoot))} · \${escapeHtml(agentRankLabel(snapshot, agent))} · \${escapeHtml(agentRole(agent))} · [\${escapeHtml(agent.state)}] \${escapeHtml(agent.detail)}</div></div><span class="muted">\${escapeHtml(agent.appearance.label)}</span></div><div class="inline-code" style="margin-top:8px;">\${escapeHtml(location)}</div><div class="inline-code" style="margin-top:6px;">room=\${escapeHtml(agent.roomId || "cloud")} · source=\${escapeHtml(agent.sourceKind)}\${leaderText}</div><div class="inline-code" style="margin-top:6px;">updated=\${escapeHtml(agent.updatedAt)}</div><div class="card-actions">\${primaryAction}\${appearanceAction}</div></article>\`;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:start;"><div><strong>\${escapeHtml(agent.label)}</strong><div class="muted">\${escapeHtml(projectLabel(snapshot.projectRoot))} · \${escapeHtml(agentRankLabel(snapshot, agent))} · \${escapeHtml(agentRole(agent))} · [\${escapeHtml(agent.state)}] \${escapeHtml(agent.detail)}</div></div><span class="muted">\${escapeHtml(agent.appearance.label)}</span></div><div class="inline-code" style="margin-top:8px;">\${escapeHtml(location)}</div><div class="inline-code" style="margin-top:6px;">room=\${escapeHtml(agent.roomId || "cloud")} · source=\${escapeHtml(agent.sourceKind)} · provenance=\${escapeHtml(agentProvenanceLabel(agent))}\${leaderText}</div><div class="inline-code" style="margin-top:6px;">updated=\${escapeHtml(agent.updatedAt)}</div><div class="card-actions">\${primaryAction}\${appearanceAction}</div></article>\`;
         }).join("");
       }
 
@@ -3692,6 +3820,7 @@ function renderHtml(options: ServerOptions): string {
 
       function ingestFleet(fleet) {
         const previousFleet = state.fleet;
+        queueSnapshotEvents(fleet);
         queueAgentNotifications(previousFleet, fleet);
         state.fleet = fleet;
         if (state.selected !== "all") {

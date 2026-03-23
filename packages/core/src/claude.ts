@@ -588,7 +588,9 @@ export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise
         sha: null,
         branch: summary.gitBranch,
         originUrl: null
-      }
+      },
+      provenance: "claude",
+      confidence: "inferred"
     });
   }
 

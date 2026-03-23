@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { cwd, exit } from "node:process";
 import { resolve } from "node:path";
 
+import { runDemoPreview } from "./demo-preview";
 import {
   buildAsepriteExportCommand,
   buildDashboardSnapshot,
@@ -26,6 +27,7 @@ Usage:
   codex-agents-office snapshot [projectRoot] [--history]
   codex-agents-office watch [projectRoot] [--history]
   codex-agents-office web [projectRoot...] [--port 4181] [--host 127.0.0.1]
+  codex-agents-office demo preview [--port 4181] [--host 127.0.0.1] [--duration 75] [--keep]
   codex-agents-office aseprite inspect [file]
   codex-agents-office presence boss [projectRoot]
   codex-agents-office presence clear [projectRoot]
@@ -180,6 +182,17 @@ async function runPresence(args: string[]): Promise<void> {
   exit(1);
 }
 
+async function runDemo(args: string[]): Promise<void> {
+  const subcommand = args[0];
+  if (subcommand === "preview") {
+    await runDemoPreview(args.slice(1));
+    return;
+  }
+
+  usage();
+  exit(1);
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
@@ -215,6 +228,11 @@ async function main(): Promise<void> {
 
   if (command === "presence") {
     await runPresence(args);
+    return;
+  }
+
+  if (command === "demo") {
+    await runDemo(args);
     return;
   }
 

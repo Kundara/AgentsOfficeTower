@@ -51,6 +51,8 @@ The project goal is not generic chat replay. It is live workload visibility:
   Avoid large task-title overlays inside the room scene.
 - Prefer small in-scene transparency cues over separate dashboard furniture.
   High-level summaries should stay subtle and not read like a detached admin panel.
+- Keep Codex-native typed state visually distinct from Claude-inferred state.
+  Hover cards, session panels, and event surfaces should expose provenance/confidence when that distinction matters.
 - PixelOffice art should be assembled from the asset sheet intentionally.
   Do not use the example scene PNG as a runtime collage substitute.
 
@@ -128,11 +130,13 @@ node packages/web/dist/server.js --port 4181
 - Empty rooms should read as quiet space, not error states.
 - Rec Room is for waiting/resting agents only.
 - Workstations should match the chosen PixelOffice station language consistently across rows.
+- The session panel should keep the durable approval/input "Needs You" queue visible when those states exist.
 - Hover details should expose the useful live state:
   - name
   - role
   - state
   - last useful action
+  - provenance / confidence when relevant
   - resume/open affordance when available
 
 ## Documentation expectations

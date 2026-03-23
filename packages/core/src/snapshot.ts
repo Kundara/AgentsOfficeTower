@@ -14,6 +14,7 @@ import type {
   CodexThread,
   CodexTurn,
   DashboardAgent,
+  DashboardEvent,
   DashboardSnapshot,
   SnapshotOptions,
   ThreadItem
@@ -476,6 +477,7 @@ export async function buildDashboardSnapshotFromState(input: {
   projectRoot: string;
   threads: CodexThread[];
   cloudTasks?: CloudTask[];
+  events?: DashboardEvent[];
   notes?: string[];
 }): Promise<DashboardSnapshot> {
   const projectRoot = input.projectRoot;
@@ -514,7 +516,9 @@ export async function buildDashboardSnapshotFromState(input: {
       taskId: null,
       resumeCommand: `codex resume ${thread.id}`,
       url: null,
-      git: thread.gitInfo
+      git: thread.gitInfo,
+      provenance: "codex",
+      confidence: "typed"
     });
   }
 
@@ -545,7 +549,9 @@ export async function buildDashboardSnapshotFromState(input: {
       taskId: task.id,
       resumeCommand: null,
       url: task.url,
-      git: null
+      git: null,
+      provenance: "cloud",
+      confidence: "typed"
     });
   }
 
@@ -554,7 +560,9 @@ export async function buildDashboardSnapshotFromState(input: {
     agents.push({
       ...presenceAgent,
       roomId: findRoomForPaths(roomConfig, projectRoot, presenceAgent.paths),
-      activityEvent: null
+      activityEvent: null,
+      provenance: "presence",
+      confidence: "typed"
     });
   }
 
@@ -576,6 +584,7 @@ export async function buildDashboardSnapshotFromState(input: {
     rooms: roomConfig,
     agents,
     cloudTasks,
+    events: [...(input.events ?? [])].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     notes
   };
 }

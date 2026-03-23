@@ -36,7 +36,7 @@ A good iteration improves at least one of these:
 - Codex desktop session visibility may still be incomplete depending on app-server exposure.
 - Claude support is still inference-based and only as strong as the local session logs.
 - PixelOffice workstation composition still needs refinement and stricter prefab rules.
-- Most Codex event types are still collapsed into summary state instead of distinct notification/motion cues.
+- Most Codex event types now reach the snapshot as explicit events, but many of them still share the same notification/motion treatment.
 - Room empty states are still visually heavier than ideal.
 - Live movement is still simpler than the intended office-life simulation.
 - History view and current view share most layout logic; some visual tuning should diverge.
@@ -55,13 +55,15 @@ A good iteration improves at least one of these:
 - verify active agents are visibly placed at workstations, not floating below them
 - verify a single active agent does not spawn an empty mirrored workstation
 - verify waiting/resting agents use the Rec Room instead of staying at desks
-- verify approval, input-wait, file-change, and command-run states have clear visible notification paths
+- verify approval, input-wait, file-change, command-run, and turn lifecycle states have clear visible notification paths
+- verify the browser session panel exposes the durable approval/input "needs you" queue
+- verify Claude-derived sessions are visibly marked as inferred in hover/session detail
 
 ## Near-term roadmap
 
-- map more app-server `turn/*` and `item/*` events into explicit character motion and notifications
-- add completed/failed command lifecycle notifications beyond the current run-state toasts
-- separate Claude-specific confidence signaling from Codex-native state signaling
+- map more app-server `turn/*` and `item/*` events into explicit character motion
+- make started/completed/interrupted/failed turn phases visually distinct beyond shared toast styling
+- add direct approval/input action affordances from the browser queue back into Codex
 - tighten the workstation prefab using only the intended PixelOffice station slices
 - improve side-facing avatar placement and interaction poses
 - add stronger state-specific animation for blocked, waiting, and validating work
