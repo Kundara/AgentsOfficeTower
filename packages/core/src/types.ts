@@ -140,6 +140,8 @@ export interface AgentActivityEvent {
   path: string | null;
   title: string;
   isImage: boolean;
+  linesAdded?: number;
+  linesRemoved?: number;
 }
 
 export type AgentProvenanceSource = "codex" | "claude" | "cloud" | "presence";
@@ -156,6 +158,10 @@ export interface DashboardEvent {
   title: string;
   detail: string;
   path: string | null;
+  action?: "created" | "edited" | "deleted" | "moved" | "ran" | "said" | "updated";
+  isImage?: boolean;
+  linesAdded?: number;
+  linesRemoved?: number;
 }
 
 export interface DashboardAgent {

@@ -161,6 +161,8 @@ The normalized snapshot is then rendered into:
 - rec-area placement for waiting, resting, and the 4 most recent lead sessions
 - hover cards and session panels for longer detail
 - live event-native notifications for file changes, commands, turn lifecycle, approval waits, and user-input waits
+  File changes now rise from the workstation, showing the filename and any available `+/-` line deltas.
+  Command notifications render as a tiny terminal-style window with monospace command text and a blinking cursor.
 - explicit provenance/confidence labels so Codex-native state and Claude-inferred state do not look equivalent
 
 ## Project layout
@@ -188,6 +190,7 @@ The current implementation already supports:
 - live browser refresh over SSE
 - raw app-server notification ingestion through the shared snapshot event stream
 - anchored notifications for file changes, commands, turn lifecycle, approvals, and user-input waits
+  File-change toasts anchor to the desk instead of the avatar and prefer filename-first rendering.
 - a durable cross-project "needs you" queue for approval and input waits
 - provenance/confidence signaling for Codex, Claude, cloud, and presence-derived entries
 - fleet view and single-project office view

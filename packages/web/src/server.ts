@@ -360,7 +360,9 @@ class FleetLiveService {
   }
 
   private async refreshProjectSet(): Promise<void> {
-    const discoveredProjects = await discoverProjects(50).catch(() => []);
+    const discoveredProjects = this.explicitProjects
+      ? []
+      : await discoverProjects(50).catch(() => []);
     const normalizedSeeds = this.seedProjects
       .map((project) => {
         const root = canonicalizeProjectPath(project.root);
@@ -788,6 +790,31 @@ function renderHtml(options: ServerOptions): string {
         animation: agent-toast-float 3300ms ease-out forwards;
       }
 
+      .agent-toast.file-change {
+        border-radius: 14px;
+        padding: 5px 8px 6px;
+        background: rgba(16, 23, 20, 0.9);
+      }
+
+      .agent-toast.command-window {
+        display: block;
+        min-width: 180px;
+        max-width: 320px;
+        padding: 0;
+        border-radius: 8px;
+        border-color: rgba(123, 203, 255, 0.34);
+        background: rgba(8, 12, 16, 0.96);
+        color: #d6ecff;
+        box-shadow:
+          0 8px 18px rgba(0,0,0,0.28),
+          inset 0 0 0 1px rgba(255,255,255,0.04);
+      }
+
+      .agent-toast.command-window.blocked {
+        border-color: rgba(255, 120, 120, 0.36);
+        color: #ffd0d0;
+      }
+
       .agent-toast.edit {
         border-color: rgba(75, 214, 159, 0.22);
         color: #baf6dc;
@@ -836,9 +863,76 @@ function renderHtml(options: ServerOptions): string {
 
       .agent-toast-copy {
         display: inline-flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .agent-toast-head {
+        display: inline-flex;
         align-items: baseline;
         gap: 5px;
         min-width: 0;
+      }
+
+      .agent-toast-window-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 4px 8px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        background: linear-gradient(180deg, rgba(70, 92, 112, 0.9), rgba(44, 58, 71, 0.92));
+      }
+
+      .agent-toast-window-label {
+        font-size: 10px;
+        line-height: 1;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: rgba(232,243,255,0.86);
+      }
+
+      .agent-toast-window-lights {
+        display: inline-flex;
+        gap: 4px;
+      }
+
+      .agent-toast-window-lights span {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.28);
+      }
+
+      .agent-toast-window-body {
+        padding: 8px 10px 9px;
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
+          rgba(8, 12, 16, 0.96);
+      }
+
+      .agent-toast-command {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.35;
+        color: inherit;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-family: Consolas, "Cascadia Mono", "SFMono-Regular", "Liberation Mono", monospace;
+      }
+
+      .agent-toast-command-prefix {
+        color: rgba(120, 215, 135, 0.92);
+      }
+
+      .agent-toast-command-cursor {
+        display: inline-block;
+        margin-left: 1px;
+        color: currentColor;
+        animation: agent-toast-cursor-blink 900ms steps(1, end) infinite;
       }
 
       .agent-toast-label {
@@ -856,6 +950,37 @@ function renderHtml(options: ServerOptions): string {
         overflow: hidden;
         text-overflow: ellipsis;
         max-width: 176px;
+      }
+
+      .agent-toast-stats {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 10px;
+        line-height: 1;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+
+      .agent-toast-delta {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .agent-toast-delta.add {
+        color: #76e39b;
+      }
+
+      .agent-toast-delta.remove {
+        color: #ff8585;
+      }
+
+      @keyframes agent-toast-cursor-blink {
+        0%, 49% {
+          opacity: 1;
+        }
+        50%, 100% {
+          opacity: 0;
+        }
       }
 
       @keyframes agent-toast-float {
@@ -2282,6 +2407,61 @@ function renderHtml(options: ServerOptions): string {
         }
       }
 
+      function notificationKindClassForFileChange(action) {
+        switch (action) {
+          case "created":
+            return "create";
+          case "deleted":
+            return "blocked";
+          case "moved":
+            return "update";
+          default:
+            return "edit";
+        }
+      }
+
+      function notificationFileName(projectRoot, location, fallback = "") {
+        const cleaned = cleanReportedPath(projectRoot, location);
+        const normalized = cleaned || String(fallback || "").trim();
+        if (!normalized) {
+          return "";
+        }
+        const parts = normalized.split(/[\\\\/]/).filter(Boolean);
+        return parts[parts.length - 1] || normalized;
+      }
+
+      function fileChangeDescriptor(projectRoot, event, fallbackTitle) {
+        const path = event.path || null;
+        const imageUrl =
+          event.isImage && path && event.action !== "deleted"
+            ? projectFileUrl(projectRoot, path)
+            : null;
+        return {
+          kindClass: notificationKindClassForFileChange(event.action),
+          label: notificationLabel(event),
+          title: notificationFileName(projectRoot, path, fallbackTitle) || fallbackTitle || "Files",
+          imageUrl,
+          anchor: "workstation",
+          isFileChange: true,
+          linesAdded: Number.isFinite(event.linesAdded) && Number(event.linesAdded) > 0 ? Math.max(0, Number(event.linesAdded)) : null,
+          linesRemoved: Number.isFinite(event.linesRemoved) && Number(event.linesRemoved) > 0 ? Math.max(0, Number(event.linesRemoved)) : null
+        };
+      }
+
+      function commandDescriptor(kindClass, label, title) {
+        return {
+          kindClass,
+          label,
+          title,
+          imageUrl: null,
+          anchor: "agent",
+          isFileChange: false,
+          isCommand: true,
+          linesAdded: null,
+          linesRemoved: null
+        };
+      }
+
       function notificationDescriptor(snapshot, agent, previous) {
         const event = agent.activityEvent;
         const stateChanged = !previous || previous.state !== agent.state || previous.detail !== agent.detail;
@@ -2291,21 +2471,15 @@ function renderHtml(options: ServerOptions): string {
 
         if (event && agent.isCurrent) {
           if (event.type === "fileChange") {
-            return {
-              kindClass: event.action === "created" ? "create" : "edit",
-              label: notificationLabel(event),
-              title: notificationTitle(snapshot, agent),
-              imageUrl: event.isImage && event.path ? projectFileUrl(snapshot.projectRoot, event.path) : null
-            };
+            return fileChangeDescriptor(snapshot.projectRoot, event, notificationTitle(snapshot, agent));
           }
 
           if (event.type === "commandExecution") {
-            return {
-              kindClass: agent.state === "blocked" ? "blocked" : "run",
-              label: agent.state === "blocked" ? "Failed" : "Ran",
-              title: notificationTitle(snapshot, agent),
-              imageUrl: null
-            };
+            return commandDescriptor(
+              agent.state === "blocked" ? "blocked" : "run",
+              agent.state === "blocked" ? "Failed" : "Ran",
+              notificationTitle(snapshot, agent)
+            );
           }
 
           if (event.type === "agentMessage" && stateChanged && agent.state !== "done") {
@@ -2313,7 +2487,12 @@ function renderHtml(options: ServerOptions): string {
               kindClass: "update",
               label: "Update",
               title: notificationTitle(snapshot, agent),
-              imageUrl: null
+              imageUrl: null,
+              anchor: "agent",
+              isFileChange: false,
+              isCommand: false,
+              linesAdded: null,
+              linesRemoved: null
             };
           }
         }
@@ -2328,7 +2507,12 @@ function renderHtml(options: ServerOptions): string {
             kindClass: "blocked",
             label: approvalWait ? "Needs" : "Blocked",
             title: approvalWait ? "approval" : agent.detail,
-            imageUrl: null
+            imageUrl: null,
+            anchor: "agent",
+            isFileChange: false,
+            isCommand: false,
+            linesAdded: null,
+            linesRemoved: null
           };
         }
 
@@ -2338,7 +2522,12 @@ function renderHtml(options: ServerOptions): string {
             kindClass: "waiting",
             label: inputWait ? "Needs" : "Waiting",
             title: inputWait ? "input" : agent.detail,
-            imageUrl: null
+            imageUrl: null,
+            anchor: "agent",
+            isFileChange: false,
+            isCommand: false,
+            linesAdded: null,
+            linesRemoved: null
           };
         }
 
@@ -2352,7 +2541,11 @@ function renderHtml(options: ServerOptions): string {
           descriptor.kindClass,
           descriptor.label,
           descriptor.title,
-          descriptor.imageUrl || ""
+          descriptor.imageUrl || "",
+          descriptor.anchor || "agent",
+          descriptor.isCommand ? "cmd" : "",
+          descriptor.linesAdded ?? "",
+          descriptor.linesRemoved ?? ""
         ].join("::");
       }
 
@@ -2378,22 +2571,25 @@ function renderHtml(options: ServerOptions): string {
 
       function notificationLine(descriptor) {
         const label = shortenNotificationText(descriptor.label || "", 18);
-        const title = shortenNotificationText(descriptor.title || "", 46);
+        const title = shortenNotificationText(descriptor.title || "", descriptor.isCommand ? 88 : 46);
         return {
           label,
-          title
+          title,
+          isCommand: descriptor.isCommand === true,
+          linesAdded: Number.isFinite(descriptor.linesAdded) ? descriptor.linesAdded : null,
+          linesRemoved: Number.isFinite(descriptor.linesRemoved) ? descriptor.linesRemoved : null
         };
       }
 
-      function notificationDescriptorFromEvent(event) {
+      function notificationDescriptorFromEvent(snapshot, event) {
         if (!event) {
           return null;
         }
         switch (event.kind) {
           case "approval":
-            return { kindClass: "blocked", label: "Needs", title: "approval", imageUrl: null };
+            return { kindClass: "blocked", label: "Needs", title: "approval", imageUrl: null, anchor: "agent", isFileChange: false, isCommand: false, linesAdded: null, linesRemoved: null };
           case "input":
-            return { kindClass: "waiting", label: "Needs", title: "input", imageUrl: null };
+            return { kindClass: "waiting", label: "Needs", title: "input", imageUrl: null, anchor: "agent", isFileChange: false, isCommand: false, linesAdded: null, linesRemoved: null };
           case "turn":
             return {
               kindClass: event.phase === "failed" ? "blocked" : event.phase === "interrupted" ? "waiting" : "update",
@@ -2403,35 +2599,44 @@ function renderHtml(options: ServerOptions): string {
                 : event.phase === "interrupted" ? "Interrupted"
                 : "Turn",
               title: event.title || event.detail,
-              imageUrl: null
+              imageUrl: null,
+              anchor: "agent",
+              isFileChange: false,
+              isCommand: false,
+              linesAdded: null,
+              linesRemoved: null
             };
           case "command":
-            return {
-              kindClass: event.phase === "failed" ? "blocked" : "run",
-              label: event.phase === "failed" ? "Failed" : event.phase === "completed" ? "Done" : "Ran",
-              title: event.detail || event.title,
-              imageUrl: null
-            };
+            return commandDescriptor(
+              event.phase === "failed" ? "blocked" : "run",
+              event.phase === "failed" ? "Failed" : event.phase === "completed" ? "Done" : "Ran",
+              event.detail || event.title
+            );
           case "fileChange":
-            return {
-              kindClass: "edit",
-              label: "Changed",
-              title: event.path || event.detail || event.title,
-              imageUrl: null
-            };
+            return fileChangeDescriptor(snapshot.projectRoot, event, event.title || event.detail);
           case "subagent":
             return {
               kindClass: "update",
               label: "Spawn",
               title: event.detail || event.title,
-              imageUrl: null
+              imageUrl: null,
+              anchor: "agent",
+              isFileChange: false,
+              isCommand: false,
+              linesAdded: null,
+              linesRemoved: null
             };
           case "message":
             return {
               kindClass: "update",
               label: "Update",
               title: event.detail || event.title,
-              imageUrl: null
+              imageUrl: null,
+              anchor: "agent",
+              isFileChange: false,
+              isCommand: false,
+              linesAdded: null,
+              linesRemoved: null
             };
           default:
             return null;
@@ -2482,7 +2687,12 @@ function renderHtml(options: ServerOptions): string {
               kindClass: descriptor.kindClass,
               label: descriptor.label,
               title: descriptor.title,
-              imageUrl: descriptor.imageUrl
+              imageUrl: descriptor.imageUrl,
+              anchor: descriptor.anchor,
+              isFileChange: descriptor.isFileChange,
+              isCommand: descriptor.isCommand,
+              linesAdded: descriptor.linesAdded,
+              linesRemoved: descriptor.linesRemoved
             });
             seenNotificationKeys.add(nextNotificationKey);
           }
@@ -2499,7 +2709,7 @@ function renderHtml(options: ServerOptions): string {
 
         for (const snapshot of nextFleet.projects || []) {
           for (const event of snapshot.events || []) {
-            const descriptor = notificationDescriptorFromEvent(event);
+            const descriptor = notificationDescriptorFromEvent(snapshot, event);
             if (!descriptor) {
               continue;
             }
@@ -2520,7 +2730,12 @@ function renderHtml(options: ServerOptions): string {
               kindClass: descriptor.kindClass,
               label: descriptor.label,
               title: descriptor.title,
-              imageUrl: descriptor.imageUrl
+              imageUrl: descriptor.imageUrl,
+              anchor: descriptor.anchor,
+              isFileChange: descriptor.isFileChange,
+              isCommand: descriptor.isCommand,
+              linesAdded: descriptor.linesAdded,
+              linesRemoved: descriptor.linesRemoved
             });
             seenNotificationKeys.add(notificationId);
           }
@@ -2557,7 +2772,14 @@ function renderHtml(options: ServerOptions): string {
           const renderedIds = new Set();
 
           visible.forEach((entry) => {
-            const anchor = wrapper.querySelector(\`[data-agent-key="\${CSS.escape(entry.key)}"]\`);
+            let anchor = wrapper.querySelector(
+              entry.anchor === "workstation"
+                ? \`[data-workstation-key="\${CSS.escape(entry.key)}"]\`
+                : \`[data-agent-key="\${CSS.escape(entry.key)}"]\`
+            );
+            if (!(anchor instanceof HTMLElement) && entry.anchor === "workstation") {
+              anchor = wrapper.querySelector(\`[data-agent-key="\${CSS.escape(entry.key)}"]\`);
+            }
             if (!(anchor instanceof HTMLElement)) {
               return;
             }
@@ -2565,7 +2787,9 @@ function renderHtml(options: ServerOptions): string {
             stackByKey.set(entry.key, stackIndex + 1);
             const rect = anchor.getBoundingClientRect();
             const left = rect.left - wrapperRect.left + rect.width / 2;
-            const top = rect.top - wrapperRect.top - stackIndex * 18;
+            const top = entry.anchor === "workstation"
+              ? rect.top - wrapperRect.top + 2 - stackIndex * 22
+              : rect.top - wrapperRect.top - stackIndex * (entry.isCommand ? 28 : 18);
             const line = notificationLine(entry);
             renderedIds.add(entry.id);
             let toast = layer.querySelector(\`[data-toast-id="\${CSS.escape(entry.id)}"]\`);
@@ -2575,7 +2799,7 @@ function renderHtml(options: ServerOptions): string {
               layer.appendChild(toast);
             }
 
-            const className = \`agent-toast \${entry.kindClass}\${entry.imageUrl ? " image" : ""}\`;
+            const className = \`agent-toast \${entry.kindClass}\${entry.imageUrl ? " image" : ""}\${entry.isFileChange ? " file-change" : ""}\${entry.isCommand ? " command-window" : ""}\`;
             if (toast.className !== className) {
               toast.className = className;
             }
@@ -2585,7 +2809,13 @@ function renderHtml(options: ServerOptions): string {
               toast.setAttribute("style", nextStyle);
             }
 
-            const nextHtml = \`<div class="agent-toast-copy"><div class="agent-toast-label">\${escapeHtml(line.label)}</div><div class="agent-toast-title">\${escapeHtml(line.title)}</div></div>\${entry.imageUrl ? \`<img class="agent-toast-preview" src="\${escapeHtml(entry.imageUrl)}" alt="\${escapeHtml(entry.title)}" />\` : ""}\`;
+            const statsHtml =
+              line.linesAdded !== null || line.linesRemoved !== null
+                ? \`<div class="agent-toast-stats">\${line.linesAdded !== null ? \`<span class="agent-toast-delta add">+\${line.linesAdded}</span>\` : ""}\${line.linesRemoved !== null ? \`<span class="agent-toast-delta remove">-\${line.linesRemoved}</span>\` : ""}</div>\`
+                : "";
+            const nextHtml = entry.isCommand
+              ? \`<div class="agent-toast-window-bar"><div class="agent-toast-window-label">cmd.exe</div><div class="agent-toast-window-lights"><span></span><span></span><span></span></div></div><div class="agent-toast-window-body"><pre class="agent-toast-command"><span class="agent-toast-command-prefix">&gt; </span>\${escapeHtml(line.title)}<span class="agent-toast-command-cursor">_</span></pre></div>\`
+              : \`<div class="agent-toast-copy"><div class="agent-toast-head"><div class="agent-toast-label">\${escapeHtml(line.label)}</div><div class="agent-toast-title">\${escapeHtml(line.title)}</div></div>\${statsHtml}</div>\${entry.imageUrl ? \`<img class="agent-toast-preview" src="\${escapeHtml(entry.imageUrl)}" alt="\${escapeHtml(entry.title)}" />\` : ""}\`;
             if (toast.dataset.renderHtml !== nextHtml) {
               toast.innerHTML = nextHtml;
               toast.dataset.renderHtml = nextHtml;
@@ -2989,7 +3219,7 @@ function renderHtml(options: ServerOptions): string {
         const tabIndex = agent ? "0" : "-1";
         const cellClasses = ["cubicle-cell"];
         if (motionMode) cellClasses.push(motionMode);
-        return \`<div class="\${cellClasses.join(" ")}" tabindex="\${tabIndex}"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px; width:\${boothWidth}px; height:\${boothHeight}px;"><div class="desk-shell">\${deskShell}</div>\${avatarHtml}\${bubble}\${hoverHtml}</div>\`;
+        return \`<div class="\${cellClasses.join(" ")}" tabindex="\${tabIndex}"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px; width:\${boothWidth}px; height:\${boothHeight}px;"><div class="desk-shell"\${agent ? \` data-workstation-key="\${escapeHtml(agentKey(snapshot.projectRoot, agent))}"\` : ""}>\${deskShell}</div>\${avatarHtml}\${bubble}\${hoverHtml}</div>\`;
       }
 
       function renderDeskPod(snapshot, agents, role, x, y, podWidth, podHeight, compact, options = {}) {
@@ -3755,6 +3985,7 @@ function renderHtml(options: ServerOptions): string {
 
       function fitScenes() {
         const wrappers = document.querySelectorAll("[data-scene-fit]");
+        const canZoom = typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("zoom", "1");
         wrappers.forEach((wrapper) => {
           const grid = wrapper.querySelector("[data-scene-grid]");
           if (!(wrapper instanceof HTMLElement) || !(grid instanceof HTMLElement)) {
@@ -3786,7 +4017,13 @@ function renderHtml(options: ServerOptions): string {
             : 1;
 
           wrapper.style.height = \`\${Math.max(160, Math.round(rawHeight * boundedScale))}px\`;
-          grid.style.transform = \`scale(\${boundedScale})\`;
+          if (canZoom) {
+            grid.style.zoom = String(boundedScale);
+            grid.style.transform = "";
+          } else {
+            grid.style.zoom = "";
+            grid.style.transform = \`scale(\${boundedScale})\`;
+          }
         });
       }
 

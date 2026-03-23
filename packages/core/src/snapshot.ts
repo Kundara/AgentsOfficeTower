@@ -55,6 +55,54 @@ function extractStringArray(value: unknown, key: string): string[] {
     .filter((entry): entry is string => Boolean(entry));
 }
 
+function extractNumberValue(value: unknown, ...keys: string[]): number | undefined {
+  if (typeof value !== "object" || !value) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+function summarizeFileChange(item: ThreadItem): {
+  action: AgentActivityEvent["action"];
+  path: string | null;
+  title: string;
+  isImage: boolean;
+  linesAdded?: number;
+  linesRemoved?: number;
+  paths: string[];
+} {
+  const primaryChange = Array.isArray(item.changes)
+    ? item.changes.find((entry) => typeof entry === "object" && entry && typeof (entry as Record<string, unknown>).path === "string") as Record<string, unknown> | undefined
+    : undefined;
+  const paths = extractStringArray(item.changes, "path");
+  const primaryPath = paths[0] ?? null;
+  const changeKind = typeof primaryChange?.kind === "string" ? primaryChange.kind : "edit";
+  const action =
+    changeKind === "create" ? "created"
+    : changeKind === "delete" ? "deleted"
+    : changeKind === "move" || changeKind === "rename" ? "moved"
+    : "edited";
+
+  return {
+    action,
+    path: primaryPath,
+    title: primaryPath ? `${changeKind} ${primaryPath}` : "Editing files",
+    isImage: Boolean(primaryPath && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(primaryPath)),
+    linesAdded: extractNumberValue(primaryChange, "linesAdded", "lines_added", "added") ?? extractNumberValue(item, "linesAdded", "lines_added"),
+    linesRemoved: extractNumberValue(primaryChange, "linesRemoved", "lines_removed", "removed") ?? extractNumberValue(item, "linesRemoved", "lines_removed"),
+    paths
+  };
+}
+
 function extractTextContent(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -260,34 +308,21 @@ export function summariseThread(thread: CodexThread): {
 
   switch (item.type) {
     case "fileChange": {
-      const primaryChange = Array.isArray(item.changes)
-        ? item.changes.find((entry) => typeof entry === "object" && entry && typeof (entry as Record<string, unknown>).path === "string") as Record<string, unknown> | undefined
-        : undefined;
-      const paths = extractStringArray(item.changes, "path");
-      const primaryPath = paths[0];
+      const change = summarizeFileChange(item);
       const status = typeof item.status === "string" ? item.status : "inProgress";
       const state = status === "failed" || status === "declined" ? "blocked" : "editing";
       return {
         state,
-        detail: primaryPath ? `Editing ${primaryPath}` : "Editing files",
-        paths: paths.length > 0 ? paths : [thread.cwd],
+        detail: change.path ? `Editing ${change.path}` : "Editing files",
+        paths: change.paths.length > 0 ? change.paths : [thread.cwd],
         activityEvent: {
           type: "fileChange",
-          action:
-            primaryChange && typeof primaryChange.kind === "string"
-              ? (
-                primaryChange.kind === "create" ? "created"
-                : primaryChange.kind === "delete" ? "deleted"
-                : primaryChange.kind === "move" || primaryChange.kind === "rename" ? "moved"
-                : "edited"
-              )
-              : "edited",
-          path: primaryPath ?? null,
-          title:
-            primaryPath
-              ? `${typeof primaryChange?.kind === "string" ? primaryChange.kind : "edit"} ${primaryPath}`
-              : "Editing files",
-          isImage: Boolean(primaryPath && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(primaryPath))
+          action: change.action,
+          path: change.path,
+          title: change.title,
+          isImage: change.isImage,
+          linesAdded: change.linesAdded,
+          linesRemoved: change.linesRemoved
         }
       };
     }

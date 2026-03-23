@@ -72,6 +72,61 @@ function collectPaths(value: unknown, output = new Set<string>()): Set<string> {
   return output;
 }
 
+function extractNumberValue(value: unknown, ...keys: string[]): number | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+function summarizeFileChangeItem(item: Record<string, unknown>, fallbackPath: string | null): {
+  action: DashboardEvent["action"];
+  path: string | null;
+  title: string;
+  detail: string;
+  isImage: boolean;
+  linesAdded?: number;
+  linesRemoved?: number;
+} {
+  const changes = Array.isArray(item.changes) ? item.changes : [];
+  const primaryChange = changes.find((entry) => {
+    const record = asRecord(entry);
+    return Boolean(record && typeof record.path === "string");
+  });
+  const changeRecord = asRecord(primaryChange);
+  const rawPath = typeof changeRecord?.path === "string" ? changeRecord.path : fallbackPath;
+  const path = rawPath ? canonicalizeProjectPath(rawPath) ?? rawPath : null;
+  const changeKind = typeof changeRecord?.kind === "string" ? changeRecord.kind : "edit";
+  const action =
+    changeKind === "create" ? "created"
+    : changeKind === "delete" ? "deleted"
+    : changeKind === "move" || changeKind === "rename" ? "moved"
+    : "edited";
+
+  return {
+    action,
+    path,
+    title: path ? `${changeKind} ${path}` : "File changed",
+    detail: typeof item.status === "string" ? item.status : "updated",
+    isImage: Boolean(path && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path)),
+    linesAdded:
+      extractNumberValue(changeRecord, "linesAdded", "lines_added", "added")
+      ?? extractNumberValue(item, "linesAdded", "lines_added"),
+    linesRemoved:
+      extractNumberValue(changeRecord, "linesRemoved", "lines_removed", "removed")
+      ?? extractNumberValue(item, "linesRemoved", "lines_removed")
+  };
+}
+
 function buildEventId(projectRoot: string, notification: AppServerNotification, createdAt: string, threadId: string | null): string {
   return [projectRoot, notification.method, threadId ?? "", createdAt].join("::");
 }
@@ -143,6 +198,7 @@ function buildDashboardEvent(
   }
 
   if (itemType === "fileChange") {
+    const change = summarizeFileChangeItem(item, path);
     return {
       id: buildEventId(projectRoot, notification, createdAt, threadId),
       source: "codex",
@@ -151,9 +207,13 @@ function buildDashboardEvent(
       createdAt,
       kind: "fileChange",
       phase: "updated",
-      title: "File changed",
-      detail: typeof item.status === "string" ? item.status : "updated",
-      path
+      title: change.title,
+      detail: change.detail,
+      path: change.path,
+      action: change.action,
+      isImage: change.isImage,
+      linesAdded: change.linesAdded,
+      linesRemoved: change.linesRemoved
     };
   }
 

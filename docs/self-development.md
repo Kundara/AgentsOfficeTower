@@ -70,6 +70,7 @@ A good iteration improves at least one of these:
 - add stronger state-specific animation for blocked, waiting, and validating work
 - refine empty-room presentation
 - improve SSE-driven movement so entry/exit paths feel intentional instead of abrupt
+- verify live toast styling remains readable when browser zoom is reduced
 
 ## Not the goal
 

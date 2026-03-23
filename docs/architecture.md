@@ -87,7 +87,7 @@ Sources:
   - PixelOffice art served from `/assets/pixel-office/...`
   - auto-generated room activity based on the currently mapped agent set
   - repeated workstation rows for repeated Codex agent roles
-  - anchored file-change notifications for current agents
+  - workstation-anchored file-change notifications for current agents, showing filename-first copy and available `+/-` line deltas
 - hover/session detail surfaces for longer text instead of large scene overlays
 
 ## Room XML
@@ -149,9 +149,9 @@ Current mapping:
 - `waitingOnUserInput`
   waiting indicator, ask-user toast, and durable needs-you queue entry
 - `item/*` command execution
-  running / completed / failed command notifications
+  running / completed / failed command notifications, rendered as a command-prompt style mini window with monospace command text
 - `fileChange`
-  anchored create / edit / delete / move toasts, with image preview when possible
+  workstation-anchored create / edit / delete / move toasts, with filename-first copy, optional `+/-` line deltas, and image preview when possible
 - `turn/*`
   turn started / finished / interrupted / failed status transitions
 - subagent spawn and completion

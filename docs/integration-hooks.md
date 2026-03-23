@@ -181,6 +181,7 @@ What we read from Codex:
 
 - changed file paths
 - change kind such as create, delete, move, rename, or edit
+- line deltas when the item carries them
 
 How we use it:
 
@@ -188,7 +189,8 @@ How we use it:
 - set `activityEvent.action = created|deleted|moved|edited`
 - mark image paths so the browser can show image previews
 - map changed paths into rooms
-- show floating text such as `Edited client.tsx` or `Created rooms.xml`
+- anchor the toast to the workstation instead of the avatar
+- show filename-first floating text plus optional green/red `+/-` line deltas such as `client.tsx`, `+200`, `-100`
 
 ### Command execution semantics
 
@@ -208,6 +210,7 @@ How we use it:
 - classify validation-like commands as `validating`
 - classify other commands as `running`
 - failed or declined commands become `blocked`
+- render command notifications as a command-prompt style mini window with monospace text and a blinking cursor
 - render floating text such as `Ran npm run build`
 
 ### Subagent metadata
