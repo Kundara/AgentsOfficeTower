@@ -500,6 +500,45 @@ test("recently finished local threads stay current for a short grace window", as
   assert.equal(agent.isCurrent, true);
 });
 
+test("recently finished subagents leave current workload faster than top-level threads", () => {
+  const now = Date.parse("2026-03-24T00:00:05.000Z");
+  const subagent = {
+    id: "thr_sub_done",
+    label: "Child worker",
+    source: "local",
+    sourceKind: "subAgent",
+    parentThreadId: "thr_parent",
+    depth: 1,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "idle",
+    role: "worker",
+    nickname: null,
+    isSubagent: true,
+    state: "done",
+    detail: "Finished",
+    cwd: "/mnt/f/AI/CodexAgentsOffice",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-24T00:00:03.000Z",
+    stoppedAt: "2026-03-24T00:00:03.000Z",
+    paths: ["/mnt/f/AI/CodexAgentsOffice"],
+    activityEvent: null,
+    latestMessage: null,
+    threadId: "thr_sub_done",
+    taskId: null,
+    resumeCommand: "codex resume thr_sub_done",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly"
+  };
+
+  assert.equal(isCurrentWorkloadAgent(subagent, now), false);
+});
+
 test("recently finished local threads stay current even when live monitor bookkeeping has not set stoppedAt yet", async () => {
   const recentDoneThread = {
     ...sampleThread(),

@@ -119,7 +119,7 @@ Pin the server to one project when needed:
 npx codex-agents-office web /abs/project/path --port 4181
 ```
 
-When debugging a stale browser, check [http://127.0.0.1:4181/api/server-meta](http://127.0.0.1:4181/api/server-meta) and confirm `explicitProjects` is `false` for normal fleet deploys.
+When debugging a stale browser, check [http://127.0.0.1:4181/api/server-meta](http://127.0.0.1:4181/api/server-meta), confirm `explicitProjects` is `false` for normal fleet deploys, and verify that `projects` matches the live bound fleet project set rather than only the startup seed path.
 
 ### Run the terminal view
 

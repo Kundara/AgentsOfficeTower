@@ -120,11 +120,11 @@ The web package now separates transport, lifecycle, and rendering concerns inste
 - `packages/web/src/server-options.ts`
   Parses CLI args and normalizes project descriptors.
 - `packages/web/src/server-metadata.ts`
-  Builds `/api/server-meta` payloads and startup fleet placeholders.
+  Builds startup fleet placeholders and the shared `/api/server-meta` payload shape.
 - `packages/web/src/fleet-live-service.ts`
-  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, and fans them out over SSE.
+  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, and fans them out over SSE.
 - `packages/web/src/router.ts`
-  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, and room scaffolding.
+  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, and room scaffolding. In fleet mode, the meta route now reports the live project set from `FleetLiveService`, not just the startup seed options.
 - `packages/web/src/render-html.ts`
   Builds the HTML shell and injects the browser assets.
 - `packages/web/src/client-script.ts`

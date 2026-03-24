@@ -7,6 +7,7 @@ const ACTIVE_CLOUD_WINDOW_MS = 8 * 60 * 60 * 1000;
 const ACTIVE_SUBSCRIBED_LOCAL_WINDOW_MS = 90 * 1000;
 const ACTIVE_FRESH_LOCAL_WINDOW_MS = 30 * 1000;
 export const RECENT_DONE_GRACE_MS = 5 * 1000;
+const SUBAGENT_DONE_GRACE_MS = 1200;
 
 const TERMINAL_CLOUD_STATUSES = new Set([
   "ready",
@@ -58,6 +59,7 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
   if (!Number.isFinite(updatedAt)) {
     return false;
   }
+  const doneGraceMs = agent.parentThreadId ? SUBAGENT_DONE_GRACE_MS : RECENT_DONE_GRACE_MS;
 
   if (agent.source === "cloud") {
     return !isTerminalCloudStatus(agent.statusText) && now - updatedAt <= ACTIVE_CLOUD_WINDOW_MS;
@@ -66,7 +68,7 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
   if (agent.source === "local") {
     const stoppedAt = parseUpdatedAt(agent.stoppedAt ?? "");
     if (Number.isFinite(stoppedAt)) {
-      return now - stoppedAt <= RECENT_DONE_GRACE_MS;
+      return now - stoppedAt <= doneGraceMs;
     }
     if (
       agent.isOngoing
@@ -78,7 +80,7 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
       return true;
     }
     if (agent.state === "done") {
-      return now - updatedAt <= RECENT_DONE_GRACE_MS;
+      return now - updatedAt <= doneGraceMs;
     }
     if (
       isLiveLocalState(agent.state)
@@ -101,7 +103,7 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
   }
 
   if (agent.state === "done") {
-    return now - updatedAt <= RECENT_DONE_GRACE_MS;
+    return now - updatedAt <= doneGraceMs;
   }
 
   if (agent.source === "presence") {

@@ -1414,7 +1414,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     await Promise.all(
       [...targetIds]
-        .filter((threadId) => !this.subscribedThreadIds.has(threadId))
+        .filter((candidateId) => !this.subscribedThreadIds.has(candidateId))
         .map(async (threadId) => {
           try {
             await withTimeout(
@@ -1434,7 +1434,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     await Promise.all(
       [...this.subscribedThreadIds]
-        .filter((threadId) => !targetIds.has(threadId))
+        .filter((candidateId) => !targetIds.has(candidateId))
         .map(async (threadId) => {
           try {
             await withTimeout(

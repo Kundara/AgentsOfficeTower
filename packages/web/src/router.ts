@@ -88,7 +88,7 @@ async function handleServerMetaRoute(context: RequestContext): Promise<boolean> 
     return false;
   }
 
-  sendJson(context.response, 200, buildServerMeta(context.options));
+  sendJson(context.response, 200, buildServerMeta(context.options, await context.service.getProjects()));
   return true;
 }
 

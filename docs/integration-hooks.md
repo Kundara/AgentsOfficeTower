@@ -143,6 +143,7 @@ How we use it:
 - subscribed threads surface as `liveSubscription = subscribed`; older threads stay `readOnly`
 
 In fleet mode, every discovered workspace keeps a live monitor. The selected workspace only changes browser focus; it does not change which projects are subscribed.
+The web server's `/api/server-meta` route now reports that live bound project set, so fleet diagnostics reflect the current monitor scope instead of only the startup seed roots.
 
 ### Thread status and active flags
 

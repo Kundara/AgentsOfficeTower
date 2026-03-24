@@ -40,7 +40,7 @@ export function buildFleetResponse(
   };
 }
 
-export function buildServerMeta(options: ServerOptions): ServerMeta {
+export function buildServerMeta(options: ServerOptions, projects = options.projects): ServerMeta {
   return {
     pid: process.pid,
     startedAt: SERVER_STARTED_AT,
@@ -49,6 +49,6 @@ export function buildServerMeta(options: ServerOptions): ServerMeta {
     host: options.host,
     port: options.port,
     explicitProjects: options.explicitProjects,
-    projects: options.projects
+    projects
   };
 }

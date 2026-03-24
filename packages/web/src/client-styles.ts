@@ -1265,10 +1265,6 @@ export const CLIENT_STYLES = `
         animation: avatar-leave 420ms cubic-bezier(0.4, 0, 1, 1) both;
       }
 
-      .office-avatar-shell.entering.from-boss {
-        animation: avatar-arrive-from-boss 920ms linear both;
-      }
-
       .snapshot-mode .office-avatar-shell.entering,
       .snapshot-mode .office-avatar-shell.departing {
         animation: none;
@@ -1849,36 +1845,6 @@ export const CLIENT_STYLES = `
         }
       }
 
-      @keyframes avatar-arrive-from-boss {
-        0% {
-          opacity: 0;
-          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
-        }
-        10% {
-          opacity: 1;
-          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
-        }
-        22% {
-          opacity: 0;
-          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
-        }
-        34% {
-          opacity: 1;
-          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
-        }
-        46% {
-          opacity: 0;
-          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
-        }
-        56% {
-          opacity: 1;
-          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
-        }
-        100% {
-          opacity: 1;
-          transform: translate(0, 0) scaleX(var(--avatar-flip, 1));
-        }
-      }
 
       @keyframes avatar-leave {
         0% {

@@ -48,6 +48,11 @@ export class FleetLiveService {
     return this.fleet ?? buildFleetResponse(this.projects, new Map());
   }
 
+  async getProjects(): Promise<ProjectDescriptor[]> {
+    await this.ensureProjectSet();
+    return [...this.projects];
+  }
+
   async refreshAll(): Promise<FleetResponse> {
     await this.ensureProjectSet(true);
     await Promise.all(Array.from(this.monitors.values()).map((monitor) => monitor.refreshNow()));

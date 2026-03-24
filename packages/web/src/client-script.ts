@@ -64,6 +64,7 @@ export function renderClientScript({
       const SCENE_RECENT_LEAD_LIMIT = 4;
       const SESSION_RECENT_LEAD_LIMIT = 10;
       const RESTING_DORMANT_MS = 15 * 60 * 1000;
+      const DEPARTING_AGENT_TTL_MS = 520;
       let lastSceneRenderToken = null;
       let lastFleetSemanticToken = null;
 
@@ -183,13 +184,6 @@ export function renderClientScript({
         };
       }
 
-      function pathDeltaFromStart(startX, startY, targetX, targetY) {
-        return {
-          pathX: Math.round(startX - targetX),
-          pathY: Math.round(startY - targetY)
-        };
-      }
-
       function sceneStateForAgent(snapshot, agentId) {
         if (!snapshot || !agentId) {
           return null;
@@ -200,51 +194,7 @@ export function renderClientScript({
           || null;
       }
 
-      function subagentSplitPathDelta(snapshot, agent, targetX, targetY, avatarWidth, avatarHeight) {
-        if (!snapshot || !agent || !agent.parentThreadId) {
-          return null;
-        }
-        const parentSceneState = sceneStateForAgent(snapshot, agent.parentThreadId);
-        if (!parentSceneState) {
-          return null;
-        }
-        if (parentSceneState.roomId && agent.roomId && parentSceneState.roomId !== agent.roomId) {
-          return null;
-        }
-        const parentAvatarX = Number.isFinite(parentSceneState.avatarX)
-          ? Number(parentSceneState.avatarX)
-          : Number.isFinite(parentSceneState.x) ? Number(parentSceneState.x) : null;
-        const parentAvatarY = Number.isFinite(parentSceneState.avatarY)
-          ? Number(parentSceneState.avatarY)
-          : Number.isFinite(parentSceneState.y) ? Number(parentSceneState.y) : null;
-        if (!Number.isFinite(parentAvatarX) || !Number.isFinite(parentAvatarY)) {
-          return null;
-        }
-        const parentAvatarWidth = Number.isFinite(parentSceneState.avatarWidth)
-          ? Number(parentSceneState.avatarWidth)
-          : avatarWidth;
-        const parentAvatarHeight = Number.isFinite(parentSceneState.avatarHeight)
-          ? Number(parentSceneState.avatarHeight)
-          : avatarHeight;
-        const seed = stableHash(agent.id + "::split-spawn");
-        const horizontalDirection = seed % 2 === 0 ? -1 : 1;
-        const horizontalOffset = horizontalDirection * (10 + seed % 18);
-        const verticalOffset = -4 + (Math.floor(seed / 19) % 11);
-        const spawnCenterX = parentAvatarX + parentAvatarWidth / 2 + horizontalOffset;
-        const spawnFloorY = parentAvatarY + parentAvatarHeight * 0.92 + verticalOffset;
-        const spawnX = Math.round(spawnCenterX - avatarWidth / 2);
-        const spawnY = Math.round(spawnFloorY - avatarHeight);
-        return pathDeltaFromStart(spawnX, spawnY, targetX, targetY);
-      }
-
       function enteringMotionState(snapshot, agent, entrance, targetX, targetY, avatarWidth, avatarHeight) {
-        const splitPath = subagentSplitPathDelta(snapshot, agent, targetX, targetY, avatarWidth, avatarHeight);
-        if (splitPath) {
-          return {
-            mode: "entering from-boss",
-            path: splitPath
-          };
-        }
         return {
           mode: "entering",
           path: entrance
@@ -3911,7 +3861,15 @@ export function renderClientScript({
 
         for (const [key, entry] of liveAgentMemory.entries()) {
           if (!nextMemory.has(key)) {
-            continue;
+            const sceneState = renderedAgentSceneState.get(key) || null;
+            if (!sceneState) {
+              continue;
+            }
+            departingAgents.push({
+              ...entry,
+              sceneState,
+              expiresAt: now + DEPARTING_AGENT_TTL_MS
+            });
           }
         }
 
