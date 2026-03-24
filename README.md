@@ -37,6 +37,8 @@ Codex Agents Office turns those signals into a current-state office view instead
   Agent looks are stored in `.codex-agents/agents.json`.
 - **Current-workload-first rendering**
   The product is optimized for what is happening now, while still keeping the 4 most recent lead sessions visible in the rec area.
+  Observer-owned unload transitions such as `thread/closed` or `thread/status/changed -> notLoaded` do not count as thread completion by themselves.
+  Desk occupancy now follows real ongoing / waiting / blocked / grace-window thread state instead of a generic "fresh non-idle summary" fallback.
 - **Codex-native state first**
   Local Codex thread state and cloud task data drive the scene before any transcript-like fallback sources.
 
@@ -53,7 +55,7 @@ It supports:
 - office and terminal-style rendering with `?view=map` and `?view=terminal`
 - live agents plus the 4 most recent lead sessions for each workspace
 - a durable cross-project `Needs You` queue built from typed Codex approval and input requests
-- provenance/confidence detail in session cards so Codex-native and Claude-inferred entries do not read the same
+- provenance/confidence detail in session cards so Codex-native, Claude transcript, and Claude hook-backed entries do not read the same
 - static screenshot rendering through `?screenshot=1`
 
 ### Terminal
@@ -145,7 +147,9 @@ Codex Agents Office is an observability layer over real Codex work.
 It prefers official Codex surfaces first:
 
 - `codex app-server`
-  Local thread discovery, hybrid live subscriptions for active/recent threads, thread reads for stable state, typed approvals/input requests, commands, file changes, and live notifications.
+  Local thread discovery, hybrid live subscriptions for active/recent threads, thread reads for stable state, typed approvals/input requests, commands, file changes, live notifications, and fallback reply toasts synthesized from reread desktop rollout threads.
+  Ongoing desk occupancy now follows `thread/read` turn state as well as loaded runtime status, so `notLoaded` threads with an in-progress turn still stay visible as live work.
+  The observer opts out of streamed `item/agentMessage/delta` notifications and prefers full reply items or reread thread messages for browser toasts.
 - `codex cloud list --json`
   Cloud and web task visibility.
 - `.codex-agents/rooms.xml`
@@ -153,20 +157,31 @@ It prefers official Codex surfaces first:
 - `.codex-agents/agents.json`
   Per-project appearance persistence.
 
-Claude local session logs are supported as a secondary source for discovery and best-effort recent activity inference, but they are intentionally weaker than the Codex-native path.
+Claude local session logs are supported as a secondary source for discovery and best-effort recent activity inference. When a project writes Claude hook sidecars into `.codex-agents/claude-hooks/<session-id>.jsonl`, Claude sessions can also surface typed permission, tool, subagent, and stop state without pretending to be Codex app-server.
 
 The normalized snapshot is then rendered into:
 
 - desks for active work
-  local Codex threads marked active stay on their desk even if there is a lull in fresh commentary or tool output
-  recently finished local threads linger for about 5 seconds so the final message can still be seen before the avatar leaves
+  local Codex threads stay on their desk while the thread is still ongoing, even if the latest turn already looks done or there is a lull in fresh commentary or tool output
+  once a local thread actually stops, it lingers for about 5 seconds so the final message can still be seen before the avatar leaves
+  only inactive recent lead sessions cool down into the rec area after that grace window; finished subagents despawn instead of taking lounge slots
+- fixed workstation slots
+  desk columns are pinned instead of repacked when new agents appear, with role-biased cubicles and tighter back-to-back workstation rows
+- boss offices on demand
+  lead sessions with multiple subagents move into a separate left-side office lane with a distinct floor treatment
 - rec-area placement for waiting, resting, and the 4 most recent lead sessions
 - hover cards and session panels for longer detail
+- boss hover relationship lines
+  hovering a boss highlights arrow lines from that office to the related spawned subagents on the floor
 - live event-native notifications for file changes, commands, turn lifecycle, approval waits, and user-input waits
+  subagents now split in near their lead on arrival with a short retro blink, while departures still head back through the main doorway
   File changes now rise from the workstation, showing the filename and any available `+/-` line deltas.
   Command notifications render as a tiny terminal-style window with monospace command text and a blinking cursor.
+  Each agent keeps one command window toast at a time; new commands append to the bottom, keep only the last 3 lines, and extend the toast lifetime.
   read-like shell actions such as `sed`, `cat`, `rg`, `ls`, `find`, and `tree` now collapse into short summary toasts like `Read workload.ts` or `Exploring 2 files` instead of echoing the raw shell command.
-- explicit provenance/confidence labels so Codex-native state and Claude-inferred state do not look equivalent
+- explicit provenance/confidence labels so Codex-native state and Claude transcript or hook-derived state do not look equivalent
+
+Fleet mode now keeps every discovered workspace live instead of rebuilding monitor state around the currently opened tab.
 
 ## Project layout
 
@@ -200,11 +215,14 @@ The current implementation already supports:
 - anchored notifications for file changes, commands, turn lifecycle, approvals, and user-input waits
   File-change toasts anchor to the desk instead of the avatar and prefer filename-first rendering.
 - exact-method toast icons under `packages/web/public/pixel-office/sprites/icons/<app-server method>.svg`
+- semantic thread-item icons covering the current official app-server item list, plus a visual audit page at `/icon-audit`
 - short summary toasts for read-only shell actions instead of raw command text
-- active local Codex threads stay desk-present while Codex still reports them as active, and freshly done threads get a short 5-second leave delay
+- single command-window toasts per agent that aggregate the last 3 command lines and extend their visible lifetime
+- ongoing local Codex threads stay desk-present until the thread actually stops, and stopped threads get a short 5-second leave delay
 - a durable cross-project "needs you" queue built from typed request hooks rather than inferred detail strings
-- provenance/confidence signaling for Codex, Claude, cloud, and presence-derived entries
+- provenance/confidence signaling for Codex, Claude transcript inference, Claude hook-backed state, cloud, and presence-derived entries
 - fleet view and single-project office view
+- selected-workspace focus mode in the browser via `[] Expand`, `Close`, `F` to toggle, and `Escape` to exit
 
 The web layer is now split into smaller modules instead of one large server file:
 

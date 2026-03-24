@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readJsonBody, notFound, sendHtml, sendJson, sendProjectFile, sendStaticAsset } from "./http-helpers";
 import { buildServerMeta } from "./server-metadata";
 import { renderHtml } from "./render-html";
+import { renderIconAuditHtml } from "./render-icon-audit-html";
 import type { FleetLiveService } from "./fleet-live-service";
 import type { ServerOptions } from "./server-types";
 
@@ -52,6 +53,24 @@ async function handleHomeRoute(context: RequestContext): Promise<boolean> {
   }
 
   sendHtml(context.response, renderHtml(context.options));
+  return true;
+}
+
+async function handleIconAuditRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET", "HEAD") || context.url.pathname !== "/icon-audit") {
+    return false;
+  }
+
+  if (requestMethod(context) === "HEAD") {
+    context.response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    context.response.end();
+    return true;
+  }
+
+  sendHtml(context.response, renderIconAuditHtml());
   return true;
 }
 
@@ -142,6 +161,7 @@ async function handleRefreshRoute(context: RequestContext): Promise<boolean> {
 const ROUTES: RouteHandler[] = [
   handleAssetRoute,
   handleHomeRoute,
+  handleIconAuditRoute,
   handleFleetRoute,
   handleServerMetaRoute,
   handleProjectFileRoute,

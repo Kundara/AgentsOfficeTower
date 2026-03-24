@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { platform } from "node:process";
 
 import type { CodexThread } from "./types";
 
@@ -88,7 +89,8 @@ export class CodexAppServerClient {
   private serverRequestListeners = new Set<(message: AppServerServerRequest) => void>();
 
   private constructor() {
-    this.child = spawn("codex", ["app-server"], {
+    const codexCommand = platform === "win32" ? "codex.cmd" : "codex";
+    this.child = spawn(codexCommand, ["app-server"], {
       stdio: ["pipe", "pipe", "pipe"]
     });
 
@@ -124,7 +126,8 @@ export class CodexAppServerClient {
         version: "0.1.0"
       },
       capabilities: {
-        experimentalApi: true
+        experimentalApi: true,
+        optOutNotificationMethods: ["item/agentMessage/delta"]
       }
     });
     client.notify("initialized");
@@ -255,7 +258,7 @@ export class CodexAppServerClient {
   }
 
   async listLoadedThreads(): Promise<string[]> {
-    const result = await this.request<{ data: string[] }>("thread/loaded/list");
+    const result = await this.request<{ data: string[] }>("thread/loaded/list", {});
     return Array.isArray(result.data) ? result.data : [];
   }
 
@@ -276,3 +279,4 @@ export async function withAppServerClient<T>(
     client.close();
   }
 }
+

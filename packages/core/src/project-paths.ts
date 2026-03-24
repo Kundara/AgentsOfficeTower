@@ -11,6 +11,10 @@ export interface DiscoveredProject {
   count: number;
 }
 
+const MIN_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 100;
+const MAX_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 400;
+const CODEX_PROJECT_DISCOVERY_THREAD_MULTIPLIER = 20;
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/[\\/]+$/, "");
 }
@@ -58,11 +62,25 @@ export function filterThreadsForProject(projectRoot: string, threads: CodexThrea
   return threads.filter((thread) => sameProjectPath(thread.cwd, canonicalRoot));
 }
 
-export async function discoverCodexProjects(limit = 50): Promise<DiscoveredProject[]> {
+export function codexProjectDiscoveryThreadLimit(projectLimit: number): number {
+  const normalizedLimit = Number.isFinite(projectLimit)
+    ? Math.max(1, Math.floor(projectLimit))
+    : 20;
+  return Math.max(
+    normalizedLimit,
+    Math.min(
+      MAX_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT,
+      Math.max(MIN_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT, normalizedLimit * CODEX_PROJECT_DISCOVERY_THREAD_MULTIPLIER)
+    )
+  );
+}
+
+export async function discoverCodexProjects(limit = 20): Promise<DiscoveredProject[]> {
   const projects = new Map<string, DiscoveredProject>();
+  const threadLimit = codexProjectDiscoveryThreadLimit(limit);
 
   await withAppServerClient(async (client) => {
-    const threads = await client.listThreads({ limit });
+    const threads = await client.listThreads({ limit: threadLimit });
     for (const thread of threads) {
       const root = canonicalizeProjectPath(thread.cwd);
       if (!root) {
@@ -88,7 +106,7 @@ export async function discoverCodexProjects(limit = 50): Promise<DiscoveredProje
   return [...projects.values()].sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
-export async function discoverProjects(limit = 50): Promise<DiscoveredProject[]> {
+export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]> {
   const merged = new Map<string, DiscoveredProject>();
   const [codexProjects, claudeProjects] = await Promise.all([
     discoverCodexProjects(limit).catch(() => []),

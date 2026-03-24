@@ -17,6 +17,13 @@
 - [Codex Configuration Reference](https://developers.openai.com/codex/config-reference)
   Persistence and history-related reference.
 
+## Claude
+
+- [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
+  Official hook lifecycle and input schema for `PermissionRequest`, `PreToolUse`, `PostToolUse`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, and related events.
+- [Automate workflows with hooks](https://code.claude.com/docs/en/automate-workflows-with-hooks)
+  Quickstart examples for wiring command hooks and project-local hook scripts.
+
 ## Visual / asset references
 
 - [PixelOffice asset pack](https://2dpig.itch.io/)
@@ -38,5 +45,6 @@ These matter because the long-term renderer should use authored slice/tag metada
 
 - [pixel-agents](https://github.com/pablodelucca/pixel-agents)
   Useful reference for sharper README structure, product framing, and “agent work you can actually see” presentation.
+  Also a useful negative control: it stays observational over Claude JSONL transcripts and does not rely on a secret Claude integration surface.
 - [Reddit: VS Code office-life extension inspiration](https://www.reddit.com/r/ClaudeCode/comments/1rbs0gx/i_built_a_vs_code_extension_that_turns_your/)
   Useful reference for hover-driven character details and “office life” framing.

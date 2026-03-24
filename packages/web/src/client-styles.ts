@@ -188,8 +188,19 @@ export const CLIENT_STYLES = `
         align-items: center;
       }
 
+      .panel-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
       .panel-body {
         padding: 14px;
+      }
+
+      #workspace-focus-button[hidden] {
+        display: none !important;
       }
 
       .session-list, .fleet-grid {
@@ -211,6 +222,25 @@ export const CLIENT_STYLES = `
       .session-card:focus-within {
         border-color: rgba(75, 214, 159, 0.36);
         background: rgba(75, 214, 159, 0.06);
+      }
+
+      .session-card-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: flex-start;
+      }
+
+      .session-card-title {
+        display: block;
+        min-width: 0;
+      }
+
+      .session-card-description {
+        margin-top: 6px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .muted { color: var(--muted); font-size: 12px; }
@@ -258,6 +288,125 @@ export const CLIENT_STYLES = `
         box-shadow: inset 0 0 0 1px rgba(75, 214, 159, 0.2);
       }
 
+      body.workspace-focus {
+        overflow: hidden;
+        background: #08100e;
+      }
+
+      body.workspace-focus .page {
+        min-height: 100vh;
+        padding: 0;
+        gap: 0;
+      }
+
+      body.workspace-focus .hero {
+        display: none;
+      }
+
+      body.workspace-focus .layout {
+        min-height: 100vh;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+      }
+
+      body.workspace-focus #session-panel {
+        display: none;
+      }
+
+      body.workspace-focus #workspace-panel {
+        min-height: 100vh;
+        border: 0;
+      }
+
+      body.workspace-focus #workspace-panel .panel-header {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        min-height: 38px;
+        padding: 6px 10px;
+        border-bottom-color: rgba(255,255,255,0.08);
+        background: rgba(9, 15, 13, 0.9);
+        backdrop-filter: blur(10px);
+      }
+
+      body.workspace-focus #workspace-panel .panel-body {
+        padding: 0;
+        height: calc(100vh - 39px);
+      }
+
+      body.workspace-focus #center-content {
+        min-height: 0;
+        height: 100%;
+      }
+
+      body.workspace-focus .scene-shell,
+      body.workspace-focus .terminal-shell {
+        min-height: 0;
+        height: 100%;
+      }
+
+      body.workspace-focus .scene-fit {
+        min-height: 0;
+        height: 100%;
+        min-width: 0;
+      }
+
+      body.workspace-focus .scene-fit[data-scene-fitted="false"] {
+        opacity: 0;
+      }
+
+      body.workspace-focus .scene-fit[data-scene-fitted="true"] {
+        opacity: 1;
+      }
+
+      body.workspace-focus .scene-shell {
+        gap: 0;
+      }
+
+      body.workspace-focus .scene-shell > .muted {
+        display: none;
+      }
+
+      body.workspace-focus .scene-grid {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        min-height: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+        transform-origin: center center;
+      }
+
+      body.workspace-focus .room {
+        border-width: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      body.workspace-focus .room-meta {
+        display: none;
+      }
+
+      body.workspace-focus .room::after {
+        inset: 0;
+      }
+
+      body.workspace-focus .room-stage {
+        inset: 0;
+      }
+
+      body.workspace-focus #workspace-focus-button {
+        padding: 4px 8px;
+        font-size: 11px;
+      }
+
+      body.workspace-focus #workspace-panel .panel-header strong {
+        font-size: 13px;
+        letter-spacing: 0.03em;
+      }
+
       .scene-shell {
         display: grid;
         gap: 12px;
@@ -269,7 +418,7 @@ export const CLIENT_STYLES = `
         min-height: 520px;
         display: flex;
         align-items: flex-start;
-        justify-content: flex-start;
+        justify-content: center;
         overflow: hidden;
       }
 
@@ -306,16 +455,18 @@ export const CLIENT_STYLES = `
 
       .agent-toast.command-window {
         display: block;
-        min-width: 180px;
-        max-width: 320px;
+        min-width: 156px;
+        max-width: 276px;
         padding: 0;
-        border-radius: 6px;
+        border-radius: 5px;
         border-color: rgba(123, 203, 255, 0.34);
         background: rgba(8, 12, 16, 0.96);
         color: #d6ecff;
         box-shadow:
-          0 8px 18px rgba(0,0,0,0.28),
+          0 6px 14px rgba(0,0,0,0.26),
           inset 0 0 0 1px rgba(255,255,255,0.04);
+        animation: none;
+        transform: translate(-50%, calc(-100% - 5px));
       }
 
       .agent-toast.command-window.blocked {
@@ -358,6 +509,29 @@ export const CLIENT_STYLES = `
         color: #ead7ff;
       }
 
+      .agent-toast.message-toast {
+        border: 1px solid #243834;
+        border-radius: 4px;
+        background: #edf6ef;
+        color: #1d2c26;
+        box-shadow: 1px 1px 0 rgba(13, 24, 20, 0.24);
+        max-width: 208px;
+      }
+
+      .agent-toast.message-toast .agent-toast-title,
+      .agent-toast.message-toast .agent-toast-label {
+        color: #1d2c26;
+      }
+
+      .agent-toast.message-toast .agent-toast-title {
+        -webkit-line-clamp: 3;
+        max-height: 3.6em;
+      }
+
+      .agent-toast.message-toast .agent-toast-line {
+        max-width: 164px;
+      }
+
       .agent-toast.image {
         min-width: 120px;
         padding: 3px 7px;
@@ -384,9 +558,8 @@ export const CLIENT_STYLES = `
 
       .agent-toast-head {
         display: inline-flex;
-        flex-direction: column;
         align-items: flex-start;
-        gap: 2px;
+        gap: 6px;
         min-width: 0;
       }
 
@@ -395,6 +568,26 @@ export const CLIENT_STYLES = `
         align-items: center;
         gap: 4px;
         min-width: 0;
+        flex: 0 0 auto;
+        padding-top: 1px;
+      }
+
+      .agent-toast-lines {
+        display: inline-flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .agent-toast-line {
+        font-size: 11px;
+        line-height: 1.2;
+        color: inherit;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 194px;
       }
 
       .agent-toast-window-bar {
@@ -402,13 +595,13 @@ export const CLIENT_STYLES = `
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-        padding: 4px 8px;
+        padding: 3px 7px;
         border-bottom: 1px solid rgba(255,255,255,0.08);
         background: linear-gradient(180deg, rgba(70, 92, 112, 0.9), rgba(44, 58, 71, 0.92));
       }
 
       .agent-toast-window-label {
-        font-size: 10px;
+        font-size: 9px;
         line-height: 1;
         font-weight: 700;
         letter-spacing: 0.04em;
@@ -422,14 +615,14 @@ export const CLIENT_STYLES = `
       }
 
       .agent-toast-window-lights span {
-        width: 6px;
-        height: 6px;
+        width: 5px;
+        height: 5px;
         border-radius: 999px;
         background: rgba(255,255,255,0.28);
       }
 
       .agent-toast-window-body {
-        padding: 8px 10px 9px;
+        padding: 6px 8px 7px;
         background:
           linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
           rgba(8, 12, 16, 0.96);
@@ -437,12 +630,21 @@ export const CLIENT_STYLES = `
 
       .agent-toast-command {
         margin: 0;
-        font-size: 12px;
+        font-size: 11px;
         line-height: 1.35;
         color: inherit;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
+        white-space: normal;
+        overflow: hidden;
         font-family: Consolas, "Cascadia Mono", "SFMono-Regular", "Liberation Mono", monospace;
+      }
+
+      .agent-toast-command-line {
+        display: block;
+        min-height: 1.35em;
+        max-width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .agent-toast-command-prefix {
@@ -464,8 +666,8 @@ export const CLIENT_STYLES = `
       }
 
       .agent-toast-label-icon {
-        width: 14px;
-        height: 14px;
+        width: 28px;
+        height: 28px;
         display: block;
         flex: 0 0 auto;
         image-rendering: pixelated;
@@ -475,6 +677,7 @@ export const CLIENT_STYLES = `
         font-size: 11px;
         line-height: 1.2;
         color: rgba(255,255,255,0.9);
+        min-width: 0;
         white-space: normal;
         overflow: hidden;
         display: -webkit-box;
@@ -543,7 +746,7 @@ export const CLIENT_STYLES = `
         position: relative;
         border: 2px solid rgba(46, 92, 123, 0.72);
         border-radius: 14px;
-        min-height: 520px;
+        min-height: 0;
         overflow: hidden;
         box-shadow:
           inset 0 0 0 2px rgba(255,255,255,0.05),
@@ -676,16 +879,31 @@ export const CLIENT_STYLES = `
         inset: 0;
       }
 
+      .workstation-computer {
+        position: absolute;
+        transform-origin: 50% 100%;
+        pointer-events: none;
+      }
+
+      .workstation-computer-sprite {
+        inset: 0 auto auto 0;
+      }
+
+      .workstation-computer.file-change-hit {
+        animation: workstation-file-change-hit 330ms steps(1, end) both;
+      }
+
       .cubicle-cell.entering .desk-shell {
         animation: workstation-spawn 180ms steps(1, end) both;
       }
 
       .cubicle-cell.departing .desk-shell {
-        animation: workstation-despawn 180ms steps(1, end) forwards;
+        animation: none;
       }
 
       .snapshot-mode .cubicle-cell.entering .desk-shell,
-      .snapshot-mode .cubicle-cell.departing .desk-shell {
+      .snapshot-mode .cubicle-cell.departing .desk-shell,
+      .snapshot-mode .workstation-computer.file-change-hit {
         animation: none;
         opacity: 1;
         transform: none;
@@ -821,6 +1039,46 @@ export const CLIENT_STYLES = `
         background: #56788d;
       }
 
+      .boss-office-strip {
+        position: absolute;
+        border: 2px solid rgba(36, 50, 46, 0.34);
+        background:
+          linear-gradient(180deg, rgba(255, 218, 120, 0.18), rgba(255, 218, 120, 0.04)),
+          repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 10px, rgba(0,0,0,0.02) 10px 20px),
+          #30554b;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+        pointer-events: none;
+        z-index: 1;
+      }
+
+      .boss-office {
+        position: absolute;
+        z-index: var(--stack-order, 12);
+        border: 2px solid rgba(17, 27, 24, 0.52);
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.01)),
+          color-mix(in srgb, var(--office-tone, #f2ead7) 18%, rgba(28, 44, 38, 0.96));
+        box-shadow:
+          inset 0 0 0 1px rgba(255,255,255,0.08),
+          0 8px 0 rgba(0,0,0,0.18);
+      }
+
+      .boss-office-badge {
+        position: absolute;
+        left: 6px;
+        top: 6px;
+        padding: 2px 5px;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(12, 18, 16, 0.55);
+        color: #f6eed9;
+        font-size: 9px;
+        line-height: 1;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        pointer-events: none;
+        z-index: 8;
+      }
+
       .booth-plaque {
         position: absolute;
         right: 12px;
@@ -850,12 +1108,16 @@ export const CLIENT_STYLES = `
 
       .office-avatar-shell.entering {
         z-index: 12;
-        animation: avatar-arrive 480ms steps(6, end) both;
+        animation: avatar-arrive 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }
 
       .office-avatar-shell.departing {
         z-index: 12;
-        animation: avatar-leave 420ms steps(6, end) forwards;
+        animation: avatar-leave 420ms cubic-bezier(0.4, 0, 1, 1) both;
+      }
+
+      .office-avatar-shell.entering.from-boss {
+        animation: avatar-arrive-from-boss 920ms linear both;
       }
 
       .snapshot-mode .office-avatar-shell.entering,
@@ -890,12 +1152,9 @@ export const CLIENT_STYLES = `
         transform: translateX(-50%);
       }
 
-      .office-avatar-shell.entering .office-avatar {
-        --fx-animation: avatar-flash-in 150ms steps(1, end) 1;
-      }
-
+      .office-avatar-shell.entering .office-avatar,
       .office-avatar-shell.departing .office-avatar {
-        --fx-animation: avatar-flash-out 150ms steps(1, end) 1;
+        --fx-animation: none;
       }
 
       .office-avatar.state-editing,
@@ -1009,6 +1268,10 @@ export const CLIENT_STYLES = `
         overflow-wrap: anywhere;
       }
 
+      .agent-hover-summary-user {
+        color: #ffef58;
+      }
+
       .agent-hover-meta {
         margin-top: 1px;
         font-size: 6px;
@@ -1086,6 +1349,29 @@ export const CLIENT_STYLES = `
         opacity: 1;
       }
 
+      .relationship-lines {
+        position: absolute;
+        inset: 0;
+        z-index: 9;
+        overflow: visible;
+        pointer-events: none;
+      }
+
+      .relationship-line {
+        fill: none;
+        stroke: rgba(255, 221, 120, 0);
+        stroke-width: 2.5;
+        stroke-dasharray: 6 4;
+        opacity: 0;
+        transition: opacity 120ms linear, stroke 120ms linear;
+      }
+
+      .scene-grid[data-focus-active="true"] .relationship-line.is-focused {
+        opacity: 1;
+        stroke: rgba(255, 221, 120, 0.92);
+        filter: drop-shadow(0 0 3px rgba(255, 214, 118, 0.34));
+      }
+
       .lounge-agent {
         position: absolute;
         z-index: 4;
@@ -1110,6 +1396,11 @@ export const CLIENT_STYLES = `
         gap: 8px;
         flex-wrap: wrap;
         margin-top: 10px;
+      }
+
+      .session-card-header .card-actions {
+        margin-top: 0;
+        flex: 0 0 auto;
       }
 
       .inline-code {
@@ -1268,6 +1559,21 @@ export const CLIENT_STYLES = `
         100% { opacity: 1; }
       }
 
+      @keyframes workstation-file-change-hit {
+        0% {
+          transform: scaleX(1) scaleY(1);
+        }
+        33% {
+          transform: scaleX(1.14) scaleY(0.8);
+        }
+        66% {
+          transform: translateY(-1px) scaleX(0.96) scaleY(1.08);
+        }
+        100% {
+          transform: scaleX(1) scaleY(1);
+        }
+      }
+
       @keyframes workstation-despawn {
         0% { opacity: 1; }
         18% { opacity: 0; }
@@ -1283,6 +1589,37 @@ export const CLIENT_STYLES = `
           transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
         }
         10% {
+          opacity: 1;
+          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
+        }
+        100% {
+          opacity: 1;
+          transform: translate(0, 0) scaleX(var(--avatar-flip, 1));
+        }
+      }
+
+      @keyframes avatar-arrive-from-boss {
+        0% {
+          opacity: 0;
+          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
+        }
+        10% {
+          opacity: 1;
+          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
+        }
+        22% {
+          opacity: 0;
+          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
+        }
+        34% {
+          opacity: 1;
+          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
+        }
+        46% {
+          opacity: 0;
+          transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
+        }
+        56% {
           opacity: 1;
           transform: translate(var(--path-x, 0px), var(--path-y, 0px)) scaleX(var(--avatar-flip, 1));
         }

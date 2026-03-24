@@ -33,7 +33,10 @@ export function buildFleetResponse(
 ): FleetResponse {
   return {
     generatedAt: new Date().toISOString(),
-    projects: projects.map((project) => snapshotsByRoot.get(project.root) ?? createStartupSnapshot(project))
+    projects: projects.map((project) => {
+      const snapshot = snapshotsByRoot.get(project.root);
+      return snapshot ?? createStartupSnapshot(project);
+    })
   };
 }
 

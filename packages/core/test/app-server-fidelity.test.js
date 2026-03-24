@@ -2,8 +2,16 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { parseAppServerMessage } = require("../dist/app-server.js");
-const { buildDashboardEventFromAppServerMessage, buildRolloutHookEvent, parseApplyPatchInput } = require("../dist/live-monitor.js");
+const {
+  buildDashboardEventFromAppServerMessage,
+  buildRolloutHookEvent,
+  buildThreadReadAgentMessageEvent,
+  parseApplyPatchInput,
+  shouldMarkThreadLiveFromAppServerNotification,
+  shouldMarkThreadStoppedFromAppServerNotification
+} = require("../dist/live-monitor.js");
 const { buildDashboardSnapshotFromState } = require("../dist/snapshot.js");
+const { isCurrentWorkloadAgent } = require("../dist/workload.js");
 
 function sampleThread() {
   return {
@@ -147,6 +155,15 @@ test("resolved requests clear as completed events when pending request context i
   assert.equal(event.title, "Input resolved");
 });
 
+test("observer unload notifications do not masquerade as thread completion", () => {
+  assert.equal(shouldMarkThreadLiveFromAppServerNotification("thread/status/changed", "active"), true);
+  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("turn/completed"), true);
+  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("thread/archived"), true);
+  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("thread/closed"), false);
+  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("thread/status/changed", "idle"), false);
+  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("thread/status/changed", "notLoaded"), false);
+});
+
 test("tool call server requests become typed tool events", () => {
   const event = buildDashboardEventFromAppServerMessage(
     { projectRoot: "/mnt/f/AI/CodexAgentsOffice" },
@@ -170,6 +187,41 @@ test("tool call server requests become typed tool events", () => {
   assert.equal(event.detail, "browser_snapshot");
 });
 
+test("thread rereads synthesize assistant message events for desktop replies", () => {
+  const thread = {
+    ...sampleThread(),
+    updatedAt: 1730832999,
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_msg_1",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Preview bridge reply from the desktop thread."
+          }
+        ]
+      }
+    ]
+  };
+
+  const event = buildThreadReadAgentMessageEvent(
+    { projectRoot: "/mnt/f/AI/CodexAgentsOffice" },
+    thread
+  );
+
+  assert.ok(event);
+  assert.equal(event.kind, "message");
+  assert.equal(event.method, "item/agentMessage/delta");
+  assert.equal(event.threadId, "thr_123");
+  assert.equal(event.itemId, "item_msg_1");
+  assert.equal(event.confidence, "inferred");
+  assert.equal(event.detail, "Preview bridge reply from the desktop thread.");
+});
+
 test("snapshot carries typed needs-user and live subscription metadata", async () => {
   const snapshot = await buildDashboardSnapshotFromState({
     projectRoot: "/mnt/f/AI/CodexAgentsOffice",
@@ -186,6 +238,45 @@ test("snapshot carries typed needs-user and live subscription metadata", async (
   assert.ok(agent);
   assert.deepEqual(agent.needsUser, { kind: "approval", requestId: "88", reason: "Need approval" });
   assert.equal(agent.liveSubscription, "subscribed");
+});
+
+test("fresh local thinking agents do not remain current without an ongoing turn", () => {
+  const now = Date.parse("2026-03-24T00:00:00.000Z");
+  const agent = {
+    id: "thr_live",
+    label: "Live worker",
+    source: "local",
+    sourceKind: "vscode",
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "idle",
+    role: null,
+    nickname: null,
+    isSubagent: false,
+    state: "thinking",
+    detail: "Reply updated",
+    cwd: "/mnt/f/Unity/ChickenCoop",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-23T23:59:45.000Z",
+    stoppedAt: null,
+    paths: ["/mnt/f/Unity/ChickenCoop"],
+    activityEvent: null,
+    latestMessage: "Still working",
+    threadId: "thr_live",
+    taskId: null,
+    resumeCommand: "codex resume thr_live",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "subscribed"
+  };
+
+  assert.equal(isCurrentWorkloadAgent(agent, now), false);
 });
 
 test("active local threads remain current even when the last update is stale", async () => {
@@ -220,6 +311,41 @@ test("active local threads remain current even when the last update is stale", a
   assert.equal(agent.isCurrent, true);
 });
 
+test("notLoaded threads with an in-progress turn remain current", async () => {
+  const activeButNotLoadedThread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: 1,
+    turns: [
+      {
+        id: "turn_1",
+        status: "inProgress",
+        error: null,
+        items: [
+          {
+            type: "reasoning",
+            text: "Still working from a read-only thread payload"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [activeButNotLoadedThread],
+    events: [],
+    ongoingThreadIds: new Set()
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.statusText, "notLoaded");
+  assert.equal(agent.state, "thinking");
+  assert.equal(agent.isOngoing, true);
+  assert.equal(agent.isCurrent, true);
+});
+
 test("recently finished local threads stay current for a short grace window", async () => {
   const recentDoneThread = {
     ...sampleThread(),
@@ -251,6 +377,111 @@ test("recently finished local threads stay current for a short grace window", as
   assert.ok(agent);
   assert.equal(agent.state, "done");
   assert.equal(agent.isCurrent, true);
+});
+
+test("explicit stop tracking keeps an ongoing quiet thread current", async () => {
+  const ongoingQuietThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor((Date.now() - 60_000) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            text: "Wrapped up this step, staying on thread.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [ongoingQuietThread],
+    events: [],
+    stoppedAtByThreadId: new Map(),
+    ongoingThreadIds: new Set(["thr_123"])
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.state, "done");
+  assert.equal(agent.stoppedAt, null);
+  assert.equal(agent.isCurrent, true);
+});
+
+test("quiet local threads without ongoing tracking are not kept current forever", async () => {
+  const quietThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor((Date.now() - 60_000) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [quietThread],
+    events: [],
+    stoppedAtByThreadId: new Map(),
+    ongoingThreadIds: new Set()
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.isOngoing, false);
+  assert.equal(agent.isCurrent, false);
+});
+
+test("explicitly stopped threads leave only after the stop grace window", async () => {
+  const stoppedThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor((Date.now() - 60_000) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [stoppedThread],
+    events: [],
+    stoppedAtByThreadId: new Map([["thr_123", Date.now() - 6_000]])
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.notEqual(agent.stoppedAt, null);
+  assert.equal(agent.isCurrent, false);
 });
 
 test("parseApplyPatchInput extracts file path and line deltas from apply_patch input", () => {

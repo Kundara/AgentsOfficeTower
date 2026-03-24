@@ -34,7 +34,7 @@ A good iteration improves at least one of these:
 ## Known weak spots
 
 - Codex desktop session visibility may still be incomplete depending on app-server exposure.
-- Claude support is still inference-based and only as strong as the local session logs.
+- Claude support still falls back to transcript inference when no project-local hook sidecars are configured.
 - PixelOffice workstation composition still needs refinement and stricter prefab rules.
 - Most Codex event types now reach the snapshot as explicit events, but many of them still share the same notification/motion treatment.
 - Room empty states are still visually heavier than ideal.
@@ -59,6 +59,7 @@ A good iteration improves at least one of these:
 - verify approval, input-wait, file-change, command-run, and turn lifecycle states have clear visible notification paths
 - verify the browser session panel exposes the durable approval/input "needs you" queue
 - verify Claude-derived sessions are visibly marked as inferred in hover/session detail
+- verify Claude hook-backed sessions are visibly marked as typed rather than inferred when `.codex-agents/claude-hooks/<session-id>.jsonl` exists
 
 ## Near-term roadmap
 
@@ -71,6 +72,7 @@ A good iteration improves at least one of these:
 - refine empty-room presentation
 - improve SSE-driven movement so entry/exit paths feel intentional instead of abrupt
 - verify live toast styling remains readable when browser zoom is reduced
+- keep command-window aggregation readable when several commands arrive quickly for the same agent
 
 ## Not the goal
 

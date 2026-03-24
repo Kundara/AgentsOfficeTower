@@ -10,7 +10,7 @@ import {
 import { listCloudTasks } from "./cloud";
 import { canonicalizeProjectPath, filterThreadsForProject } from "./project-paths";
 import { getRoomsFilePath } from "./room-config";
-import { buildDashboardSnapshotFromState, filterProjectCloudTasks } from "./snapshot";
+import { buildDashboardSnapshotFromState, filterProjectCloudTasks, isOngoingThread } from "./snapshot";
 import type {
   CloudTask,
   CodexThread,
@@ -18,20 +18,22 @@ import type {
   DashboardSnapshot,
   NeedsUserState
 } from "./types";
+import { RECENT_DONE_GRACE_MS } from "./workload";
 
 const DISCOVERY_INTERVAL_MS = 4000;
 const CLOUD_REFRESH_INTERVAL_MS = 30000;
-const FILE_WATCH_INTERVAL_MS = 1000;
-const SNAPSHOT_DEBOUNCE_MS = 150;
-const THREAD_READ_DEBOUNCE_MS = 250;
+const FILE_WATCH_INTERVAL_MS = 250;
+const SNAPSHOT_DEBOUNCE_MS = 60;
+const THREAD_READ_DEBOUNCE_MS = 80;
 const ACTIVE_SUBSCRIPTION_WINDOW_MS = 10 * 60 * 1000;
 const MAX_SUBSCRIBED_THREADS = 8;
 const MAX_RECENT_EVENTS = 64;
 // Desktop-backed threads can take noticeably longer to resume than simple CLI
 // sessions, and a too-short timeout drops the live item stream we need for
 // `item/agentMessage/*` notifications.
-const APP_SERVER_SUBSCRIPTION_TIMEOUT_MS = 12000;
+const APP_SERVER_SUBSCRIPTION_TIMEOUT_MS = 25000;
 const ROLLOUT_TAIL_BYTES = 512 * 1024;
+const STOPPED_THREAD_REMOVAL_BUFFER_MS = 1000;
 
 interface PendingUserRequest extends NeedsUserState {
   threadId: string;
@@ -64,6 +66,17 @@ function shorten(text: string, maxLength = 88): string {
     return normalized;
   }
   return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function isMeaningfulAgentText(text: string | null | undefined): text is string {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  return !/^[.\-_~`"'!,;:|/\\()[\]{}]+$/.test(normalized);
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -140,6 +153,102 @@ function collectPaths(value: unknown, output = new Set<string>()): Set<string> {
 
 function primaryPath(value: unknown): string | null {
   return [...collectPaths(value)][0] ?? null;
+}
+
+function latestThreadAgentMessage(thread: CodexThread): {
+  turnId?: string;
+  itemId?: string;
+  text: string;
+} | null {
+  for (const turn of [...thread.turns].reverse()) {
+    for (const item of [...turn.items].reverse()) {
+      const record = asRecord(item);
+      if (!record || asString(record.type) !== "agentMessage") {
+        continue;
+      }
+      const text = asString(record.text);
+      if (!isMeaningfulAgentText(text)) {
+        continue;
+      }
+      return {
+        turnId: asString(record.turnId ?? record.turn_id) ?? turn.id,
+        itemId: extractItemId(record),
+        text
+      };
+    }
+  }
+  return null;
+}
+
+function isLiveAppServerMethod(method: string): boolean {
+  return (
+    method === "thread/started"
+    || method === "thread/unarchived"
+    || method === "turn/started"
+    || method === "item/started"
+    || method === "item/agentMessage/delta"
+    || method === "item/plan/delta"
+    || method === "item/reasoning/summaryTextDelta"
+    || method === "item/reasoning/summaryPartAdded"
+    || method === "item/reasoning/textDelta"
+    || method === "item/commandExecution/outputDelta"
+    || method === "item/fileChange/outputDelta"
+    || method === "item/commandExecution/requestApproval"
+    || method === "item/fileChange/requestApproval"
+    || method === "item/tool/requestUserInput"
+    || method === "item/tool/call"
+    || method === "turn/plan/updated"
+    || method === "turn/diff/updated"
+  );
+}
+
+function isTurnTerminalAppServerMethod(method: string): boolean {
+  return (
+    method === "turn/completed"
+    || method === "turn/interrupted"
+    || method === "turn/failed"
+  );
+}
+
+export function shouldMarkThreadLiveFromAppServerNotification(
+  method: string,
+  statusType?: string | null
+): boolean {
+  return isLiveAppServerMethod(method) || (method === "thread/status/changed" && statusType === "active");
+}
+
+export function shouldMarkThreadStoppedFromAppServerNotification(
+  method: string,
+  statusType?: string | null
+): boolean {
+  return (
+    method === "thread/archived"
+    || isTurnTerminalAppServerMethod(method)
+    || (method === "thread/status/changed" && statusType === "systemError")
+  );
+}
+
+function hasEquivalentRecentMessageEvent(
+  recentEvents: DashboardEvent[],
+  candidate: DashboardEvent
+): boolean {
+  if (candidate.kind !== "message") {
+    return false;
+  }
+  return recentEvents.some((event) => {
+    if (event.kind !== "message") {
+      return false;
+    }
+    if (event.threadId !== candidate.threadId) {
+      return false;
+    }
+    if (event.itemId && candidate.itemId && event.itemId === candidate.itemId) {
+      return true;
+    }
+    const left = event.detail.trim();
+    const right = candidate.detail.trim();
+    return left === right || left.startsWith(right) || right.startsWith(left);
+  });
 }
 
 function buildEventId(input: {
@@ -254,6 +363,7 @@ function eventBase(
     method,
     turnId,
     itemId,
+    itemType: overrides.itemType,
     requestId,
     kind: "other",
     phase: "updated",
@@ -261,6 +371,40 @@ function eventBase(
     detail: method,
     path,
     ...overrides
+  };
+}
+
+export function buildThreadReadAgentMessageEvent(
+  context: DashboardEventContext,
+  thread: CodexThread
+): DashboardEvent | null {
+  const latestMessage = latestThreadAgentMessage(thread);
+  if (!latestMessage) {
+    return null;
+  }
+
+  const path = canonicalizeProjectPath(thread.cwd) ?? thread.cwd;
+  return {
+    id: buildEventId({
+      projectRoot: context.projectRoot,
+      method: "item/agentMessage/delta",
+      threadId: thread.id,
+      turnId: latestMessage.turnId,
+      itemId: latestMessage.itemId,
+      path
+    }),
+    source: "codex",
+    confidence: "inferred",
+    threadId: thread.id,
+    createdAt: context.createdAt ?? new Date().toISOString(),
+    method: "item/agentMessage/delta",
+    turnId: latestMessage.turnId,
+    itemId: latestMessage.itemId,
+    kind: "message",
+    phase: "updated",
+    title: "Reply updated",
+    detail: shorten(latestMessage.text),
+    path
   };
 }
 
@@ -306,6 +450,7 @@ function buildEventFromItem(
     const summary = summarizeCommand(item, method);
     return eventBase(context, method, params, {
       itemId,
+      itemType,
       kind: "command",
       phase,
       title:
@@ -322,6 +467,7 @@ function buildEventFromItem(
   if (itemType === "enteredReviewMode" || itemType === "exitedReviewMode") {
     return eventBase(context, method, params, {
       itemId,
+      itemType,
       kind: "item",
       phase,
       title: itemType === "enteredReviewMode" ? "Review started" : "Review finished",
@@ -332,6 +478,7 @@ function buildEventFromItem(
   if (itemType === "collabToolCall" || itemType === "collabAgentToolCall") {
     return eventBase(context, method, params, {
       itemId,
+      itemType,
       kind: "subagent",
       phase,
       title: phase === "completed" ? "Subagent updated" : "Subagent started",
@@ -340,18 +487,24 @@ function buildEventFromItem(
   }
 
   if (itemType === "agentMessage") {
+    const messageText = asString(item.text);
+    if (!isMeaningfulAgentText(messageText)) {
+      return null;
+    }
     return eventBase(context, method, params, {
       itemId,
+      itemType,
       kind: "message",
       phase,
       title: phase === "completed" ? "Reply completed" : "Reply updated",
-      detail: shorten(asString(item.text) ?? itemType)
+      detail: shorten(messageText)
     });
   }
 
   if (itemType === "plan") {
     return eventBase(context, method, params, {
       itemId,
+      itemType,
       kind: "turn",
       phase: "updated",
       title: "Plan updated",
@@ -362,18 +515,67 @@ function buildEventFromItem(
   if (itemType === "dynamicToolCall" || itemType === "mcpToolCall") {
     return eventBase(context, method, params, {
       itemId,
+      itemType,
       kind: "tool",
       phase,
       title:
-        phase === "failed" ? "MCP tool failed"
-        : phase === "completed" ? "MCP tool completed"
-        : "MCP tool started",
+        itemType === "dynamicToolCall"
+          ? (phase === "failed" ? "Tool failed" : phase === "completed" ? "Tool completed" : "Tool started")
+          : (phase === "failed" ? "MCP tool failed" : phase === "completed" ? "MCP tool completed" : "MCP tool started"),
       detail: summarizeTool(item).detail
+    });
+  }
+
+  if (itemType === "webSearch") {
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: "tool",
+      phase,
+      title:
+        phase === "failed" ? "Web search failed"
+        : phase === "completed" ? "Web search completed"
+        : "Web search started",
+      detail: shorten(asString(item.query) ?? "Web search")
+    });
+  }
+
+  if (itemType === "imageView") {
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: "item",
+      phase,
+      title: phase === "completed" ? "Image viewed" : "Viewing image",
+      detail: shorten(asString(item.path) ?? "Image")
+    });
+  }
+
+  if (itemType === "reasoning") {
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: "item",
+      phase,
+      title: "Reasoning updated",
+      detail: shorten(asString(item.text) ?? asString(item.summary) ?? "Reasoning")
+    });
+  }
+
+  if (itemType === "contextCompaction") {
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: "item",
+      phase,
+      title: "Context compacted",
+      detail: "Conversation history compacted"
     });
   }
 
   return eventBase(context, method, params, {
     itemId,
+    itemType,
     kind: "item",
     phase,
     title: `Item ${phase}`,
@@ -472,14 +674,19 @@ export function buildDashboardEventFromAppServerMessage(
     case "item/started":
     case "item/completed":
       return buildEventFromItem(context, method, params);
-    case "item/agentMessage/delta":
+    case "item/agentMessage/delta": {
+      const messageDelta = asString(params.delta) ?? asString(params.textDelta);
+      if (!isMeaningfulAgentText(messageDelta)) {
+        return null;
+      }
       return eventBase(context, method, params, {
         itemId: extractItemId(params),
         kind: "message",
         phase: "updated",
         title: "Reply streaming",
-        detail: shorten(asString(params.delta) ?? asString(params.textDelta) ?? "Agent response")
+        detail: shorten(messageDelta)
       });
+    }
     case "item/plan/delta":
       return eventBase(context, method, params, {
         itemId: extractItemId(params),
@@ -935,6 +1142,9 @@ export class ProjectLiveMonitor extends EventEmitter {
   private readonly roomConfigPath: string;
   private readonly pendingUserRequests = new Map<string, PendingUserRequest>();
   private readonly subscribedThreadIds = new Set<string>();
+  private readonly ongoingThreadIds = new Set<string>();
+  private readonly stoppedAtByThreadId = new Map<string, number>();
+  private readonly threadRemovalTimers = new Map<string, NodeJS.Timeout>();
   private roomWatcher: FSWatcher | null = null;
   private snapshot: DashboardSnapshot | null = null;
   private cloudTasks: CloudTask[] = [];
@@ -945,11 +1155,13 @@ export class ProjectLiveMonitor extends EventEmitter {
   private recentEvents: DashboardEvent[] = [];
   private unsubscribeNotifications: (() => void) | null = null;
   private unsubscribeServerRequests: (() => void) | null = null;
+  private subscriptionSyncPromise: Promise<void> | null = null;
+  private subscriptionSyncQueued = false;
 
   constructor(options: ProjectLiveMonitorOptions) {
     super();
     this.projectRoot = options.projectRoot;
-    this.localLimit = options.localLimit ?? 24;
+    this.localLimit = options.localLimit ?? 10;
     this.includeCloud = options.includeCloud !== false;
     this.roomConfigPath = getRoomsFilePath(this.projectRoot);
   }
@@ -960,7 +1172,6 @@ export class ProjectLiveMonitor extends EventEmitter {
 
   async start(): Promise<void> {
     await this.ensureClient();
-    await this.refreshCloudTasks();
     await this.discoverThreads();
     this.watchRoomsFile();
     this.discoveryTimer = setInterval(() => {
@@ -968,6 +1179,7 @@ export class ProjectLiveMonitor extends EventEmitter {
     }, DISCOVERY_INTERVAL_MS);
 
     if (this.includeCloud) {
+      void this.refreshCloudTasks();
       this.cloudTimer = setInterval(() => {
         void this.refreshCloudTasks();
       }, CLOUD_REFRESH_INTERVAL_MS);
@@ -1000,6 +1212,10 @@ export class ProjectLiveMonitor extends EventEmitter {
       clearTimeout(timer);
     }
     this.threadReadTimers.clear();
+    for (const timer of this.threadRemovalTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.threadRemovalTimers.clear();
     for (const [threadId, watcher] of this.threadWatchers.entries()) {
       watcher.close();
       const path = this.threadPaths.get(threadId);
@@ -1015,6 +1231,7 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.unsubscribeServerRequests = null;
     this.client?.close();
     this.client = null;
+    this.ongoingThreadIds.clear();
     this.subscribedThreadIds.clear();
   }
 
@@ -1060,20 +1277,32 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     try {
       const allThreads = await this.client.listThreads({
-        limit: Math.max(this.localLimit * 4, 50)
+        limit: Math.max(this.localLimit * 2, 20)
       });
-      const listedThreads = filterThreadsForProject(this.projectRoot, allThreads).slice(0, this.localLimit);
+      const projectThreads = filterThreadsForProject(this.projectRoot, allThreads);
+      const projectThreadsById = new Map(projectThreads.map((thread) => [thread.id, thread]));
+      const listedThreads = projectThreads.slice(0, this.localLimit);
+      const trackedThreads = [
+        ...listedThreads,
+        ...Array.from(this.threads.keys())
+          .filter((threadId) => !listedThreads.some((thread) => thread.id === threadId))
+          .map((threadId) => projectThreadsById.get(threadId))
+          .filter((thread): thread is CodexThread => Boolean(thread))
+      ];
       this.clearMatchingNote("Local Codex app-server unavailable:");
-      const listedIds = new Set(listedThreads.map((thread) => thread.id));
+      const listedIds = new Set(trackedThreads.map((thread) => thread.id));
 
       await Promise.all(
-        listedThreads.map(async (listedThread) => {
+        trackedThreads.map(async (listedThread) => {
           const known = this.threads.get(listedThread.id);
           if (!known || known.updatedAt !== listedThread.updatedAt || known.path !== listedThread.path) {
             await this.refreshThread(listedThread.id);
             return;
           }
 
+          if (listedThread.status.type === "active") {
+            this.markThreadLive(listedThread.id);
+          }
           this.threads.set(listedThread.id, {
             ...known,
             status: listedThread.status,
@@ -1085,12 +1314,12 @@ export class ProjectLiveMonitor extends EventEmitter {
       );
 
       for (const threadId of Array.from(this.threads.keys())) {
-        if (!listedIds.has(threadId)) {
-          this.removeThread(threadId);
+        if (!projectThreadsById.has(threadId)) {
+          this.markThreadStopped(threadId);
         }
       }
 
-      await this.syncThreadSubscriptions();
+      this.scheduleThreadSubscriptions();
       this.scheduleSnapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1100,6 +1329,25 @@ export class ProjectLiveMonitor extends EventEmitter {
       this.subscribedThreadIds.clear();
       this.scheduleSnapshot();
     }
+  }
+
+  private scheduleThreadSubscriptions(): void {
+    if (this.subscriptionSyncPromise) {
+      this.subscriptionSyncQueued = true;
+      return;
+    }
+
+    this.subscriptionSyncPromise = this.syncThreadSubscriptions()
+      .catch(() => {
+        /* notes are handled inside syncThreadSubscriptions */
+      })
+      .finally(() => {
+        this.subscriptionSyncPromise = null;
+        if (this.subscriptionSyncQueued) {
+          this.subscriptionSyncQueued = false;
+          this.scheduleThreadSubscriptions();
+        }
+      });
   }
 
   private async syncThreadSubscriptions(): Promise<void> {
@@ -1113,8 +1361,11 @@ export class ProjectLiveMonitor extends EventEmitter {
     const now = Date.now();
     const candidates = [...this.threads.values()]
       .filter((thread) => (
+        !this.stoppedAtByThreadId.has(thread.id)
+        && (
         thread.status.type === "active"
         || (now - thread.updatedAt * 1000) <= ACTIVE_SUBSCRIPTION_WINDOW_MS
+        )
       ))
       .sort((left, right) => {
         const leftActive = left.status.type === "active" ? 1 : 0;
@@ -1178,6 +1429,8 @@ export class ProjectLiveMonitor extends EventEmitter {
         this.scheduleThreadRefresh(threadId);
       }
     }
+
+    this.scheduleSnapshot();
   }
 
   private scheduleThreadRefresh(threadId: string): void {
@@ -1250,6 +1503,13 @@ export class ProjectLiveMonitor extends EventEmitter {
         this.pendingUserRequests.delete(requestId);
       }
     }
+    const removalTimer = this.threadRemovalTimers.get(threadId);
+    if (removalTimer) {
+      clearTimeout(removalTimer);
+      this.threadRemovalTimers.delete(threadId);
+    }
+    this.ongoingThreadIds.delete(threadId);
+    this.stoppedAtByThreadId.delete(threadId);
     this.subscribedThreadIds.delete(threadId);
   }
 
@@ -1280,6 +1540,25 @@ export class ProjectLiveMonitor extends EventEmitter {
       return;
     }
 
+    const threadId = extractThreadId(notification.params);
+    if (threadId) {
+      const status = notification.method === "thread/status/changed"
+        ? asRecord(asRecord(notification.params)?.status)
+        : null;
+      const statusType = asString(status?.type);
+      if (shouldMarkThreadLiveFromAppServerNotification(notification.method, statusType)) {
+        this.markThreadLive(threadId);
+      } else if (shouldMarkThreadStoppedFromAppServerNotification(notification.method, statusType)) {
+        this.markThreadStopped(threadId);
+      }
+      if (
+        notification.method === "thread/closed"
+        || (notification.method === "thread/status/changed" && statusType === "notLoaded")
+      ) {
+        this.subscribedThreadIds.delete(threadId);
+      }
+    }
+
     if (notification.method === "serverRequest/resolved") {
       const params = asRecord(notification.params) ?? {};
       const requestId = asString(params.requestId);
@@ -1301,7 +1580,6 @@ export class ProjectLiveMonitor extends EventEmitter {
       }
     }
 
-    const threadId = extractThreadId(notification.params);
     if (threadId) {
       this.scheduleThreadRefresh(threadId);
     } else {
@@ -1330,6 +1608,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     const threadId = extractThreadId(request.params);
     if (threadId) {
+      this.markThreadLive(threadId);
       this.scheduleThreadRefresh(threadId);
     } else {
       void this.discoverThreads();
@@ -1343,9 +1622,30 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
 
     try {
+      const previousThread = this.threads.get(threadId) ?? null;
       const thread = await this.client.readThread(threadId);
       this.clearMatchingNote(`Thread refresh failed (${threadId.slice(0, 8)}):`);
       this.threads.set(threadId, thread);
+      if (isOngoingThread(thread)) {
+        this.markThreadLive(threadId);
+      } else if (previousThread && isOngoingThread(previousThread)) {
+        this.markThreadStopped(threadId);
+      }
+      const previousMessage = previousThread ? latestThreadAgentMessage(previousThread) : null;
+      const nextMessage = latestThreadAgentMessage(thread);
+      if (
+        previousThread
+        && nextMessage
+        && (
+          nextMessage.itemId !== previousMessage?.itemId
+          || nextMessage.text !== previousMessage?.text
+        )
+      ) {
+        const messageEvent = buildThreadReadAgentMessageEvent({ projectRoot: this.projectRoot }, thread);
+        if (messageEvent && !hasEquivalentRecentMessageEvent(this.recentEvents, messageEvent)) {
+          this.pushRecentEvent(messageEvent);
+        }
+      }
       this.ensureThreadWatcher(threadId, thread.path);
       const rolloutEvents = await readRecentRolloutHookEvents(this.projectRoot, threadId, thread.path, thread.updatedAt);
       for (const event of rolloutEvents) {
@@ -1419,8 +1719,41 @@ export class ProjectLiveMonitor extends EventEmitter {
       events: this.recentEvents,
       notes: Array.from(this.notes),
       needsUserByThreadId,
-      subscribedThreadIds: this.subscribedThreadIds
+      subscribedThreadIds: this.subscribedThreadIds,
+      stoppedAtByThreadId: this.stoppedAtByThreadId,
+      ongoingThreadIds: this.ongoingThreadIds
     });
     this.emit("snapshot", this.snapshot);
+  }
+
+  private markThreadLive(threadId: string): void {
+    this.ongoingThreadIds.add(threadId);
+    this.stoppedAtByThreadId.delete(threadId);
+    const removalTimer = this.threadRemovalTimers.get(threadId);
+    if (removalTimer) {
+      clearTimeout(removalTimer);
+      this.threadRemovalTimers.delete(threadId);
+    }
+  }
+
+  private markThreadStopped(threadId: string): void {
+    if (!this.threads.has(threadId)) {
+      return;
+    }
+    if (this.stoppedAtByThreadId.has(threadId)) {
+      return;
+    }
+
+    this.ongoingThreadIds.delete(threadId);
+    this.stoppedAtByThreadId.set(threadId, Date.now());
+    const removalTimer = this.threadRemovalTimers.get(threadId);
+    if (removalTimer) {
+      clearTimeout(removalTimer);
+    }
+    this.threadRemovalTimers.set(threadId, setTimeout(() => {
+      this.threadRemovalTimers.delete(threadId);
+      this.removeThread(threadId);
+      this.scheduleSnapshot();
+    }, RECENT_DONE_GRACE_MS + STOPPED_THREAD_REMOVAL_BUFFER_MS));
   }
 }

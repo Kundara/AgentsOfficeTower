@@ -56,6 +56,7 @@ Current use:
 - spawns `codex app-server`
 - initializes a JSON-RPC-like session
 - opts into `experimentalApi`
+- opts out of streamed `item/agentMessage/delta` notifications so browser reply toasts can prefer full-message state
 - requests `thread/list`
 - requests `thread/read`
 - resumes active/recent threads with `thread/resume`
@@ -119,10 +120,12 @@ How we use it:
 
 - build the normalized `DashboardAgent`
 - infer current state from the last relevant turn item
+- infer ongoing-ness from the latest turn as well as runtime thread status, because `thread/list` / `thread/read` can still report `status.type = notLoaded` for persisted threads that have a current in-progress turn payload
 - infer subagent parentage and depth
 - generate `resumeCommand`
 - map the session into project rooms using extracted paths
 - keep read-only visibility for older threads outside the live subscription window
+- synthesize fallback assistant-message events from reread desktop rollout threads when live `thread/resume` delivery is unavailable, so normal reply text can still toast
 
 ### `thread/resume` / `thread/unsubscribe`
 
@@ -135,8 +138,11 @@ How we use it:
 
 - active threads and threads updated in the last 10 minutes are resumed on the observer connection
 - the observer keeps at most 8 project threads subscribed at once
+- subscription sync now runs in the background so the web server can render before slow desktop thread attaches finish
 - stale observer-owned subscriptions are unsubscribed
 - subscribed threads surface as `liveSubscription = subscribed`; older threads stay `readOnly`
+
+In fleet mode, every discovered workspace keeps a live monitor. The selected workspace only changes browser focus; it does not change which projects are subscribed.
 
 ### Thread status and active flags
 
@@ -165,9 +171,12 @@ Representation today:
 
 Current-workload occupancy rules on top of that state:
 
-- a local thread with `statusText = active` stays `isCurrent` even if there is a lull in new visible events
-- a local thread in `done` stays `isCurrent` for about 5 seconds so its final reply can still be read before it leaves the desk
-- `idle` threads still drop out of current-workload filtering immediately
+- a local thread stays `isCurrent` while the live monitor still considers the thread ongoing, even if the latest turn now reads as `done`
+- a `notLoaded` thread still stays `isCurrent` when `thread/read` shows its latest turn is `inProgress`
+- observer-owned unload/runtime-idle transitions such as `thread/closed` or `thread/status/changed -> notLoaded` are not treated as stop signals by themselves; the monitor confirms stops from turn-terminal events plus reread thread state
+- local desk occupancy no longer uses a generic freshness fallback for non-idle summaries; if a thread is not ongoing, not waiting on the user, and not inside the stop grace window, it is no longer `isCurrent`
+- once the thread actually stops, it stays `isCurrent` for about 5 seconds so its final reply can still be read before it leaves the desk
+- non-local `idle` sessions still drop out of current-workload filtering immediately
 
 In the browser this becomes:
 
@@ -189,13 +198,18 @@ Current item-to-state mapping:
 | `fileChange` | `editing` or `blocked` | desk worker, file-change notification, room mapping from changed paths |
 | `commandExecution` | `running`, `validating`, or `blocked` | desk worker, command notification |
 | `webSearch` | `scanning` | active worker, no explicit notification |
+| `imageView` | `scanning` | active worker, image-view icon coverage and viewing summary |
 | `mcpToolCall` | `scanning` or `blocked` | active worker, detail text names `server.tool` |
+| `dynamicToolCall` | `scanning` or `blocked` | active worker, tool-call summary |
 | `collabAgentToolCall` | `delegating` | active worker, delegation summary |
 | `collabToolCall` | `delegating` | active worker, subagent spawn/wait summary |
 | `plan` | `planning` | active worker, planning summary |
 | `reasoning` | `thinking` | active worker, thinking summary |
-| `agentMessage` | `thinking` or `done` | message summary, optional notification |
-| `userMessage` | `planning` or `idle` | assigned-work summary |
+| `enteredReviewMode` | `validating` | review-start summary and icon coverage |
+| `exitedReviewMode` | `thinking` or `done` | review-finished summary and icon coverage |
+| `contextCompaction` | `thinking` | compaction summary and icon coverage |
+| `agentMessage` | `thinking` or `done` | message summary, live notification when subscribed, fallback notification from reread desktop threads |
+| `userMessage` | `planning` or `idle` | assigned-work summary and icon coverage |
 
 ### File change semantics
 
@@ -238,6 +252,8 @@ How we use it:
 - classify other commands as `running`
 - failed or declined commands become `blocked`
 - render command notifications as a command-prompt style mini window with monospace text and a blinking cursor
+- keep one command window toast per agent, append new commands to the bottom, keep only the last 3 lines, and extend the expiry when new lines arrive
+- keep recently stopped agents on-desk for the stop grace window; only non-current recent leads move into the rec area after that grace period
 - render floating text such as `Ran npm run build`
 - collapse read-only shell inspection commands such as `sed`, `cat`, `head`, `tail`, `rg`, `grep`, `ls`, `find`, and `tree` into short summary toasts like `Read workload.ts` or `Exploring 2 files`
 
@@ -261,6 +277,8 @@ How we use it:
 - normalize tool-call requests into typed `DashboardEvent.kind = tool`
 - keep dynamic tool activity visible in the local thread summary path
 - resolve toast icons from exact method-shaped asset paths such as `sprites/icons/item/tool/call.svg`
+- resolve semantic thread-item icons from `sprites/icons/thread-item/*.svg` or reused exact-method icons
+- expose a visual verification surface at `/icon-audit` so every thread-item icon can be inspected side by side
 
 ### Subagent metadata
 
@@ -353,7 +371,7 @@ How we use it:
 
 ## Claude Hooks
 
-Claude support is intentionally second priority and inference-based.
+Claude support still stays secondary to Codex app-server, but Claude Code now has an official hook surface that is strong enough to carry more than transcript heuristics when we choose to wire it in.
 
 Primary code path:
 
@@ -377,6 +395,7 @@ How we use it:
 What we read:
 
 - recent JSONL records from the head and tail of each session file
+- optional project-local hook sidecars in `.codex-agents/claude-hooks/<session-id>.jsonl`
 - record timestamps
 - message model names
 - `cwd`
@@ -386,16 +405,42 @@ How we use it:
 
 - identify the session
 - derive a display label from the Claude model
-- infer the most recent meaningful activity
+- infer the most recent meaningful activity from transcript data when no hook sidecar exists
+- prefer typed Claude hook events when a sidecar exists for that session
 - assign an appearance and render it as a `claude` agent
 
-### Claude record types we currently map
+### Official Claude hook surface
+
+Official docs:
+
+- [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
+
+What Anthropic exposes in hook input:
+
+- `session_id`
+- `transcript_path`
+- `cwd`
+- `hook_event_name`
+- `tool_name`
+- `tool_input`
+- `tool_response` for successful tool completions
+- error information for failed tool calls
+- typed lifecycle events such as `PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, `Elicitation`, and `TaskCompleted`
+
+How this project uses that surface:
+
+- we do not scrape Claude internals directly from the hook stream
+- instead, we support a project-owned bridge that writes hook JSONL sidecars into `.codex-agents/claude-hooks/<session-id>.jsonl`
+- when those sidecars exist, Claude agents can surface typed permission, input, tool, subagent, and stop state with `confidence = typed`
+- when they do not exist, Claude falls back to transcript inference with `confidence = inferred`
+
+### Claude transcript inference rules
 
 Mapped in:
 
 - `packages/core/src/claude.ts`
 
-Current Claude inference rules:
+Current Claude transcript inference rules:
 
 | Claude signal | State | Representation |
 | --- | --- | --- |
@@ -406,6 +451,22 @@ Current Claude inference rules:
 | latest user text newer than latest assistant text | `planning` | planning summary |
 | recent assistant text | `thinking` | message summary, optional recent update notification |
 | older assistant text | `done` then `idle` | finished or idle state |
+
+### Claude hook event rules
+
+When a project-local Claude hook sidecar exists, the loader can map these official Claude hook events directly:
+
+| Claude hook event | State | Representation |
+| --- | --- | --- |
+| `PermissionRequest` | `blocked` | typed approval-needed state from Claude hook input |
+| `Elicitation` | `waiting` | typed waiting-for-input state |
+| `PreToolUse` / `PostToolUse` with edit or write tools | `editing` | file-change style notification and room mapping from paths |
+| `PreToolUse` / `PostToolUse` with bash or shell tools | `running` or `validating` | command-style notification |
+| `PostToolUseFailure` | `blocked` | failed command/tool state |
+| `SubagentStart` | `delegating` | typed delegation summary |
+| `SubagentStop` | `done` | typed subagent-finished summary |
+| `Stop` / `TaskCompleted` | `done` | typed completion state |
+| `StopFailure` | `blocked` | typed turn-failure summary |
 
 ### Claude activity events
 
@@ -421,13 +482,11 @@ How we use it:
 - same room mapping via normalized `paths`
 - same session-card and hover-card surfaces
 
-What Claude does not currently provide here:
+What Claude still does not provide here:
 
-- typed waiting-on-approval state
-- typed waiting-on-user-input state
-- official parent/subagent hierarchy
-- official resume/open command
-- raw push notifications
+- Codex-style resume/open command
+- Codex app-server style live push stream into this process without a user-configured hook bridge
+- Codex-grade parent/subagent hierarchy with stable parent thread ids in the shared snapshot
 
 ## Representation In This Project
 
@@ -442,7 +501,7 @@ The snapshot builder merges:
 - local Codex threads
 - cloud tasks
 - optional synthetic presence entries
-- Claude inferred sessions
+- Claude sessions from transcript inference or optional hook sidecars
 
 Then it:
 

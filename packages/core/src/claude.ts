@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 
 import { ensureAgentAppearance } from "./appearance";
 import type { DiscoveredProject } from "./project-paths";
-import type { AgentActivityEvent, ActivityState, DashboardAgent } from "./types";
+import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent } from "./types";
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 const LOG_HEAD_BYTES = 4096;
@@ -29,6 +29,7 @@ interface ClaudeActivitySummary {
   paths: string[];
   activityEvent: AgentActivityEvent | null;
   gitBranch: string | null;
+  confidence: AgentConfidence;
 }
 
 function trimTrailingSlash(value: string): string {
@@ -65,6 +66,17 @@ function shorten(text: string, maxLength: number): string {
     return normalized;
   }
   return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function isMeaningfulTranscriptText(text: string | null | undefined): text is string {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  return !/^[.\-_~`"'!,;:|/\\()[\]{}]+$/.test(normalized);
 }
 
 function parseJsonLines(text: string, dropFirstPartial = false): Array<Record<string, unknown>> {
@@ -183,10 +195,10 @@ function extractUserText(record: Record<string, unknown>): string | null {
   }
 
   if (typeof message.content === "string") {
-    return message.content;
+    return isMeaningfulTranscriptText(message.content) ? message.content : null;
   }
 
-  const text = extractTextEntries(message.content).find((entry) => entry.trim().length > 0);
+  const text = extractTextEntries(message.content).find((entry) => isMeaningfulTranscriptText(entry));
   return text ?? null;
 }
 
@@ -200,7 +212,7 @@ function extractAssistantText(record: Record<string, unknown>): string | null {
     return null;
   }
 
-  const text = extractTextEntries(message.content).find((entry) => entry.trim().length > 0);
+  const text = extractTextEntries(message.content).find((entry) => isMeaningfulTranscriptText(entry));
   return text ?? null;
 }
 
@@ -283,6 +295,241 @@ function looksLikeValidationCommand(command: string): boolean {
 
 function isImagePath(path: string | null): boolean {
   return Boolean(path && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path));
+}
+
+function claudeHooksFilePath(projectRoot: string, sessionId: string): string {
+  return join(projectRoot, ".codex-agents", "claude-hooks", `${sessionId}.jsonl`);
+}
+
+function claudeToolSummary(input: {
+  sessionId: string;
+  model: string | null;
+  fallbackCwd: string;
+  gitBranch: string | null;
+  updatedAt: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  failed?: boolean;
+}): ClaudeActivitySummary | null {
+  const toolName = input.toolName.trim();
+  const toolPaths = extractToolPaths(input.toolInput);
+  const primaryPath = toolPaths[0] ?? input.fallbackCwd;
+
+  if (/(edit|write|multiedit)/i.test(toolName)) {
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: input.failed ? "blocked" : "editing",
+      detail: primaryPath ? `Editing ${primaryPath}` : "Editing files",
+      updatedAt: input.updatedAt,
+      paths: toolPaths.length > 0 ? toolPaths : [input.fallbackCwd],
+      activityEvent: {
+        type: "fileChange",
+        action: "edited",
+        path: primaryPath ?? null,
+        title: primaryPath ? `edit ${primaryPath}` : "Editing files",
+        isImage: isImagePath(primaryPath ?? null)
+      },
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (/(bash|shell)/i.test(toolName)) {
+    const command =
+      typeof input.toolInput.command === "string" ? input.toolInput.command
+      : typeof input.toolInput.cmd === "string" ? input.toolInput.cmd
+      : toolName;
+    const cwd =
+      canonicalizeProjectPath(typeof input.toolInput.cwd === "string" ? input.toolInput.cwd : null)
+      ?? input.fallbackCwd;
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: input.failed ? "blocked" : looksLikeValidationCommand(command) ? "validating" : "running",
+      detail: command,
+      updatedAt: input.updatedAt,
+      paths: cwd ? [cwd] : [],
+      activityEvent: {
+        type: "commandExecution",
+        action: "ran",
+        path: cwd ?? null,
+        title: command,
+        isImage: false
+      },
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (/(read|grep|glob|search|ls|list)/i.test(toolName)) {
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: input.failed ? "blocked" : "scanning",
+      detail: primaryPath ? `Reading ${primaryPath}` : `Using ${toolName}`,
+      updatedAt: input.updatedAt,
+      paths: toolPaths.length > 0 ? toolPaths : [input.fallbackCwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (/(task|delegate|agent)/i.test(toolName)) {
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: input.failed ? "blocked" : "delegating",
+      detail: input.failed ? "Delegation failed" : "Delegating work",
+      updatedAt: input.updatedAt,
+      paths: [input.fallbackCwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  return null;
+}
+
+function summariseClaudeHookRecord(input: {
+  sessionId: string;
+  model: string | null;
+  fallbackCwd: string;
+  gitBranch: string | null;
+  record: Record<string, unknown>;
+  fallbackUpdatedAt: number;
+}): ClaudeActivitySummary | null {
+  const hookEventName = typeof input.record.hook_event_name === "string" ? input.record.hook_event_name : null;
+  if (!hookEventName) {
+    return null;
+  }
+
+  const cwd =
+    canonicalizeProjectPath(typeof input.record.cwd === "string" ? input.record.cwd : null)
+    ?? input.fallbackCwd;
+  const updatedAt = new Date(recordTimestampMs(input.record, input.fallbackUpdatedAt)).toISOString();
+  const toolName = typeof input.record.tool_name === "string" ? input.record.tool_name : "";
+  const toolInput = asRecord(input.record.tool_input) ?? {};
+
+  if (hookEventName === "PermissionRequest") {
+    const detail =
+      typeof toolInput.command === "string" ? toolInput.command
+      : extractToolPaths(toolInput)[0]
+      ?? toolName
+      ?? "Permission requested";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "blocked",
+      detail: shorten(detail, 88),
+      updatedAt,
+      paths: extractToolPaths(toolInput).length > 0 ? extractToolPaths(toolInput) : [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (hookEventName === "Elicitation") {
+    const detail =
+      typeof input.record.prompt === "string" ? input.record.prompt
+      : typeof input.record.message === "string" ? input.record.message
+      : "Waiting on input";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "waiting",
+      detail: shorten(detail, 88),
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (hookEventName === "SubagentStart") {
+    const detail =
+      typeof input.record.agent_type === "string" ? `Spawning ${input.record.agent_type} subagent`
+      : "Spawning subagent";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "delegating",
+      detail,
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (hookEventName === "SubagentStop") {
+    const detail =
+      typeof input.record.agent_type === "string" ? `${input.record.agent_type} subagent finished`
+      : "Subagent finished";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "done",
+      detail,
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (hookEventName === "StopFailure") {
+    const detail =
+      typeof input.record.error === "string" ? input.record.error
+      : typeof input.record.reason === "string" ? input.record.reason
+      : "Claude turn failed";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "blocked",
+      detail: shorten(detail, 88),
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (hookEventName === "Stop" || hookEventName === "TaskCompleted") {
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "done",
+      detail: hookEventName === "TaskCompleted" ? "Task completed" : "Finished recently",
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed"
+    };
+  }
+
+  if (hookEventName === "PreToolUse" || hookEventName === "PostToolUse" || hookEventName === "PostToolUseFailure") {
+    return claudeToolSummary({
+      sessionId: input.sessionId,
+      model: input.model,
+      fallbackCwd: cwd,
+      gitBranch: input.gitBranch,
+      updatedAt,
+      toolName,
+      toolInput,
+      failed: hookEventName === "PostToolUseFailure"
+    });
+  }
+
+  return null;
 }
 
 function sourceKindFromModel(model: string | null): string {
@@ -374,7 +621,8 @@ function summariseClaudeSession(
   sessionId: string,
   fallbackCwd: string,
   records: Array<Record<string, unknown>>,
-  fallbackUpdatedAt: number
+  fallbackUpdatedAt: number,
+  hookRecords: Array<Record<string, unknown>> = []
 ): ClaudeActivitySummary {
   const ordered = [...records].sort((left, right) => recordTimestampMs(left, fallbackUpdatedAt) - recordTimestampMs(right, fallbackUpdatedAt));
   const latestRecord = ordered.at(-1) ?? null;
@@ -388,80 +636,39 @@ function summariseClaudeSession(
   const updatedAtMs = latestRecord ? recordTimestampMs(latestRecord, fallbackUpdatedAt) : fallbackUpdatedAt;
   const updatedAt = new Date(updatedAtMs).toISOString();
   const gitBranch = latestRecord && typeof latestRecord.gitBranch === "string" ? latestRecord.gitBranch : null;
+  const latestHookSummary = [...hookRecords]
+    .reverse()
+    .map((record) => summariseClaudeHookRecord({
+      sessionId,
+      model,
+      fallbackCwd,
+      gitBranch,
+      record,
+      fallbackUpdatedAt
+    }))
+    .find((summary): summary is ClaudeActivitySummary => Boolean(summary));
+
+  if (latestHookSummary) {
+    return latestHookSummary;
+  }
 
   if (latestToolRecord) {
     const tool = extractAssistantTool(latestToolRecord);
     if (tool) {
-      const toolName = tool.name.trim();
-      const toolPaths = extractToolPaths(tool.input);
-      const primaryPath = toolPaths[0] ?? fallbackCwd;
-
-      if (/(edit|write|multiedit)/i.test(toolName)) {
+      const toolSummary = claudeToolSummary({
+        sessionId,
+        model,
+        fallbackCwd,
+        gitBranch,
+        updatedAt,
+        toolName: tool.name,
+        toolInput: tool.input,
+        failed: false
+      });
+      if (toolSummary) {
         return {
-          label: labelFromModel(model, sessionId),
-          sourceKind: sourceKindFromModel(model),
-          state: "editing",
-          detail: primaryPath ? `Editing ${primaryPath}` : "Editing files",
-          updatedAt,
-          paths: toolPaths.length > 0 ? toolPaths : [fallbackCwd],
-          activityEvent: {
-            type: "fileChange",
-            action: "edited",
-            path: primaryPath ?? null,
-            title: primaryPath ? `edit ${primaryPath}` : "Editing files",
-            isImage: isImagePath(primaryPath ?? null)
-          },
-          gitBranch
-        };
-      }
-
-      if (/(bash|shell)/i.test(toolName)) {
-        const command =
-          typeof tool.input.command === "string" ? tool.input.command
-          : typeof tool.input.cmd === "string" ? tool.input.cmd
-          : toolName;
-        const cwd = typeof tool.input.cwd === "string" ? tool.input.cwd : fallbackCwd;
-        return {
-          label: labelFromModel(model, sessionId),
-          sourceKind: sourceKindFromModel(model),
-          state: looksLikeValidationCommand(command) ? "validating" : "running",
-          detail: command,
-          updatedAt,
-          paths: cwd ? [cwd] : [],
-          activityEvent: {
-            type: "commandExecution",
-            action: "ran",
-            path: cwd ?? null,
-            title: command,
-            isImage: false
-          },
-          gitBranch
-        };
-      }
-
-      if (/(read|grep|glob|search|ls|list)/i.test(toolName)) {
-        return {
-          label: labelFromModel(model, sessionId),
-          sourceKind: sourceKindFromModel(model),
-          state: "scanning",
-          detail: primaryPath ? `Reading ${primaryPath}` : `Using ${toolName}`,
-          updatedAt,
-          paths: toolPaths.length > 0 ? toolPaths : [fallbackCwd],
-          activityEvent: null,
-          gitBranch
-        };
-      }
-
-      if (/(task|delegate|agent)/i.test(toolName)) {
-        return {
-          label: labelFromModel(model, sessionId),
-          sourceKind: sourceKindFromModel(model),
-          state: "delegating",
-          detail: "Delegating work",
-          updatedAt,
-          paths: [fallbackCwd],
-          activityEvent: null,
-          gitBranch
+          ...toolSummary,
+          confidence: "inferred"
         };
       }
     }
@@ -478,7 +685,8 @@ function summariseClaudeSession(
       updatedAt,
       paths: paths.length > 0 ? paths : [fallbackCwd],
       activityEvent: null,
-      gitBranch
+      gitBranch,
+      confidence: "inferred"
     };
   }
 
@@ -507,7 +715,8 @@ function summariseClaudeSession(
               isImage: false
             }
           : null,
-      gitBranch
+      gitBranch,
+      confidence: "inferred"
     };
   }
 
@@ -519,7 +728,8 @@ function summariseClaudeSession(
     updatedAt,
     paths: [fallbackCwd],
     activityEvent: null,
-    gitBranch
+    gitBranch,
+    confidence: "inferred"
   };
 }
 
@@ -557,7 +767,15 @@ export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise
     const records = [...sample.headRecords, ...sample.tailRecords];
     const fallbackCwd = extractProjectRoot(records) ?? canonicalRoot;
     const sessionId = file.path.match(/([0-9a-f-]{36})\.jsonl$/i)?.[1] ?? file.path;
-    const summary = summariseClaudeSession(sessionId, fallbackCwd, records, file.updatedAt);
+    const hookSample = await readLogSample(claudeHooksFilePath(canonicalRoot, sessionId)).catch(() => null);
+    const hookRecords = hookSample ? [...hookSample.headRecords, ...hookSample.tailRecords] : [];
+    const summary = summariseClaudeSession(
+      sessionId,
+      fallbackCwd,
+      records,
+      Math.max(file.updatedAt, hookSample?.mtimeMs ?? 0),
+      hookRecords
+    );
     const appearance = await ensureAgentAppearance(canonicalRoot, `claude:${sessionId}`);
 
     agents.push({
@@ -568,6 +786,7 @@ export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise
       parentThreadId: null,
       depth: 0,
       isCurrent: false,
+      isOngoing: false,
       statusText: "claude",
       role: "claude",
       nickname: null,
@@ -578,6 +797,7 @@ export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise
       roomId: null,
       appearance,
       updatedAt: summary.updatedAt,
+      stoppedAt: null,
       paths: summary.paths,
       activityEvent: summary.activityEvent,
       latestMessage: summary.activityEvent?.type === "agentMessage" ? summary.activityEvent.title : null,
@@ -591,7 +811,7 @@ export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise
         originUrl: null
       },
       provenance: "claude",
-      confidence: "inferred",
+      confidence: summary.confidence,
       needsUser: null,
       liveSubscription: "readOnly"
     });

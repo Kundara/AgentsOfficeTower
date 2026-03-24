@@ -1,6 +1,6 @@
 import { renderClientScript } from "./client-script";
 import { CLIENT_STYLES } from "./client-styles";
-import { PIXEL_OFFICE_EVENT_ICON_URLS, PIXEL_OFFICE_MANIFEST } from "./pixel-office";
+import { PIXEL_OFFICE_EVENT_ICON_URLS, PIXEL_OFFICE_MANIFEST, PIXEL_OFFICE_THREAD_ITEM_ICON_URLS } from "./pixel-office";
 import type { ServerOptions } from "./server-types";
 
 export function renderHtml(options: ServerOptions): string {
@@ -33,6 +33,7 @@ export function renderHtml(options: ServerOptions): string {
               <button id="terminal-view-button" data-view="terminal">Terminal</button>
             </div>
             <button id="refresh-button">Refresh</button>
+            <button id="preview-toasts-button">Preview Toasts</button>
             <button id="scaffold-button">Scaffold Rooms XML</button>
             <div id="connection-pill" class="status-pill state-connecting">Connecting</div>
           </div>
@@ -49,16 +50,19 @@ export function renderHtml(options: ServerOptions): string {
       </section>
 
       <section class="layout">
-        <main class="panel">
+        <main id="workspace-panel" class="panel workspace-panel">
           <div class="panel-header">
             <strong id="center-title">Fleet</strong>
+            <div class="panel-actions">
+              <button id="workspace-focus-button" class="toggle-button" type="button" hidden aria-pressed="false" title="Expand selected workspace (F)">[] Expand</button>
+            </div>
           </div>
           <div class="panel-body">
             <div id="center-content"></div>
           </div>
         </main>
 
-        <aside class="panel">
+        <aside id="session-panel" class="panel">
           <div class="panel-header">
             <strong>Sessions</strong>
             <span id="rooms-path" class="muted"></span>
@@ -71,7 +75,8 @@ export function renderHtml(options: ServerOptions): string {
     <script>${renderClientScript({
       projectsJson,
       pixelOfficeJson,
-      eventIconUrlsJson: JSON.stringify(PIXEL_OFFICE_EVENT_ICON_URLS)
+      eventIconUrlsJson: JSON.stringify(PIXEL_OFFICE_EVENT_ICON_URLS),
+      threadItemIconUrlsJson: JSON.stringify(PIXEL_OFFICE_THREAD_ITEM_ICON_URLS)
     })}</script>
   </body>
 </html>`;

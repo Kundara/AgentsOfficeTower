@@ -2,21 +2,25 @@ interface ClientScriptOptions {
   projectsJson: string;
   pixelOfficeJson: string;
   eventIconUrlsJson: string;
+  threadItemIconUrlsJson: string;
 }
 
 export function renderClientScript({
   projectsJson,
   pixelOfficeJson,
-  eventIconUrlsJson
+  eventIconUrlsJson,
+  threadItemIconUrlsJson
 }: ClientScriptOptions): string {
   return `
 
       const configuredProjects = ${projectsJson};
       const pixelOffice = ${pixelOfficeJson};
       const eventIconUrls = ${eventIconUrlsJson};
+      const threadItemIconUrls = ${threadItemIconUrlsJson};
       const params = new URLSearchParams(window.location.search);
       const initialProject = params.get("project") || "all";
       const initialView = params.get("view") || "map";
+      const initialWorkspaceFullscreen = params.get("focus") === "1" && initialProject !== "all";
       const initialActiveOnly = true;
       const screenshotMode = params.get("screenshot") === "1";
       if (screenshotMode) {
@@ -26,6 +30,7 @@ export function renderClientScript({
         fleet: null,
         selected: initialProject,
         view: initialView === "terminal" ? "terminal" : "map",
+        workspaceFullscreen: initialWorkspaceFullscreen,
         activeOnly: initialActiveOnly,
         connection: screenshotMode ? "snapshot" : "connecting",
         focusedSessionKeys: []
@@ -38,13 +43,27 @@ export function renderClientScript({
       let departingAgents = [];
       let notifications = [];
       let notificationPruneTimer = null;
+      let workstationEffectPruneTimer = null;
+      let toastPreviewRun = 0;
+      let toastPreviewTimerIds = [];
+      const workstationEffects = new Map();
       const seenNotificationKeys = new Set();
       const recentNotificationTimes = new Map();
+      const recentToastLineTimes = new Map();
       const NOTIFICATION_TTL_MS = 2400;
+      const MESSAGE_NOTIFICATION_TTL_MS = 4600;
+      const COMMAND_NOTIFICATION_BASE_TTL_MS = 2600;
+      const COMMAND_NOTIFICATION_LINE_TTL_MS = 1200;
+      const FILE_CHANGE_COMPUTER_FX_MS = 330;
       const NOTIFICATION_DEDUPE_WINDOW_MS = 1000;
+      const TOAST_LINE_DEDUPE_MS = 45000;
       const NOTIFICATION_PRIORITY_DEFAULT = 0;
       const NOTIFICATION_PRIORITY_MESSAGE = 2;
+      const SCENE_RECENT_LEAD_LIMIT = 4;
+      const SESSION_RECENT_LEAD_LIMIT = 10;
+      const RESTING_DORMANT_MS = 15 * 60 * 1000;
       let lastSceneRenderToken = null;
+      let lastFleetSemanticToken = null;
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));
       function projectInfo(projectRoot) {
@@ -70,6 +89,75 @@ export function renderClientScript({
         target.set(agentKey(snapshot.projectRoot, agent), sceneState);
       }
 
+      function triggerWorkstationFileChangeEffect(entry) {
+        if (!entry || !entry.isFileChange || !entry.key) {
+          return;
+        }
+        const previous = workstationEffects.get(entry.key);
+        const token = Number.isFinite(previous?.token) ? Number(previous.token) + 1 : 1;
+        workstationEffects.set(entry.key, {
+          token,
+          expiresAt: Date.now() + FILE_CHANGE_COMPUTER_FX_MS
+        });
+        scheduleWorkstationEffectPrune();
+      }
+
+      function pruneWorkstationEffects() {
+        const now = Date.now();
+        workstationEffects.forEach((effect, key) => {
+          if (!effect || !Number.isFinite(effect.expiresAt) || effect.expiresAt <= now) {
+            workstationEffects.delete(key);
+          }
+        });
+        scheduleWorkstationEffectPrune();
+      }
+
+      function scheduleWorkstationEffectPrune() {
+        if (workstationEffectPruneTimer) {
+          clearTimeout(workstationEffectPruneTimer);
+          workstationEffectPruneTimer = null;
+        }
+        if (workstationEffects.size === 0) {
+          syncWorkstationEffects();
+          return;
+        }
+        const now = Date.now();
+        const nextExpiry = Math.min(...Array.from(workstationEffects.values()).map((effect) => Number(effect.expiresAt) || now));
+        const delay = Math.max(16, nextExpiry - now);
+        workstationEffectPruneTimer = setTimeout(() => {
+          workstationEffectPruneTimer = null;
+          pruneWorkstationEffects();
+          syncWorkstationEffects();
+        }, delay);
+        syncWorkstationEffects();
+      }
+
+      function syncWorkstationEffects() {
+        const now = Date.now();
+        document.querySelectorAll("[data-workstation-computer]").forEach((element) => {
+          if (!(element instanceof HTMLElement)) {
+            return;
+          }
+          const key = element.dataset.workstationComputer || "";
+          const effect = workstationEffects.get(key);
+          const isActive = Boolean(effect && Number(effect.expiresAt) > now);
+          const token = isActive ? String(effect.token) : "";
+          if (!isActive) {
+            element.classList.remove("file-change-hit");
+            delete element.dataset.workstationFxToken;
+            return;
+          }
+          if (element.dataset.workstationFxToken !== token) {
+            element.classList.remove("file-change-hit");
+            void element.offsetWidth;
+            element.dataset.workstationFxToken = token;
+          }
+          if (!element.classList.contains("file-change-hit")) {
+            element.classList.add("file-change-hit");
+          }
+        });
+      }
+
       function roomEntranceLayout(roomPixelWidth, compact) {
         const doorScale = compact ? 1.42 : 1.7;
         const clockScale = compact ? 0.92 : 1.08;
@@ -93,6 +181,76 @@ export function renderClientScript({
         };
       }
 
+      function pathDeltaFromStart(startX, startY, targetX, targetY) {
+        return {
+          pathX: Math.round(startX - targetX),
+          pathY: Math.round(startY - targetY)
+        };
+      }
+
+      function sceneStateForAgent(snapshot, agentId) {
+        if (!snapshot || !agentId) {
+          return null;
+        }
+        const key = snapshot.projectRoot + "::" + agentId;
+        return (sceneStateDraft && sceneStateDraft.get(key))
+          || renderedAgentSceneState.get(key)
+          || null;
+      }
+
+      function subagentSplitPathDelta(snapshot, agent, targetX, targetY, avatarWidth, avatarHeight) {
+        if (!snapshot || !agent || !agent.parentThreadId) {
+          return null;
+        }
+        const parentSceneState = sceneStateForAgent(snapshot, agent.parentThreadId);
+        if (!parentSceneState) {
+          return null;
+        }
+        if (parentSceneState.roomId && agent.roomId && parentSceneState.roomId !== agent.roomId) {
+          return null;
+        }
+        const parentAvatarX = Number.isFinite(parentSceneState.avatarX)
+          ? Number(parentSceneState.avatarX)
+          : Number.isFinite(parentSceneState.x) ? Number(parentSceneState.x) : null;
+        const parentAvatarY = Number.isFinite(parentSceneState.avatarY)
+          ? Number(parentSceneState.avatarY)
+          : Number.isFinite(parentSceneState.y) ? Number(parentSceneState.y) : null;
+        if (!Number.isFinite(parentAvatarX) || !Number.isFinite(parentAvatarY)) {
+          return null;
+        }
+        const parentAvatarWidth = Number.isFinite(parentSceneState.avatarWidth)
+          ? Number(parentSceneState.avatarWidth)
+          : avatarWidth;
+        const parentAvatarHeight = Number.isFinite(parentSceneState.avatarHeight)
+          ? Number(parentSceneState.avatarHeight)
+          : avatarHeight;
+        const seed = stableHash(agent.id + "::split-spawn");
+        const horizontalDirection = seed % 2 === 0 ? -1 : 1;
+        const horizontalOffset = horizontalDirection * (10 + seed % 18);
+        const verticalOffset = -4 + (Math.floor(seed / 19) % 11);
+        const spawnCenterX = parentAvatarX + parentAvatarWidth / 2 + horizontalOffset;
+        const spawnFloorY = parentAvatarY + parentAvatarHeight * 0.92 + verticalOffset;
+        const spawnX = Math.round(spawnCenterX - avatarWidth / 2);
+        const spawnY = Math.round(spawnFloorY - avatarHeight);
+        return pathDeltaFromStart(spawnX, spawnY, targetX, targetY);
+      }
+
+      function enteringMotionState(snapshot, agent, entrance, targetX, targetY, avatarWidth, avatarHeight) {
+        const splitPath = subagentSplitPathDelta(snapshot, agent, targetX, targetY, avatarWidth, avatarHeight);
+        if (splitPath) {
+          return {
+            mode: "entering from-boss",
+            path: splitPath
+          };
+        }
+        return {
+          mode: "entering",
+          path: entrance
+            ? agentPathDelta(entrance, targetX, targetY, avatarWidth, avatarHeight)
+            : { pathX: 0, pathY: 0 }
+        };
+      }
+
       function motionShellClass(mode) {
         return mode ? \`office-avatar-shell \${mode}\` : "office-avatar-shell";
       }
@@ -100,6 +258,7 @@ export function renderClientScript({
       const mapViewButton = document.getElementById("map-view-button");
       const terminalViewButton = document.getElementById("terminal-view-button");
       const refreshButton = document.getElementById("refresh-button");
+      const previewToastsButton = document.getElementById("preview-toasts-button");
       const scaffoldButton = document.getElementById("scaffold-button");
       const connectionPill = document.getElementById("connection-pill");
       const stamp = document.getElementById("stamp");
@@ -107,6 +266,7 @@ export function renderClientScript({
       const projectCount = document.getElementById("project-count");
       const projectTabs = document.getElementById("project-tabs");
       const centerTitle = document.getElementById("center-title");
+      const workspaceFocusButton = document.getElementById("workspace-focus-button");
       const centerContent = document.getElementById("center-content");
       const sessionList = document.getElementById("session-list");
       const roomsPath = document.getElementById("rooms-path");
@@ -117,6 +277,8 @@ export function renderClientScript({
         else url.searchParams.set("project", state.selected);
         if (state.view === "map") url.searchParams.delete("view");
         else url.searchParams.set("view", state.view);
+        if (state.workspaceFullscreen && state.selected !== "all") url.searchParams.set("focus", "1");
+        else url.searchParams.delete("focus");
         url.searchParams.delete("active");
         url.searchParams.delete("history");
         window.history.replaceState({}, "", url);
@@ -124,6 +286,9 @@ export function renderClientScript({
 
       function setSelection(nextSelection) {
         state.selected = nextSelection;
+        if (nextSelection === "all") {
+          state.workspaceFullscreen = false;
+        }
         syncUrl();
         render();
       }
@@ -132,6 +297,55 @@ export function renderClientScript({
         state.view = nextView === "terminal" ? "terminal" : "map";
         syncUrl();
         render();
+      }
+
+      function canFocusWorkspace() {
+        return Boolean(state.fleet && state.selected !== "all" && currentSnapshot());
+      }
+
+      function syncWorkspaceFullscreenUi() {
+        const isVisible = canFocusWorkspace();
+        const isActive = isVisible && state.workspaceFullscreen;
+        document.body.classList.toggle("workspace-focus", isActive);
+        if (!(workspaceFocusButton instanceof HTMLButtonElement)) {
+          return;
+        }
+        workspaceFocusButton.hidden = !isVisible;
+        workspaceFocusButton.classList.toggle("active", isActive);
+        workspaceFocusButton.setAttribute("aria-pressed", isActive ? "true" : "false");
+        workspaceFocusButton.textContent = isActive ? "Close" : "[] Expand";
+        workspaceFocusButton.title = isActive
+          ? "Close workspace focus (F)"
+          : "Expand selected workspace (F)";
+      }
+
+      function setWorkspaceFullscreen(nextValue) {
+        const normalized = Boolean(nextValue) && canFocusWorkspace();
+        if (state.workspaceFullscreen === normalized) {
+          syncWorkspaceFullscreenUi();
+          return;
+        }
+        state.workspaceFullscreen = normalized;
+        lastSceneRenderToken = null;
+        syncUrl();
+        render();
+      }
+
+      function toggleWorkspaceFullscreen() {
+        if (!canFocusWorkspace()) {
+          return;
+        }
+        setWorkspaceFullscreen(!state.workspaceFullscreen);
+      }
+
+      function isTypingTarget(target) {
+        if (!(target instanceof HTMLElement)) {
+          return false;
+        }
+        if (target.isContentEditable) {
+          return true;
+        }
+        return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='plaintext-only']"));
       }
 
       function setConnection(nextConnection) {
@@ -147,8 +361,12 @@ export function renderClientScript({
       }
 
       function countsForSnapshot(snapshot) {
-        const counters = { total: snapshot.agents.length, active: 0, waiting: 0, blocked: 0, cloud: 0 };
+        const counters = { total: 0, active: 0, waiting: 0, blocked: 0, cloud: 0 };
         for (const agent of snapshot.agents) {
+          if (!isBusyAgent(agent)) {
+            continue;
+          }
+          counters.total += 1;
           if (agent.state === "waiting") counters.waiting += 1;
           else if (agent.state === "blocked") counters.blocked += 1;
           else if (agent.state === "cloud") counters.cloud += 1;
@@ -168,7 +386,11 @@ export function renderClientScript({
           && Boolean(agent.threadId || agent.source === "claude");
       }
 
-      function recentLeadAgents(snapshot, limit = 4) {
+      function isRecentSessionCandidate(agent) {
+        return agent.source !== "cloud" && agent.source !== "presence";
+      }
+
+      function recentLeadAgents(snapshot, limit = SCENE_RECENT_LEAD_LIMIT) {
         const activeIds = new Set(snapshot.agents.filter(isBusyAgent).map((agent) => agent.id));
         return [...snapshot.agents]
           .filter((agent) => isRecentLeadCandidate(agent) && !activeIds.has(agent.id))
@@ -176,8 +398,28 @@ export function renderClientScript({
           .slice(0, limit);
       }
 
+      function recentSessionAgents(snapshot, limit = SESSION_RECENT_LEAD_LIMIT) {
+        const activeIds = new Set(snapshot.agents.filter(isBusyAgent).map((agent) => agent.id));
+        return [...snapshot.agents]
+          .filter((agent) => isRecentSessionCandidate(agent) && !activeIds.has(agent.id))
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .slice(0, limit);
+      }
+
       function busyCount(snapshot) {
         return snapshot.agents.filter(isBusyAgent).length;
+      }
+
+      function notificationSubjectKey(projectRoot, agent, threadId) {
+        const explicitThreadId = typeof threadId === "string" && threadId.length > 0 ? threadId : null;
+        const agentThreadId = agent && typeof agent.threadId === "string" && agent.threadId.length > 0
+          ? agent.threadId
+          : null;
+        const subjectThreadId = explicitThreadId || agentThreadId;
+        if (subjectThreadId) {
+          return \`\${projectRoot}::thread::\${subjectThreadId}\`;
+        }
+        return \`\${projectRoot}::agent::\${agent && agent.id ? agent.id : "unknown"}\`;
       }
 
       function sceneAgentToken(agent) {
@@ -203,12 +445,69 @@ export function renderClientScript({
         ].join("::");
       }
 
-      function viewSnapshot(snapshot) {
+      function eventSnapshotToken(event) {
+        if (!event) {
+          return "";
+        }
+        return [
+          event.id || "",
+          event.threadId || "",
+          event.kind || "",
+          event.phase || "",
+          event.method || "",
+          event.createdAt || "",
+          event.itemId || "",
+          event.requestId || "",
+          event.title || "",
+          event.detail || "",
+          event.command || "",
+          event.path || ""
+        ].join(":");
+      }
+
+      function roomsSnapshotToken(rooms) {
+        if (!rooms) {
+          return "";
+        }
+        return JSON.stringify({
+          generated: rooms.generated,
+          filePath: rooms.filePath,
+          rooms: rooms.rooms
+        });
+      }
+
+      function projectSemanticToken(snapshot) {
+        return [
+          snapshot.projectRoot,
+          roomsSnapshotToken(snapshot.rooms),
+          ...snapshot.agents.map(sceneAgentToken),
+          ...((snapshot.events || []).map(eventSnapshotToken)),
+          ...((snapshot.notes || []).map((note) => String(note || "")))
+        ].join("::");
+      }
+
+      function fleetSemanticToken(fleet) {
+        if (!fleet || !Array.isArray(fleet.projects)) {
+          return "";
+        }
+        return fleet.projects.map(projectSemanticToken).join("||");
+      }
+
+      function viewSnapshot(snapshot, recentLeadLimit = SCENE_RECENT_LEAD_LIMIT) {
         const activeAgents = snapshot.agents.filter(isBusyAgent);
-        const recentLeads = recentLeadAgents(snapshot, 4);
+        const recentLeads = recentLeadAgents(snapshot, recentLeadLimit);
         return {
           ...snapshot,
           agents: [...activeAgents, ...recentLeads]
+        };
+      }
+
+      function viewSessionSnapshot(snapshot, recentSessionLimit = SESSION_RECENT_LEAD_LIMIT) {
+        const activeAgents = snapshot.agents.filter(isBusyAgent);
+        const recentAgents = recentSessionAgents(snapshot, recentSessionLimit);
+        return {
+          ...snapshot,
+          agents: [...activeAgents, ...recentAgents]
         };
       }
 
@@ -291,6 +590,10 @@ export function renderClientScript({
         return snapshot.agents.filter((agent) => agent.parentThreadId === parentThreadId);
       }
 
+      function liveChildAgentsFor(snapshot, parentThreadId) {
+        return childAgentsFor(snapshot, parentThreadId).filter((agent) => isBusyAgent(agent));
+      }
+
       function isLeadSession(snapshot, agent) {
         return agent.source !== "cloud"
           && !agent.parentThreadId
@@ -340,7 +643,7 @@ export function renderClientScript({
         if (!agent) {
           return "";
         }
-        return \` data-focus-agent="true" data-focus-key="\${escapeHtml(focusAgentKey(snapshot, agent))}"\`;
+        return \` data-focus-agent="true" data-focus-key="\${escapeHtml(focusAgentKey(snapshot, agent))}" data-focus-keys="\${escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)))}"\`;
       }
 
       function stationRoleLabel(role, count) {
@@ -431,6 +734,248 @@ export function renderClientScript({
             }
             return "#d7b7ff";
         }
+      }
+
+      function fixedSceneLayoutConfig(compact) {
+        return compact
+          ? {
+              deskStartRatio: 0.2,
+              deskColumnGap: 16,
+              deskRowGap: 0,
+              deskCubicleGap: 14,
+              cubiclesPerColumn: 2,
+              cubicleRows: 3,
+              deskTopY: 50,
+              podWidth: 120,
+              podHeight: 66,
+              bossLaneX: 14,
+              bossLaneWidth: 124,
+              bossOfficeGapToDesk: 14,
+              bossOfficeTopY: 46,
+              bossOfficeGapY: 16,
+              bossOfficeWidth: 108,
+              bossOfficeHeight: 70
+            }
+          : {
+              deskStartRatio: 0.2,
+              deskColumnGap: 20,
+              deskRowGap: 0,
+              deskCubicleGap: 18,
+              cubiclesPerColumn: 2,
+              cubicleRows: 3,
+              deskTopY: 58,
+              podWidth: 152,
+              podHeight: 86,
+              bossLaneX: 18,
+              bossLaneWidth: 152,
+              bossOfficeGapToDesk: 18,
+              bossOfficeTopY: 54,
+              bossOfficeGapY: 20,
+              bossOfficeWidth: 136,
+              bossOfficeHeight: 92
+            };
+      }
+
+      function isBossOfficeCandidate(snapshot, agent) {
+        return isLeadSession(snapshot, agent) && liveChildAgentsFor(snapshot, agent.id).length > 1;
+      }
+
+      function sortedBossOfficeAgents(snapshot, agents) {
+        return [...agents].sort((left, right) => {
+          const childDelta = liveChildAgentsFor(snapshot, right.id).length - liveChildAgentsFor(snapshot, left.id).length;
+          if (childDelta !== 0) {
+            return childDelta;
+          }
+          return compareAgentsForDeskLayout(snapshot, left, right);
+        });
+      }
+
+      function buildBossOfficeSlots(config, count) {
+        return Array.from({ length: count }, (_, index) => ({
+          id: \`office-\${index}\`,
+          kind: "office",
+          order: index,
+          x: config.bossLaneX,
+          y: config.bossOfficeTopY + index * (config.bossOfficeHeight + config.bossOfficeGapY),
+          width: config.bossOfficeWidth,
+          height: config.bossOfficeHeight
+        }));
+      }
+
+      function buildDeskSlots(config, roomPixelWidth, podCount, hasBossLane) {
+        const slotsPerColumn = config.cubiclesPerColumn * config.cubicleRows;
+        const columnCount = Math.max(1, Math.ceil(Math.max(1, podCount) / slotsPerColumn));
+        const deskStartX = Math.max(
+          Math.round(roomPixelWidth * config.deskStartRatio),
+          hasBossLane ? config.bossLaneX + config.bossLaneWidth + config.bossOfficeGapToDesk : 0
+        );
+        const slots = [];
+        for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+          const columnX = deskStartX + columnIndex * (config.podWidth + config.deskColumnGap);
+          for (let cubicleIndex = 0; cubicleIndex < config.cubiclesPerColumn; cubicleIndex += 1) {
+            const cubicleBaseY = config.deskTopY
+              + cubicleIndex * (config.cubicleRows * config.podHeight + (config.cubicleRows - 1) * config.deskRowGap + config.deskCubicleGap);
+            for (let rowIndex = 0; rowIndex < config.cubicleRows; rowIndex += 1) {
+              slots.push({
+                id: \`pod-\${columnIndex}-\${cubicleIndex}-\${rowIndex}\`,
+                kind: "desk",
+                order: columnIndex * slotsPerColumn + cubicleIndex * config.cubicleRows + rowIndex,
+                columnIndex,
+                cubicleIndex,
+                rowIndex,
+                cubicleId: \`cubicle-\${columnIndex}-\${cubicleIndex}\`,
+                x: columnX,
+                y: cubicleBaseY + rowIndex * (config.podHeight + config.deskRowGap),
+                width: config.podWidth,
+                height: config.podHeight,
+                capacity: 2
+              });
+            }
+          }
+        }
+        return slots;
+      }
+
+      function previousSceneSlotId(snapshot, agent) {
+        const sceneState = sceneStateForAgent(snapshot, agent.id);
+        return sceneState && sceneState.slotId ? String(sceneState.slotId) : null;
+      }
+
+      function assignAgentsToOfficeSlots(snapshot, agents, slots) {
+        const sortedAgents = sortedBossOfficeAgents(snapshot, agents);
+        const slotById = new Map(slots.map((slot) => [slot.id, slot]));
+        const assignments = [];
+        const usedSlots = new Set();
+        const remaining = [];
+
+        for (const agent of sortedAgents) {
+          const previousSlotId = previousSceneSlotId(snapshot, agent);
+          if (previousSlotId && slotById.has(previousSlotId) && !usedSlots.has(previousSlotId)) {
+            assignments.push({ slot: slotById.get(previousSlotId), agent });
+            usedSlots.add(previousSlotId);
+            continue;
+          }
+          remaining.push(agent);
+        }
+
+        const freeSlots = slots.filter((slot) => !usedSlots.has(slot.id)).sort((left, right) => left.order - right.order);
+        remaining.forEach((agent, index) => {
+          const slot = freeSlots[index];
+          if (slot) {
+            assignments.push({ slot, agent });
+          }
+        });
+
+        return assignments.sort((left, right) => left.slot.order - right.slot.order);
+      }
+
+      function assignAgentsToDeskSlots(snapshot, agents, slots) {
+        const slotById = new Map(slots.map((slot) => [slot.id, slot]));
+        const cubicles = new Map();
+        slots.forEach((slot) => {
+          const existing = cubicles.get(slot.cubicleId) || { id: slot.cubicleId, slots: [], agents: [] };
+          existing.slots.push(slot);
+          cubicles.set(slot.cubicleId, existing);
+        });
+        cubicles.forEach((cubicle) => {
+          cubicle.slots.sort((left, right) => left.order - right.order);
+        });
+
+        const slotAgents = new Map();
+        const remainingAgents = [];
+
+        for (const agent of [...agents].sort((left, right) => compareAgentsForDeskLayout(snapshot, left, right))) {
+          const previousSlotId = previousSceneSlotId(snapshot, agent);
+          const slot = previousSlotId ? slotById.get(previousSlotId) : null;
+          if (!slot) {
+            remainingAgents.push(agent);
+            continue;
+          }
+          const assigned = slotAgents.get(slot.id) || [];
+          if (assigned.length >= (slot.capacity || 1)) {
+            remainingAgents.push(agent);
+            continue;
+          }
+          assigned.push(agent);
+          slotAgents.set(slot.id, assigned);
+          cubicles.get(slot.cubicleId)?.agents.push(agent);
+        }
+
+        const roleGroups = groupAgentsByRole(remainingAgents);
+        for (const group of roleGroups) {
+          const queue = [...group.agents];
+          const preferredCubicles = [...cubicles.values()].sort((left, right) => {
+            const leftRoles = new Set(left.agents.map((agent) => agentRole(agent)));
+            const rightRoles = new Set(right.agents.map((agent) => agentRole(agent)));
+            const leftMatches = leftRoles.has(group.role) ? 2 : leftRoles.size === 0 ? 1 : 0;
+            const rightMatches = rightRoles.has(group.role) ? 2 : rightRoles.size === 0 ? 1 : 0;
+            if (rightMatches !== leftMatches) {
+              return rightMatches - leftMatches;
+            }
+            return left.slots[0].order - right.slots[0].order;
+          });
+
+          preferredCubicles.forEach((cubicle) => {
+            while (queue.length > 0) {
+              const nextSlot = cubicle.slots.find((slot) => {
+                const assigned = slotAgents.get(slot.id) || [];
+                return assigned.length < (slot.capacity || 1);
+              });
+              if (!nextSlot) {
+                break;
+              }
+              const agent = queue.shift();
+              const assigned = slotAgents.get(nextSlot.id) || [];
+              assigned.push(agent);
+              slotAgents.set(nextSlot.id, assigned);
+              cubicle.agents.push(agent);
+            }
+          });
+        }
+
+        return [...slots]
+          .filter((slot) => (slotAgents.get(slot.id) || []).length > 0)
+          .map((slot) => ({
+            slot,
+            agents: slotAgents.get(slot.id).slice(0, slot.capacity || 1)
+          }))
+          .sort((left, right) => left.slot.order - right.slot.order);
+      }
+
+      function renderBossRelationshipLines(snapshot, roomId, roomPixelWidth, roomPixelHeight) {
+        const lineEntries = [];
+        for (const agent of snapshot.agents) {
+          if (!isBossOfficeCandidate(snapshot, agent)) {
+            continue;
+          }
+          const bossScene = sceneStateForAgent(snapshot, agent.id);
+          if (!bossScene || bossScene.roomId !== roomId) {
+            continue;
+          }
+          const childStates = childAgentsFor(snapshot, agent.id)
+            .map((child) => ({ child, sceneState: sceneStateForAgent(snapshot, child.id) }))
+            .filter((entry) => entry.sceneState && entry.sceneState.roomId === roomId);
+          if (childStates.length === 0) {
+            continue;
+          }
+          const bossFocusKey = focusAgentKey(snapshot, agent);
+          const startX = Math.round(Number(bossScene.avatarX) + Number(bossScene.avatarWidth || 18) * 0.62);
+          const startY = Math.round(Number(bossScene.avatarY) + Number(bossScene.avatarHeight || 24) * 0.46);
+          for (const entry of childStates) {
+            const childScene = entry.sceneState;
+            const endX = Math.round(Number(childScene.avatarX) + Number(childScene.avatarWidth || 18) * 0.4);
+            const endY = Math.round(Number(childScene.avatarY) + Number(childScene.avatarHeight || 24) * 0.48);
+            const controlOffset = Math.max(18, Math.round((endX - startX) * 0.35));
+            const path = \`M \${startX} \${startY} C \${startX + controlOffset} \${startY}, \${endX - controlOffset} \${endY}, \${endX} \${endY}\`;
+            lineEntries.push(
+              \`<path class="relationship-line" data-focus-line="true" data-focus-boss-key="\${escapeHtml(bossFocusKey)}" d="\${path}" />\`
+            );
+          }
+        }
+        if (lineEntries.length === 0) {
+          return "";
+        }
+        return \`<svg class="relationship-lines" viewBox="0 0 \${roomPixelWidth} \${roomPixelHeight}" preserveAspectRatio="none" aria-hidden="true"><defs><marker id="relationship-arrow-\${escapeHtml(roomId)}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="rgba(255, 221, 120, 0.9)"></path></marker></defs>\${lineEntries.join("").replaceAll('class="relationship-line"', \`class="relationship-line" marker-end="url(#relationship-arrow-\${escapeHtml(roomId)})"\`)}</svg>\`;
       }
 
       function avatarForAgent(agent) {
@@ -528,8 +1073,11 @@ export function renderClientScript({
           return "";
         }
         const normalized = relativeLocation(projectRoot, String(location));
-        if (!normalized || normalized === ".") {
+        if (!normalized) {
           return normalized;
+        }
+        if (normalized === ".") {
+          return ".";
         }
         return wslToWindowsPath(normalized);
       }
@@ -569,6 +1117,25 @@ export function renderClientScript({
         return \`\${deltaDays}d ago\`;
       }
 
+      function updatedAtAgeMs(value) {
+        const updatedAt = Date.parse(value || "");
+        if (!Number.isFinite(updatedAt)) {
+          return null;
+        }
+        return Math.max(0, Date.now() - updatedAt);
+      }
+
+      function isDormantRestingAgent(agent) {
+        if (!agent || agent.state === "waiting" || agent.isCurrent) {
+          return false;
+        }
+        if (agent.state === "done") {
+          return true;
+        }
+        const ageMs = updatedAtAgeMs(agent.updatedAt);
+        return Number.isFinite(ageMs) && ageMs >= RESTING_DORMANT_MS && agent.isOngoing !== true;
+      }
+
       function agentKindLabel(snapshot, agent) {
         const role = agentRoleLabel(agent).toLowerCase();
         if (agent.source === "cloud") {
@@ -589,6 +1156,13 @@ export function renderClientScript({
           : titleCaseWords(agent.provenance) + " typed";
       }
 
+      function agentHoverSourceLabel(agent, summarySource) {
+        if (summarySource === "user") {
+          return agent.confidence === "inferred" ? "User inferred" : "User typed";
+        }
+        return agentProvenanceLabel(agent);
+      }
+
       function latestAgentMessage(agent) {
         const text = normalizeDisplayText("", agent && agent.latestMessage ? agent.latestMessage : "");
         return text || "";
@@ -597,17 +1171,18 @@ export function renderClientScript({
       function agentHoverSummary(snapshot, agent) {
         const message = latestAgentMessage(agent);
         if (message) {
-          return message;
+          return { text: message, source: "agent" };
         }
         const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail);
         const focus = primaryFocusPath(snapshot, agent);
+        const source = agent.activityEvent && agent.activityEvent.type === "userMessage" ? "user" : "agent";
         if (!focus) {
-          return detail;
+          return { text: detail, source };
         }
         if (["Thinking", "Idle", "Finished recently", "No turns yet"].includes(detail)) {
-          return \`In \${focus}\`;
+          return { text: \`In \${focus}\`, source };
         }
-        return detail;
+        return { text: detail, source };
       }
 
       function notificationLabel(event) {
@@ -650,6 +1225,9 @@ export function renderClientScript({
         const normalized = cleaned || String(fallback || "").trim();
         if (!normalized) {
           return "";
+        }
+        if (normalized === ".") {
+          return projectLabel(projectRoot) || "workspace";
         }
         const parts = normalized.split(/[\\\\/]/).filter(Boolean);
         return parts[parts.length - 1] || normalized;
@@ -704,14 +1282,18 @@ export function renderClientScript({
         return null;
       }
 
+      function eventIconUrlForThreadItemType(type) {
+        if (typeof type !== "string" || type.length === 0) {
+          return null;
+        }
+        if (Object.prototype.hasOwnProperty.call(threadItemIconUrls, type)) {
+          return threadItemIconUrls[type];
+        }
+        return null;
+      }
+
       function eventIconUrlForActivityType(type, options = {}) {
         switch (type) {
-          case "agentMessage":
-            return eventIconUrlForMethod("item/agentMessage/delta");
-          case "fileChange":
-            return eventIconUrlForMethod("item/fileChange/outputDelta");
-          case "commandExecution":
-            return options.isCommand ? null : eventIconUrlForMethod("item/commandExecution/outputDelta");
           case "approval":
             return eventIconUrlForMethod(
               options.approvalType === "fileChange"
@@ -721,7 +1303,7 @@ export function renderClientScript({
           case "input":
             return eventIconUrlForMethod("item/tool/requestUserInput");
           default:
-            return null;
+            return options.isCommand ? null : eventIconUrlForThreadItemType(type);
         }
       }
 
@@ -853,6 +1435,9 @@ export function renderClientScript({
         const latestMessageChanged = Boolean(agent.latestMessage) && agent.latestMessage !== (previous ? previous.latestMessage : null);
 
         if (latestMessageChanged) {
+          if (agentHasTypedEvent(snapshot, agent)) {
+            return null;
+          }
           return {
             kindClass: "update",
             label: "",
@@ -901,6 +1486,22 @@ export function renderClientScript({
             );
           }
 
+          if (event.type === "webSearch" && stateChanged) {
+            return {
+              kindClass: "update",
+              label: "",
+              labelIconUrl: eventIconUrlForActivityType("webSearch"),
+              title: webSearchNotificationTitle(snapshot.projectRoot, event.title, "completed"),
+              imageUrl: null,
+              anchor: "agent",
+              isFileChange: false,
+              isCommand: false,
+              priority: NOTIFICATION_PRIORITY_DEFAULT,
+              linesAdded: null,
+              linesRemoved: null
+            };
+          }
+
           if (event.type === "agentMessage" && stateChanged && agent.state !== "done") {
             return {
               kindClass: "update",
@@ -912,6 +1513,26 @@ export function renderClientScript({
               isFileChange: false,
               isCommand: false,
               priority: NOTIFICATION_PRIORITY_MESSAGE,
+              linesAdded: null,
+              linesRemoved: null
+            };
+          }
+
+          const genericIconUrl = eventIconUrlForActivityType(event.type);
+          if (genericIconUrl && stateChanged) {
+            return {
+              kindClass:
+                agent.state === "blocked" ? "blocked"
+                : agent.state === "waiting" ? "waiting"
+                : "update",
+              label: "",
+              labelIconUrl: genericIconUrl,
+              title: notificationTitle(snapshot, agent),
+              imageUrl: null,
+              anchor: "agent",
+              isFileChange: false,
+              isCommand: false,
+              priority: NOTIFICATION_PRIORITY_DEFAULT,
               linesAdded: null,
               linesRemoved: null
             };
@@ -976,6 +1597,25 @@ export function renderClientScript({
           : NOTIFICATION_PRIORITY_DEFAULT;
       }
 
+      function commandNotificationLifetimeMs(lineCount) {
+        const count = Math.max(1, Math.min(3, Number.isFinite(lineCount) ? Number(lineCount) : 1));
+        return COMMAND_NOTIFICATION_BASE_TTL_MS + count * COMMAND_NOTIFICATION_LINE_TTL_MS;
+      }
+
+      function notificationLifetimeMs(entry) {
+        const priority = Number.isFinite(entry && entry.priority)
+          ? Number(entry.priority)
+          : NOTIFICATION_PRIORITY_DEFAULT;
+        return priority >= NOTIFICATION_PRIORITY_MESSAGE ? MESSAGE_NOTIFICATION_TTL_MS : NOTIFICATION_TTL_MS;
+      }
+
+      function notificationExpiresAt(entry) {
+        if (Number.isFinite(entry && entry.expiresAt)) {
+          return Number(entry.expiresAt);
+        }
+        return Number(entry.createdAt) + notificationLifetimeMs(entry);
+      }
+
       function notificationSemanticKey(projectRoot, key, descriptor) {
         return [
           projectRoot,
@@ -994,16 +1634,33 @@ export function renderClientScript({
         ].join("::");
       }
 
+      function notificationInstanceId(projectRoot, subjectKey, descriptor, fallbackId) {
+        if (notificationPriorityValue(descriptor) >= NOTIFICATION_PRIORITY_MESSAGE) {
+          return [
+            "message",
+            projectRoot,
+            subjectKey,
+            normalizeMessageToastText(descriptor.title || "")
+          ].join("::");
+        }
+        return fallbackId;
+      }
+
       function notificationTitle(snapshot, agent) {
         const event = agent.activityEvent;
         if (!event) {
           return normalizeDisplayText(snapshot.projectRoot, agent.detail);
         }
-        if (event.path) {
+        if (event.type === "fileChange" && event.path) {
           const cleaned = cleanReportedPath(snapshot.projectRoot, event.path);
           return cleaned || normalizeDisplayText(snapshot.projectRoot, event.title || agent.detail);
         }
         return normalizeDisplayText(snapshot.projectRoot, event.title || agent.detail);
+      }
+
+      function webSearchNotificationTitle(projectRoot, query, phase = "completed") {
+        const normalizedQuery = normalizeDisplayText(projectRoot, query || "Web search");
+        return (phase === "started" ? "Searching web: " : "Searched web: ") + normalizedQuery;
       }
 
       function shortenNotificationText(value, maxLength = 44) {
@@ -1014,18 +1671,84 @@ export function renderClientScript({
         return normalized.slice(0, maxLength - 1) + "…";
       }
 
+      function normalizeMessageToastText(value) {
+        return String(value || "")
+          .replace(/\\s+/g, " ")
+          .replace(/[.?!,:;]+$/g, "")
+          .replace(/…$/g, "")
+          .trim()
+          .toLowerCase();
+      }
+
+      function normalizeToastLineFingerprint(value) {
+        return String(value || "")
+          .replace(/\\s+/g, " ")
+          .replace(/[.?!,:;]+$/g, "")
+          .replace(/…$/g, "")
+          .trim()
+          .toLowerCase();
+      }
+
+      function equivalentMessageToastText(left, right) {
+        const normalizedLeft = normalizeMessageToastText(left);
+        const normalizedRight = normalizeMessageToastText(right);
+        if (!normalizedLeft || !normalizedRight) {
+          return false;
+        }
+        return normalizedLeft === normalizedRight
+          || normalizedLeft.startsWith(normalizedRight)
+          || normalizedRight.startsWith(normalizedLeft);
+      }
+
+      function commandLineText(value) {
+        return shortenNotificationText(value || "", 88);
+      }
+
+      function stackableToastLineText(value, priority) {
+        return shortenNotificationText(value || "", priority >= NOTIFICATION_PRIORITY_MESSAGE ? 156 : 104);
+      }
+
       function isSuppressedCommandToastTitle(value) {
         const normalized = String(value || "").replace(/\\s+/g, " ").trim();
         return normalized.length === 0 || /^[-–—_]+$/.test(normalized);
       }
 
+      function commandLinesForEntry(entry) {
+        if (Array.isArray(entry && entry.commandLines) && entry.commandLines.length > 0) {
+          return entry.commandLines
+            .map((line) => commandLineText(line))
+            .filter((line) => !isSuppressedCommandToastTitle(line))
+            .slice(-3);
+        }
+        const title = commandLineText(entry && entry.title ? entry.title : "");
+        return isSuppressedCommandToastTitle(title) ? [] : [title];
+      }
+
+      function stackableToastLinesForEntry(entry) {
+        if (Array.isArray(entry && entry.toastLines) && entry.toastLines.length > 0) {
+          return entry.toastLines
+            .map((line) => stackableToastLineText(line, notificationPriorityValue(entry)))
+            .filter(Boolean)
+            .slice(-3);
+        }
+        const title = stackableToastLineText(entry && entry.title ? entry.title : "", notificationPriorityValue(entry));
+        return title ? [title] : [];
+      }
+
       function notificationLine(descriptor) {
-        const label = descriptor.labelIconUrl ? "" : shortenNotificationText(descriptor.label || "", 18);
-        const title = shortenNotificationText(descriptor.title || "", descriptor.isCommand ? 88 : 96);
+        const isMessageToast = notificationPriorityValue(descriptor) >= NOTIFICATION_PRIORITY_MESSAGE;
+        const label = descriptor.labelIconUrl && !isMessageToast ? "" : shortenNotificationText(descriptor.label || "", 18);
+        const commandLines = descriptor.isCommand ? commandLinesForEntry(descriptor) : [];
+        const toastLines = descriptor.isCommand ? [] : stackableToastLinesForEntry(descriptor);
+        const title = descriptor.isCommand
+          ? (commandLines[commandLines.length - 1] || "")
+          : (toastLines[toastLines.length - 1] || "");
         return {
           label,
           title,
-          labelIconUrl: descriptor.labelIconUrl || null,
+          commandLines,
+          toastLines,
+          labelIconUrl: isMessageToast ? null : (descriptor.labelIconUrl || null),
           isCommand: descriptor.isCommand === true,
           linesAdded: Number.isFinite(descriptor.linesAdded) ? descriptor.linesAdded : null,
           linesRemoved: Number.isFinite(descriptor.linesRemoved) ? descriptor.linesRemoved : null
@@ -1037,7 +1760,7 @@ export function renderClientScript({
           return null;
         }
         const requestTitle = normalizeDisplayText(snapshot.projectRoot, event.command || event.reason || event.detail || event.title);
-        const labelIconUrl = eventIconUrlForMethod(event.method);
+        const labelIconUrl = eventIconUrlForMethod(event.method) || eventIconUrlForThreadItemType(event.itemType);
         switch (event.kind) {
           case "approval":
             return {
@@ -1111,6 +1834,21 @@ export function renderClientScript({
               { isCommand: true, labelIconUrl }
             );
           case "tool":
+            if (event.itemType === "webSearch") {
+              return {
+                kindClass: "update",
+                label: "",
+                title: webSearchNotificationTitle(snapshot.projectRoot, event.detail || event.title, event.phase),
+                labelIconUrl,
+                imageUrl: null,
+                anchor: "agent",
+                isFileChange: false,
+                isCommand: false,
+                priority: NOTIFICATION_PRIORITY_DEFAULT,
+                linesAdded: null,
+                linesRemoved: null
+              };
+            }
             return {
               kindClass: "update",
               label: "",
@@ -1154,6 +1892,23 @@ export function renderClientScript({
               linesAdded: null,
               linesRemoved: null
             };
+          case "item":
+            return {
+              kindClass:
+                event.phase === "failed" ? "blocked"
+                : event.phase === "completed" ? "update"
+                : "update",
+              label: "",
+              labelIconUrl,
+              title: normalizeDisplayText(snapshot.projectRoot, event.detail || event.title),
+              imageUrl: null,
+              anchor: "agent",
+              isFileChange: false,
+              isCommand: false,
+              priority: NOTIFICATION_PRIORITY_DEFAULT,
+              linesAdded: null,
+              linesRemoved: null
+            };
           default:
             return null;
         }
@@ -1161,8 +1916,13 @@ export function renderClientScript({
 
       function trimRecentNotificationTimes(now) {
         recentNotificationTimes.forEach((timestamp, key) => {
-          if (!Number.isFinite(timestamp) || now - timestamp > NOTIFICATION_TTL_MS) {
+          if (!Number.isFinite(timestamp) || now - timestamp > MESSAGE_NOTIFICATION_TTL_MS) {
             recentNotificationTimes.delete(key);
+          }
+        });
+        recentToastLineTimes.forEach((timestamp, key) => {
+          if (!Number.isFinite(timestamp) || now - timestamp > TOAST_LINE_DEDUPE_MS) {
+            recentToastLineTimes.delete(key);
           }
         });
       }
@@ -1172,7 +1932,7 @@ export function renderClientScript({
           if (!Number.isFinite(entry.priority) || entry.priority <= priority) {
             return false;
           }
-          return now - entry.createdAt < NOTIFICATION_TTL_MS;
+          return now < notificationExpiresAt(entry);
         });
       }
 
@@ -1181,8 +1941,191 @@ export function renderClientScript({
           if (entry.semanticKey !== semanticKey) {
             return false;
           }
-          return now - entry.createdAt < NOTIFICATION_TTL_MS;
+          return now < notificationExpiresAt(entry);
         });
+      }
+
+      function hasActiveEquivalentMessageNotification(entry, now) {
+        return notifications.some((candidate) => {
+          if (notificationPriorityValue(candidate) < NOTIFICATION_PRIORITY_MESSAGE) {
+            return false;
+          }
+          if (now >= notificationExpiresAt(candidate)) {
+            return false;
+          }
+          if (candidate.projectRoot !== entry.projectRoot || candidate.key !== entry.key) {
+            return false;
+          }
+          return equivalentMessageToastText(candidate.title, entry.title);
+        });
+      }
+
+      function notificationStackKey(entry) {
+        if (!entry || entry.isCommand || entry.imageUrl) {
+          return null;
+        }
+        return [
+          entry.projectRoot,
+          entry.key,
+          entry.kindClass || "",
+          entry.label || "",
+          entry.labelIconUrl || "",
+          entry.anchor || "agent",
+          entry.isFileChange ? "file" : "",
+          Number.isFinite(entry.priority) ? Number(entry.priority) : NOTIFICATION_PRIORITY_DEFAULT
+        ].join("::");
+      }
+
+      function toastLineDedupeKey(entry, line) {
+        const normalizedLine = normalizeToastLineFingerprint(line);
+        if (!normalizedLine) {
+          return null;
+        }
+        const scope = entry.isCommand
+          ? ["command", entry.projectRoot, entry.key, entry.anchor || "agent"].join("::")
+          : notificationStackKey(entry) || ["toast", entry.projectRoot, entry.key, entry.kindClass || "", entry.anchor || "agent"].join("::");
+        return scope + "::" + normalizedLine;
+      }
+
+      function hasEquivalentToastLine(lines, nextLine) {
+        const normalizedNextLine = normalizeToastLineFingerprint(nextLine);
+        if (!normalizedNextLine) {
+          return false;
+        }
+        return lines.some((line) => normalizeToastLineFingerprint(line) === normalizedNextLine);
+      }
+
+      function hasRecentlySeenToastLine(entry, line, now) {
+        const dedupeKey = toastLineDedupeKey(entry, line);
+        if (!dedupeKey) {
+          return false;
+        }
+        const lastShownAt = recentToastLineTimes.get(dedupeKey);
+        return Number.isFinite(lastShownAt) && now - lastShownAt < TOAST_LINE_DEDUPE_MS;
+      }
+
+      function rememberToastLine(entry, line, now) {
+        const dedupeKey = toastLineDedupeKey(entry, line);
+        if (!dedupeKey) {
+          return;
+        }
+        recentToastLineTimes.set(dedupeKey, now);
+      }
+
+      function stackableNotificationLifetimeMs(entry, lineCount) {
+        const base = notificationPriorityValue(entry) >= NOTIFICATION_PRIORITY_MESSAGE
+          ? MESSAGE_NOTIFICATION_TTL_MS
+          : NOTIFICATION_TTL_MS;
+        return base + Math.max(0, lineCount - 1) * 900;
+      }
+
+      function mergeStackableNotification(entry, now) {
+        const stackKey = notificationStackKey(entry);
+        if (!stackKey) {
+          return false;
+        }
+
+        const nextLine = stackableToastLineText(entry.title || "", notificationPriorityValue(entry));
+        if (!nextLine) {
+          return false;
+        }
+
+        const existing = notifications.find((candidate) =>
+          !candidate.isCommand
+          && candidate.stackKey === stackKey
+          && now < notificationExpiresAt(candidate)
+        );
+
+        if (!existing) {
+          return false;
+        }
+
+        const previousLines = stackableToastLinesForEntry(existing);
+        if (hasEquivalentToastLine(previousLines, nextLine) || hasRecentlySeenToastLine(existing, nextLine, now)) {
+          return false;
+        }
+        const shouldAppend = true;
+        const mergedLines = shouldAppend ? [...previousLines, nextLine].slice(-3) : previousLines.slice(-3);
+
+        existing.kindClass = entry.kindClass;
+        existing.label = entry.label;
+        existing.title = entry.title;
+        existing.labelIconUrl = entry.labelIconUrl;
+        existing.imageUrl = entry.imageUrl;
+        existing.anchor = entry.anchor;
+        existing.isFileChange = entry.isFileChange === true;
+        existing.isCommand = false;
+        existing.priority = Number.isFinite(entry.priority) ? Number(entry.priority) : NOTIFICATION_PRIORITY_DEFAULT;
+        existing.linesAdded = Number.isFinite(entry.linesAdded) ? Number(entry.linesAdded) : null;
+        existing.linesRemoved = Number.isFinite(entry.linesRemoved) ? Number(entry.linesRemoved) : null;
+        existing.semanticKey = entry.semanticKey;
+        existing.toastLines = mergedLines;
+        existing.stackKey = stackKey;
+        existing.expiresAt = now + stackableNotificationLifetimeMs(existing, mergedLines.length);
+        if (shouldAppend) {
+          existing.lastToastLine = nextLine;
+          existing.lastToastLineAt = now;
+          rememberToastLine(existing, nextLine, now);
+        }
+        return shouldAppend;
+      }
+
+      function mergeCommandNotification(entry, now) {
+        const nextLine = commandLineText(entry.title || "");
+        if (isSuppressedCommandToastTitle(nextLine)) {
+          return false;
+        }
+
+        const existing = notifications.find((candidate) =>
+          candidate.isCommand
+          && candidate.key === entry.key
+          && candidate.projectRoot === entry.projectRoot
+          && now < notificationExpiresAt(candidate)
+        );
+
+        if (!existing) {
+          if (hasRecentlySeenToastLine(entry, nextLine, now)) {
+            return false;
+          }
+          notifications.push({
+            ...entry,
+            createdAt: now,
+            expiresAt: now + commandNotificationLifetimeMs(1),
+            commandLines: [nextLine],
+            lastCommandLine: nextLine,
+            lastCommandLineAt: now
+          });
+          rememberToastLine(entry, nextLine, now);
+          return true;
+        }
+
+        const previousLines = commandLinesForEntry(existing);
+        if (hasEquivalentToastLine(previousLines, nextLine) || hasRecentlySeenToastLine(existing, nextLine, now)) {
+          return false;
+        }
+        const shouldAppend = true;
+        const mergedLines = shouldAppend ? [...previousLines, nextLine].slice(-3) : previousLines.slice(-3);
+
+        existing.kindClass = entry.kindClass;
+        existing.label = entry.label;
+        existing.title = nextLine;
+        existing.labelIconUrl = entry.labelIconUrl;
+        existing.imageUrl = null;
+        existing.anchor = entry.anchor;
+        existing.isFileChange = false;
+        existing.isCommand = true;
+        existing.priority = Number.isFinite(entry.priority) ? Number(entry.priority) : NOTIFICATION_PRIORITY_DEFAULT;
+        existing.linesAdded = null;
+        existing.linesRemoved = null;
+        existing.semanticKey = entry.semanticKey;
+        existing.commandLines = mergedLines;
+        existing.expiresAt = now + commandNotificationLifetimeMs(mergedLines.length);
+        if (shouldAppend) {
+          existing.lastCommandLine = nextLine;
+          existing.lastCommandLineAt = now;
+          rememberToastLine(existing, nextLine, now);
+        }
+        return shouldAppend;
       }
 
       function enqueueNotification(entry) {
@@ -1194,6 +2137,32 @@ export function renderClientScript({
           return false;
         }
 
+        if (priority >= NOTIFICATION_PRIORITY_MESSAGE && hasActiveEquivalentMessageNotification(entry, now)) {
+          return false;
+        }
+
+        if (entry.isCommand) {
+          const changed = mergeCommandNotification({ ...entry, priority }, now);
+          if (changed) {
+            triggerWorkstationFileChangeEffect(entry);
+          }
+          notifications = notifications.slice(-24);
+          scheduleNotificationPrune();
+          return changed;
+        }
+
+        const stacked = mergeStackableNotification({ ...entry, priority }, now);
+        if (stacked) {
+          triggerWorkstationFileChangeEffect(entry);
+          notifications = notifications.slice(-24);
+          scheduleNotificationPrune();
+          return true;
+        }
+
+        if (priority >= NOTIFICATION_PRIORITY_MESSAGE) {
+          notifications = [];
+        }
+
         const lastShownAt = recentNotificationTimes.get(entry.semanticKey);
         if (Number.isFinite(lastShownAt) && now - lastShownAt < NOTIFICATION_DEDUPE_WINDOW_MS) {
           return false;
@@ -1203,19 +2172,176 @@ export function renderClientScript({
           return false;
         }
 
-        if (priority >= NOTIFICATION_PRIORITY_MESSAGE) {
-          notifications = [];
+        const initialToastLines = stackableToastLinesForEntry({ ...entry, priority });
+        if (initialToastLines.length > 0 && hasRecentlySeenToastLine({ ...entry, priority }, initialToastLines[initialToastLines.length - 1], now)) {
+          return false;
         }
 
         notifications.push({
           ...entry,
           priority,
-          createdAt: now
+          createdAt: now,
+          toastLines: initialToastLines,
+          stackKey: notificationStackKey({ ...entry, priority }),
+          expiresAt: now + stackableNotificationLifetimeMs({ ...entry, priority }, 1)
         });
+        triggerWorkstationFileChangeEffect(entry);
+        if (initialToastLines.length > 0) {
+          rememberToastLine({ ...entry, priority }, initialToastLines[initialToastLines.length - 1], now);
+        }
         recentNotificationTimes.set(entry.semanticKey, now);
         notifications = notifications.slice(-24);
         scheduleNotificationPrune();
         return true;
+      }
+
+      function clearToastPreviewTimers() {
+        toastPreviewTimerIds.forEach((timerId) => clearTimeout(timerId));
+        toastPreviewTimerIds = [];
+      }
+
+      function currentPreviewSnapshot() {
+        const fleet = state.fleet;
+        if (!fleet || !Array.isArray(fleet.projects) || fleet.projects.length === 0) {
+          return null;
+        }
+        if (state.selected !== "all") {
+          return fleet.projects.find((snapshot) => snapshot.projectRoot === state.selected) || fleet.projects[0] || null;
+        }
+        return fleet.projects.find((snapshot) => snapshot.agents.some((agent) => agent.isCurrent)) || fleet.projects[0] || null;
+      }
+
+      function currentPreviewAgent(snapshot) {
+        if (!snapshot || !Array.isArray(snapshot.agents)) {
+          return null;
+        }
+        return snapshot.agents.find((agent) => agent.isCurrent) || snapshot.agents[0] || null;
+      }
+
+      function queueToastPreviewDescriptor(snapshot, agent, descriptor, runId, index) {
+        const key = agentKey(snapshot.projectRoot, agent);
+        enqueueNotification({
+          id: \`preview::\${runId}::\${index}\`,
+          key,
+          projectRoot: snapshot.projectRoot,
+          semanticKey: \`preview::\${runId}::\${index}\`,
+          kindClass: descriptor.kindClass,
+          label: descriptor.label,
+          title: descriptor.title,
+          labelIconUrl: descriptor.labelIconUrl,
+          imageUrl: descriptor.imageUrl,
+          anchor: descriptor.anchor,
+          isFileChange: descriptor.isFileChange,
+          isCommand: descriptor.isCommand,
+          priority: notificationPriorityValue(descriptor),
+          linesAdded: descriptor.linesAdded,
+          linesRemoved: descriptor.linesRemoved
+        });
+        renderNotifications();
+      }
+
+      function runToastPreview() {
+        const snapshot = currentPreviewSnapshot();
+        const agent = currentPreviewAgent(snapshot);
+        if (!snapshot || !agent) {
+          return;
+        }
+
+        toastPreviewRun += 1;
+        const runId = toastPreviewRun;
+        const threadId = agent.threadId || \`preview-thread-\${agent.id}\`;
+        const baseIso = new Date().toISOString();
+        const previewEvents = [
+          {
+            kind: "fileChange",
+            phase: "completed",
+            method: "item/fileChange/outputDelta",
+            title: "architecture.md",
+            detail: "Updated architecture.md",
+            path: "docs/architecture.md",
+            action: "edited",
+            isImage: false,
+            linesAdded: 12,
+            linesRemoved: 4
+          },
+          {
+            kind: "tool",
+            phase: "completed",
+            method: "item/completed",
+            itemType: "webSearch",
+            title: "Web search completed",
+            detail: "official Codex app-server events"
+          },
+          {
+            kind: "input",
+            phase: "waiting",
+            method: "item/tool/requestUserInput",
+            title: "input",
+            detail: "Choose the release lane for this preview run"
+          },
+          {
+            kind: "approval",
+            phase: "waiting",
+            method: "item/commandExecution/requestApproval",
+            title: "approval",
+            detail: "npm publish --tag next",
+            command: "npm publish --tag next"
+          },
+          {
+            kind: "command",
+            phase: "started",
+            method: "item/commandExecution/outputDelta",
+            title: "npm run build -w packages/web",
+            detail: "npm run build -w packages/web",
+            command: "npm run build -w packages/web"
+          },
+          {
+            kind: "message",
+            phase: "updated",
+            method: "item/agentMessage/delta",
+            title: "Toast preview message",
+            detail: "Toast preview: message icon replaces the type label and clears older toasts."
+          }
+        ];
+
+        clearToastPreviewTimers();
+        notifications = [];
+        renderNotifications();
+
+        previewEvents.forEach((previewEvent, index) => {
+          const timerId = setTimeout(() => {
+            if (runId !== toastPreviewRun) {
+              return;
+            }
+            const descriptor = notificationDescriptorFromEvent(snapshot, {
+              id: \`preview-event-\${runId}-\${index}\`,
+              source: agent.provenance || "codex",
+              confidence: agent.confidence || "typed",
+              threadId,
+              createdAt: baseIso,
+              turnId: \`preview-turn-\${runId}\`,
+              itemId: \`preview-item-\${runId}-\${index}\`,
+              requestId:
+                previewEvent.kind === "approval" || previewEvent.kind === "input"
+                  ? \`preview-request-\${runId}-\${index}\`
+                  : undefined,
+              path: null,
+              reason: undefined,
+              cwd: agent.cwd || snapshot.projectRoot,
+              grantRoot: snapshot.projectRoot,
+              availableDecisions: undefined,
+              networkApprovalContext: null,
+              linesAdded: undefined,
+              linesRemoved: undefined,
+              ...previewEvent
+            });
+            if (!descriptor) {
+              return;
+            }
+            queueToastPreviewDescriptor(snapshot, agent, descriptor, runId, index);
+          }, index * 1250);
+          toastPreviewTimerIds.push(timerId);
+        });
       }
 
       function projectFileUrl(projectRoot, path) {
@@ -1237,6 +2363,7 @@ export function renderClientScript({
         for (const snapshot of nextFleet.projects || []) {
           for (const agent of snapshot.agents || []) {
             const key = agentKey(snapshot.projectRoot, agent);
+            const semanticSubjectKey = notificationSubjectKey(snapshot.projectRoot, agent, agent.threadId);
             const previous = previousAgents.get(key);
             const descriptor = notificationDescriptor(snapshot, agent, previous);
             if (!descriptor) {
@@ -1248,7 +2375,12 @@ export function renderClientScript({
             const previousFingerprint = previous && previousDescriptor
               ? buildNotificationFingerprint(snapshot.projectRoot, previous, previousDescriptor)
               : null;
-            const nextNotificationKey = nextFingerprint + "::" + agent.updatedAt;
+            const nextNotificationKey = notificationInstanceId(
+              snapshot.projectRoot,
+              semanticSubjectKey,
+              descriptor,
+              nextFingerprint + "::" + agent.updatedAt
+            );
 
             if (nextFingerprint === previousFingerprint || seenNotificationKeys.has(nextNotificationKey)) {
               continue;
@@ -1258,7 +2390,7 @@ export function renderClientScript({
               id: nextNotificationKey,
               key,
               projectRoot: snapshot.projectRoot,
-              semanticKey: notificationSemanticKey(snapshot.projectRoot, key, descriptor),
+              semanticKey: notificationSemanticKey(snapshot.projectRoot, semanticSubjectKey, descriptor),
               kindClass: descriptor.kindClass,
               label: descriptor.label,
               title: descriptor.title,
@@ -1303,8 +2435,17 @@ export function renderClientScript({
             if (!agent) {
               continue;
             }
+            if (!agent.isCurrent && agent.state !== "waiting" && agent.state !== "blocked") {
+              continue;
+            }
             const key = agentKey(snapshot.projectRoot, agent);
-            const notificationId = typedNotificationKey(event) || ("event::" + event.id);
+            const semanticSubjectKey = notificationSubjectKey(snapshot.projectRoot, agent, event.threadId);
+            const notificationId = notificationInstanceId(
+              snapshot.projectRoot,
+              semanticSubjectKey,
+              descriptor,
+              typedNotificationKey(event) || ("event::" + event.id)
+            );
             if (seenNotificationKeys.has(notificationId)) {
               continue;
             }
@@ -1312,7 +2453,7 @@ export function renderClientScript({
               id: notificationId,
               key,
               projectRoot: snapshot.projectRoot,
-              semanticKey: notificationSemanticKey(snapshot.projectRoot, key, descriptor),
+              semanticKey: notificationSemanticKey(snapshot.projectRoot, semanticSubjectKey, descriptor),
               kindClass: descriptor.kindClass,
               label: descriptor.label,
               title: descriptor.title,
@@ -1334,7 +2475,7 @@ export function renderClientScript({
 
       function pruneNotifications() {
         const now = Date.now();
-        notifications = notifications.filter((entry) => now - entry.createdAt < NOTIFICATION_TTL_MS);
+        notifications = notifications.filter((entry) => now < notificationExpiresAt(entry));
         trimRecentNotificationTimes(now);
         scheduleNotificationPrune();
         renderNotifications();
@@ -1374,10 +2515,16 @@ export function renderClientScript({
             const stackIndex = stackByKey.get(entry.key) ?? 0;
             stackByKey.set(entry.key, stackIndex + 1);
             const rect = anchor.getBoundingClientRect();
-            const left = rect.left - wrapperRect.left + rect.width / 2;
-            const top = entry.anchor === "workstation"
+            const computedLeft = rect.left - wrapperRect.left + rect.width / 2;
+            const computedTop = entry.anchor === "workstation"
               ? rect.top - wrapperRect.top + rect.height * 0.72 - stackIndex * 20
               : rect.top - wrapperRect.top - stackIndex * (entry.isCommand ? 28 : 18);
+            if (!Number.isFinite(entry.originLeft) || !Number.isFinite(entry.originTop)) {
+              entry.originLeft = computedLeft;
+              entry.originTop = computedTop;
+            }
+            const left = entry.originLeft;
+            const top = entry.originTop;
             const line = notificationLine(entry);
             if (entry.isCommand && isSuppressedCommandToastTitle(line.title)) {
               return;
@@ -1390,7 +2537,7 @@ export function renderClientScript({
               layer.appendChild(toast);
             }
 
-            const className = \`agent-toast \${entry.kindClass}\${entry.imageUrl ? " image" : ""}\${entry.isFileChange ? " file-change" : ""}\${entry.isCommand ? " command-window" : ""}\`;
+            const className = \`agent-toast \${entry.kindClass}\${entry.imageUrl ? " image" : ""}\${entry.isFileChange ? " file-change" : ""}\${entry.isCommand ? " command-window" : ""}\${!entry.isCommand && Number(entry.priority) >= NOTIFICATION_PRIORITY_MESSAGE ? " message-toast" : ""}\`;
             if (toast.className !== className) {
               toast.className = className;
             }
@@ -1404,9 +2551,15 @@ export function renderClientScript({
               line.linesAdded !== null || line.linesRemoved !== null
                 ? \`<div class="agent-toast-stats">\${line.linesAdded !== null ? \`<span class="agent-toast-delta add">+\${line.linesAdded}</span>\` : ""}\${line.linesRemoved !== null ? \`<span class="agent-toast-delta remove">-\${line.linesRemoved}</span>\` : ""}</div>\`
                 : "";
+            const commandLinesHtml = line.commandLines.map((commandLine, index) =>
+              \`<div class="agent-toast-command-line"><span class="agent-toast-command-prefix">&gt; </span>\${escapeHtml(commandLine)}\${index === line.commandLines.length - 1 ? \`<span class="agent-toast-command-cursor">_</span>\` : ""}</div>\`
+            ).join("");
+            const toastLinesHtml = line.toastLines.map((toastLine) =>
+              \`<div class="agent-toast-line">\${escapeHtml(toastLine)}</div>\`
+            ).join("");
             const nextHtml = entry.isCommand
-              ? \`<div class="agent-toast-window-bar"><div class="agent-toast-window-label">cmd.exe</div><div class="agent-toast-window-lights"><span></span><span></span><span></span></div></div><div class="agent-toast-window-body"><pre class="agent-toast-command"><span class="agent-toast-command-prefix">&gt; </span>\${escapeHtml(line.title)}<span class="agent-toast-command-cursor">_</span></pre></div>\`
-              : \`<div class="agent-toast-copy"><div class="agent-toast-head">\${line.labelIconUrl || line.label ? \`<div class="agent-toast-label-group">\${line.labelIconUrl ? \`<img class="agent-toast-label-icon" src="\${escapeHtml(line.labelIconUrl)}" alt="" />\` : ""}\${line.label ? \`<div class="agent-toast-label">\${escapeHtml(line.label)}</div>\` : ""}</div>\` : ""}<div class="agent-toast-title">\${escapeHtml(line.title)}</div></div>\${statsHtml}</div>\${entry.imageUrl ? \`<img class="agent-toast-preview" src="\${escapeHtml(entry.imageUrl)}" alt="\${escapeHtml(entry.title)}" />\` : ""}\`;
+              ? \`<div class="agent-toast-window-bar"><div class="agent-toast-window-label">cmd.exe</div><div class="agent-toast-window-lights"><span></span><span></span><span></span></div></div><div class="agent-toast-window-body"><pre class="agent-toast-command">\${commandLinesHtml}</pre></div>\`
+              : \`<div class="agent-toast-copy"><div class="agent-toast-head">\${line.labelIconUrl || line.label ? \`<div class="agent-toast-label-group">\${line.labelIconUrl ? \`<img class="agent-toast-label-icon" src="\${escapeHtml(line.labelIconUrl)}" alt="" />\` : ""}\${line.label ? \`<div class="agent-toast-label">\${escapeHtml(line.label)}</div>\` : ""}</div>\` : ""}<div class="\${line.toastLines.length > 1 ? "agent-toast-lines" : "agent-toast-title"}">\${line.toastLines.length > 1 ? toastLinesHtml : escapeHtml(line.title)}</div></div>\${statsHtml}</div>\${entry.imageUrl ? \`<img class="agent-toast-preview" src="\${escapeHtml(entry.imageUrl)}" alt="\${escapeHtml(entry.title)}" />\` : ""}\`;
             if (toast.dataset.renderHtml !== nextHtml) {
               toast.innerHTML = nextHtml;
               toast.dataset.renderHtml = nextHtml;
@@ -1433,7 +2586,7 @@ export function renderClientScript({
           return;
         }
         const now = Date.now();
-        const nextExpiry = Math.min(...notifications.map((entry) => entry.createdAt + NOTIFICATION_TTL_MS));
+        const nextExpiry = Math.min(...notifications.map((entry) => notificationExpiresAt(entry)));
         const delay = Math.max(60, nextExpiry - now);
         notificationPruneTimer = setTimeout(() => {
           notificationPruneTimer = null;
@@ -1447,14 +2600,17 @@ export function renderClientScript({
         const hoverTitle = agent.nickname || agent.label;
         const meta = [
           titleCaseWords(agentKindLabel(snapshot, agent)),
-          agentProvenanceLabel(agent),
+          agentHoverSourceLabel(agent, summary.source),
           lead ? \`with \${lead}\` : "",
           formatUpdatedAt(agent.updatedAt)
         ].filter(Boolean).join(" · ");
         const className = options.className || "agent-hover";
         const styleAttr = options.style ? \` style="\${escapeHtml(options.style)}"\` : "";
+        const summaryClass = summary.source === "user"
+          ? "agent-hover-summary agent-hover-summary-user"
+          : "agent-hover-summary";
 
-        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(hoverTitle)}</strong></div><div class="agent-hover-summary">\${escapeHtml(summary)}</div><div class="agent-hover-meta">\${escapeHtml(meta)}</div></div>\`;
+        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(hoverTitle)}</strong></div><div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div><div class="agent-hover-meta">\${escapeHtml(meta)}</div></div>\`;
       }
 
       function flattenRooms(rooms) {
@@ -1481,6 +2637,22 @@ export function renderClientScript({
         ].filter(Boolean).join(";");
         const titleAttr = title ? \` title="\${escapeHtml(title)}"\` : "";
         return \`<div class="\${className}"\${titleAttr} style="\${style}"></div>\`;
+      }
+
+      function renderWorkstationComputer(snapshot, agent, sprite, x, y, scale, mirrored) {
+        const width = Math.round(sprite.w * scale);
+        const height = Math.round(sprite.h * scale);
+        const key = agent ? agentKey(snapshot.projectRoot, agent) : "";
+        const wrapperStyle = [
+          \`left:\${Math.round(x)}px\`,
+          \`top:\${Math.round(y)}px\`,
+          \`width:\${width}px\`,
+          \`height:\${height}px\`,
+          "z-index:5;"
+        ].join(";");
+        const spriteStyle = mirrored ? "transform:scaleX(-1);transform-origin:50% 50%;" : "";
+        const computerHtml = renderSprite(sprite, 0, 0, scale, "office-sprite workstation-computer-sprite", spriteStyle);
+        return \`<div class="workstation-computer" data-workstation-computer="\${escapeHtml(key)}" style="\${wrapperStyle}">\${computerHtml}</div>\`;
       }
 
       function fitSpriteToWidth(sprite, width, minScale, maxScale) {
@@ -1598,7 +2770,15 @@ export function renderClientScript({
 
       function restingAgentsFor(snapshot, compact) {
         return snapshot.agents
-          .filter((agent) => agent.source !== "cloud" && !agent.isCurrent && (agent.state === "idle" || agent.state === "done"))
+          .filter((agent) => {
+            if (agent.source === "cloud") {
+              return false;
+            }
+            if (agent.isCurrent) {
+              return false;
+            }
+            return agent.state === "idle" || agent.state === "done" || isRecentLeadCandidate(agent);
+          })
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       }
 
@@ -1683,7 +2863,7 @@ export function renderClientScript({
           : Math.max(deskEdgeClamp, Math.round(workstationX + workstationWidth * 0.48 - deskWidth * 0.5));
         const deskY = Math.round(boothHeight - deskHeight - (compact ? 11 : 13));
         const workstationY = Math.round(deskY - workstationHeight * (compact ? 0.2 : 0.18));
-        const chairOutset = compact ? 3 : 5;
+        const chairOutset = compact ? 7 : 10;
         const chairLift = compact ? 1 : 2;
         const chairX = (mirrored
           ? Math.round(workstationX + workstationWidth - chairWidth * 0.18)
@@ -1693,7 +2873,6 @@ export function renderClientScript({
         const minAvatarX = 2;
         const maxAvatarX = boothWidth - avatarWidth - 2;
         const clampAvatarX = (value) => Math.max(minAvatarX, Math.min(maxAvatarX, value));
-        const mirrorAvatarX = (value) => clampAvatarX(boothWidth - avatarWidth - value);
         const sideX = mirrored
           ? clampAvatarX(Math.round(deskX + deskWidth + (compact ? 6 : 8)))
           : clampAvatarX(Math.round(deskX - avatarWidth - (compact ? 6 : 8)));
@@ -1703,8 +2882,10 @@ export function renderClientScript({
           }
           const workstationFlip = mirrored;
           const baseY = Math.round(deskY + deskHeight - avatarHeight + (compact ? 1 : 2));
-          const seatedLeftX = clampAvatarX(Math.round(chairX + chairWidth * 0.22 - (compact ? 2 : 4)));
-          const seatedX = mirrored ? mirrorAvatarX(seatedLeftX) : seatedLeftX;
+          const seatInset = chairWidth * 0.22 - (compact ? 4 : 6);
+          const seatedX = mirrored
+            ? clampAvatarX(Math.round(chairX + chairWidth - avatarWidth - seatInset))
+            : clampAvatarX(Math.round(chairX + seatInset));
           if (state === "editing" || state === "thinking" || state === "planning" || state === "scanning" || state === "delegating") {
             return {
               x: seatedX,
@@ -1713,8 +2894,9 @@ export function renderClientScript({
             };
           }
           if (state === "running" || state === "validating" || state === "blocked") {
-            const workingLeftX = clampAvatarX(sideX - (compact ? 4 : 6));
-            const workingX = mirrored ? mirrorAvatarX(workingLeftX) : workingLeftX;
+            const workingX = mirrored
+              ? clampAvatarX(sideX + (compact ? 4 : 6))
+              : clampAvatarX(sideX - (compact ? 4 : 6));
             return {
               x: workingX,
               y: baseY,
@@ -1765,8 +2947,18 @@ export function renderClientScript({
         const avatarTargetX = avatarPose ? absoluteCellX + Math.round(avatarPose.x) : null;
         const avatarTargetY = avatarPose ? absoluteCellY + Math.round(avatarPose.y) : null;
         const entrance = options.entrance || null;
-        const path = avatarPose && entrance
-          ? agentPathDelta(entrance, avatarTargetX, avatarTargetY, avatarWidth, avatarHeight)
+        const enteringMotion = avatarPose && motionMode === "entering"
+          ? enteringMotionState(snapshot, agent, entrance, avatarTargetX, avatarTargetY, avatarWidth, avatarHeight)
+          : null;
+        const resolvedMotionMode = enteringMotion ? enteringMotion.mode : motionMode;
+        const path = avatarPose
+          ? (
+            motionMode === "departing" && entrance
+              ? agentPathDelta(entrance, avatarTargetX, avatarTargetY, avatarWidth, avatarHeight)
+              : enteringMotion
+                ? enteringMotion.path
+                : { pathX: 0, pathY: 0 }
+          )
           : { pathX: 0, pathY: 0 };
         const shellStyle = avatar && agent && avatarPose
           ? [
@@ -1780,11 +2972,12 @@ export function renderClientScript({
           ].join(";")
           : "";
         const avatarHtml = avatar && agent && avatarPose
-          ? renderAvatarShell(snapshot, agent, state, shellStyle, avatarStyle, motionMode)
+          ? renderAvatarShell(snapshot, agent, state, shellStyle, avatarStyle, resolvedMotionMode)
           : "";
         if (agent && avatar && avatarPose && entrance && motionMode !== "departing") {
           rememberAgentSceneState(snapshot, agent, {
             roomId: options.roomId || agent.roomId,
+            slotId: options.slotId || null,
             compact,
             kind: "desk",
             cellX: absoluteCellX,
@@ -1805,13 +2998,13 @@ export function renderClientScript({
         const deskShell = [
           renderSprite(deskSprite, deskX, deskY, deskScale, "office-sprite", \`z-index:3;\${mirrored ? "transform:scaleX(-1);transform-origin:50% 50%;" : ""}\`),
           renderSprite(chair, chairX, chairY, chairScale, "office-sprite", \`z-index:4;\${mirrored ? "transform:scaleX(-1);transform-origin:50% 50%;" : ""}\`),
-          renderSprite(computerSprite, workstationX, workstationY, workstationScale, "office-sprite", \`z-index:5;\${mirrored ? "transform:scaleX(-1);transform-origin:50% 50%;" : ""}\`),
+          renderWorkstationComputer(snapshot, agent, computerSprite, workstationX, workstationY, workstationScale, mirrored),
           screenGlow
         ].join("");
         const hoverHtml = agent ? renderAgentHover(snapshot, agent) : "";
         const tabIndex = agent ? "0" : "-1";
         const cellClasses = ["cubicle-cell"];
-        if (motionMode) cellClasses.push(motionMode);
+        if (resolvedMotionMode) cellClasses.push(resolvedMotionMode);
         return \`<div class="\${cellClasses.join(" ")}" tabindex="\${tabIndex}"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px; width:\${boothWidth}px; height:\${boothHeight}px;"><div class="desk-shell"\${agent ? \` data-workstation-key="\${escapeHtml(agentKey(snapshot.projectRoot, agent))}"\` : ""}>\${deskShell}</div>\${avatarHtml}\${bubble}\${hoverHtml}</div>\`;
       }
 
@@ -1845,7 +3038,8 @@ export function renderClientScript({
                 lead: options.lead && Boolean(leftAgent),
                 absoluteX: x + (hasBothSides ? padX : singleCellX),
                 absoluteY: y,
-                motionMode: options.liveOnly && enteringAgentKeys.has(agentKey(snapshot.projectRoot, leftAgent)) ? "entering" : null
+                motionMode: options.liveOnly && enteringAgentKeys.has(agentKey(snapshot.projectRoot, leftAgent)) ? "entering" : null,
+                slotId: options.leftSlotId || (hasBothSides ? null : options.slotId || null)
               }
             )
             : "",
@@ -1866,12 +3060,44 @@ export function renderClientScript({
                 lead: false,
                 absoluteX: x + (hasBothSides ? padX + cellWidth + centerGap : singleCellX),
                 absoluteY: y,
-                motionMode: options.liveOnly && enteringAgentKeys.has(agentKey(snapshot.projectRoot, rightAgent)) ? "entering" : null
+                motionMode: options.liveOnly && enteringAgentKeys.has(agentKey(snapshot.projectRoot, rightAgent)) ? "entering" : null,
+                slotId: options.rightSlotId || null
               }
             )
             : ""
         ].join("");
         return \`<div class="\${classes.join(" ")}" style="left:\${Math.round(x)}px; top:\${Math.round(y)}px; width:\${podWidth}px; height:\${podHeight}px; --booth-accent:\${roleTone(role)}; --stack-order:\${stackOrder};">\${podBase.join("")}\${cells}</div>\`;
+      }
+
+      function renderBossOffice(snapshot, agent, x, y, officeWidth, officeHeight, compact, options = {}) {
+        const role = agentRole(agent);
+        const innerPadX = compact ? 12 : 14;
+        const cellWidth = compact ? 76 : 94;
+        const cellX = Math.max(innerPadX, officeWidth - cellWidth - innerPadX);
+        const cellY = 0;
+        const stackOrder = 110 + Math.round(y + officeHeight);
+        const badgeLabel = liveChildAgentsFor(snapshot, agent.id).length + " spawned";
+        const officeCell = renderCubicleCell(
+          snapshot,
+          agent,
+          role,
+          cellX,
+          cellY,
+          cellWidth,
+          officeHeight,
+          compact,
+          {
+            liveOnly: options.liveOnly,
+            roomId: options.roomId,
+            entrance: options.entrance,
+            mirrored: false,
+            absoluteX: x + cellX,
+            absoluteY: y + cellY,
+            motionMode: options.motionMode || (options.liveOnly && enteringAgentKeys.has(agentKey(snapshot.projectRoot, agent)) ? "entering" : null),
+            slotId: options.slotId
+          }
+        );
+        return \`<div class="boss-office" style="left:\${Math.round(x)}px; top:\${Math.round(y)}px; width:\${officeWidth}px; height:\${officeHeight}px; --office-tone:\${roleTone(role)}; --stack-order:\${stackOrder};"><div class="boss-office-badge">\${escapeHtml(badgeLabel)}</div>\${officeCell}</div>\`;
       }
 
       function renderCubicleRow(snapshot, agents, role, x, y, rowWidth, rowHeight, compact, options = {}) {
@@ -1963,17 +3189,28 @@ export function renderClientScript({
         const avatarScale = compact ? 1.25 : 1.5;
         const avatarWidth = avatar.w * avatarScale;
         const avatarHeight = avatar.h * avatarScale;
+        const dormant = isDormantRestingAgent(agent);
+        const visualState = !agent.isCurrent && agent.state !== "waiting" && agent.state !== "blocked"
+          ? (agent.state === "done" || dormant ? "done" : "idle")
+          : agent.state;
+        const settled = Boolean(options.settle) || dormant;
         const avatarStyle = [
           \`background-image:url(\${avatar.url})\`,
           \`--appearance-body:\${agent.appearance.body}\`,
           \`--appearance-shadow:\${agent.appearance.shadow}\`
         ].filter(Boolean).join(";");
         const targetX = Math.round(x);
-        const targetY = Math.round(y + (options.settle ? 3 : 0));
+        const targetY = Math.round(y + (settled ? 3 : 0));
         const entrance = options.entrance || null;
-        const path = entrance
+        const enteringMotion = motionMode === "entering"
+          ? enteringMotionState(snapshot, agent, entrance, targetX, targetY, avatarWidth, avatarHeight)
+          : null;
+        const resolvedMotionMode = enteringMotion ? enteringMotion.mode : motionMode;
+        const path = motionMode === "departing" && entrance
           ? agentPathDelta(entrance, targetX, targetY, avatarWidth, avatarHeight)
-          : { pathX: 0, pathY: 0 };
+          : enteringMotion
+            ? enteringMotion.path
+            : { pathX: 0, pathY: 0 };
         const shellStyle = [
           "left:0",
           "top:0",
@@ -1984,9 +3221,9 @@ export function renderClientScript({
           \`--path-y:\${Math.round(path.pathY)}px\`
         ].join(";");
         const bubbleLabel = options.bubble ?? (
-          agent.state === "waiting" ? "..."
-          : agent.state === "done" ? "zZ"
-          : agent.state === "idle" ? "ok"
+          visualState === "waiting" ? "..."
+          : dormant ? "zZ"
+          : visualState === "idle" ? "ok"
           : null
         );
         const bubbleClass = bubbleLabel === "..."
@@ -1994,11 +3231,11 @@ export function renderClientScript({
           : bubbleLabel
             ? "speech-bubble resting"
             : "";
-        const bubble = bubbleLabel && !motionMode
+        const bubble = bubbleLabel && !resolvedMotionMode
           ? \`<div class="\${bubbleClass}" style="left:\${Math.round(avatarWidth / 2)}px; top:-10px;">\${escapeHtml(bubbleLabel)}</div>\`
           : "";
-        const hoverClass = agent.state === "waiting" ? "waiting-hover" : "lounge-hover";
-        const wrapperClass = agent.state === "waiting" ? "waiting-agent" : "lounge-agent";
+        const hoverClass = visualState === "waiting" ? "waiting-hover" : "lounge-hover";
+        const wrapperClass = visualState === "waiting" ? "waiting-agent" : "lounge-agent";
         if (motionMode !== "departing") {
           rememberAgentSceneState(snapshot, agent, {
             roomId: options.roomId || agent.roomId,
@@ -2009,12 +3246,12 @@ export function renderClientScript({
             entrance,
             bubble: options.bubble ?? null,
             flip: options.flip ? -1 : 1,
-            settle: Boolean(options.settle),
+            settle: settled,
             avatarWidth: Math.round(avatarWidth),
             avatarHeight: Math.round(avatarHeight)
           });
         }
-        return \`<div class="\${wrapperClass}\${motionMode ? \` \${motionMode}\` : ""}" tabindex="0"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px;">\${renderAvatarShell(snapshot, agent, agent.state, shellStyle, avatarStyle, motionMode)}\${bubble}\${renderAgentHover(snapshot, agent).replace("agent-hover", hoverClass)}</div>\`;
+        return \`<div class="\${wrapperClass}\${resolvedMotionMode ? \` \${resolvedMotionMode}\` : ""}" tabindex="0"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px;">\${renderAvatarShell(snapshot, agent, visualState, shellStyle, avatarStyle, resolvedMotionMode)}\${bubble}\${renderAgentHover(snapshot, agent).replace("agent-hover", hoverClass)}</div>\`;
       }
 
       function wallsideWaitingSlotAt(index, compact, roomPixelWidth, walkwayY) {
@@ -2035,11 +3272,12 @@ export function renderClientScript({
         const columns = compact ? 4 : 5;
         const column = index % columns;
         const row = Math.floor(index / columns);
-        const startX = roomPixelWidth - (compact ? 72 : 94);
+        const maxX = roomPixelWidth - (compact ? 72 : 94);
         const stepX = compact ? 24 : 30;
         const stepY = compact ? 14 : 17;
+        const startX = Math.max(compact ? 186 : 236, maxX - (columns - 1) * stepX);
         return {
-          x: Math.max(compact ? 186 : 236, startX - column * stepX),
+          x: startX + column * stepX,
           y: walkwayY + (compact ? 2 : 4) + row * stepY + (column % 2 === 0 ? 1 : 3),
           flip: column % 2 === 0,
           settle: row === 0 && column % 3 === 0
@@ -2145,6 +3383,7 @@ export function renderClientScript({
         }
 
         const compact = options.compact === true;
+        const focusMode = options.focusMode === true;
         const showOverlayLabels = options.showOverlayLabels === true;
         const tile = compact ? 18 : 24;
         const baseMaxX = Math.max(...rooms.map((room) => room.x + room.width), 24);
@@ -2170,87 +3409,97 @@ export function renderClientScript({
           const recAreaHtml = isPrimaryRoom
             ? renderIntegratedRecArea(snapshot, room.id, waitingAgents, restingAgents, compact, roomPixelWidth)
             : "";
-          const podWidth = compact ? 120 : 152;
-          const podHeight = compact ? 66 : 86;
-          const paddingX = compact ? 8 : 12;
-          const layoutWidth = Math.max(podWidth, roomPixelWidth - paddingX * 2);
-          const floorBandTop = Math.round(stageHeight * (compact ? 0.24 : 0.26));
-          const basePaddingTop = compact ? 48 : 56;
+          const layoutConfig = fixedSceneLayoutConfig(compact);
           const boothHtml = [];
-          const orderedOccupants = [...occupants].sort((left, right) => compareAgentsForDeskLayout(snapshot, left, right));
-          const pods = [];
-          for (let index = 0; index < orderedOccupants.length; index += 2) {
-            pods.push(orderedOccupants.slice(index, index + 2));
-          }
-          const columnCount = pods.length === 0
-            ? 0
-            : Math.min(layoutWidth >= (compact ? 260 : 320) ? 2 : 1, pods.length);
-          const baseColumnSize = columnCount > 0 ? Math.floor(pods.length / columnCount) : 0;
-          const extraColumns = columnCount > 0 ? pods.length % columnCount : 0;
-          const columns = [];
-          let podIndex = 0;
-          for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
-            const size = baseColumnSize + (columnIndex < extraColumns ? 1 : 0);
-            columns.push(pods.slice(podIndex, podIndex + size));
-            podIndex += size;
-          }
-          const columnGap = compact ? 14 : 18;
-          const podGap = compact ? 14 : 18;
-          const columnOffsets = compact ? [0, 10] : [0, 16];
-          const usedColumns = columns.filter((column) => column.length > 0);
-          const totalDeskHeight = usedColumns.length > 0
-            ? Math.max(...usedColumns.map((column, columnIndex) => (
-              column.length * podHeight
-              + Math.max(0, column.length - 1) * podGap
-              + columnOffsets[columnIndex % columnOffsets.length]
-            )))
-            : 0;
-          const rowStartY = usedColumns.length === 0
-            ? basePaddingTop
-            : Math.max(
-              basePaddingTop,
-              Math.min(floorBandTop, stageHeight - totalDeskHeight - (compact ? 8 : 12))
+          const officeAgents = sortedBossOfficeAgents(
+            snapshot,
+            occupants.filter((agent) => isBossOfficeCandidate(snapshot, agent))
+          );
+          const deskAgents = occupants.filter((agent) => !isBossOfficeCandidate(snapshot, agent));
+          const officeAssignments = assignAgentsToOfficeSlots(
+            snapshot,
+            officeAgents,
+            buildBossOfficeSlots(layoutConfig, officeAgents.length)
+          );
+          const deskAssignments = assignAgentsToDeskSlots(
+            snapshot,
+            deskAgents,
+            buildDeskSlots(layoutConfig, roomPixelWidth, Math.ceil(deskAgents.length / 2), officeAssignments.length > 0)
+          );
+
+          if (officeAssignments.length > 0) {
+            const officeStripHeight = Math.max(...officeAssignments.map((entry) => entry.slot.y + entry.slot.height)) - layoutConfig.bossOfficeTopY;
+            boothHtml.push(
+              \`<div class="boss-office-strip" style="left:\${layoutConfig.bossLaneX}px; top:\${Math.max(26, layoutConfig.bossOfficeTopY - 10)}px; width:\${layoutConfig.bossLaneWidth}px; height:\${officeStripHeight + 20}px;"></div>\`
             );
-          const layoutTotalWidth = usedColumns.length > 0
-            ? usedColumns.length * podWidth + Math.max(0, usedColumns.length - 1) * columnGap
-            : 0;
-          const startX = paddingX + Math.max(0, Math.floor((layoutWidth - layoutTotalWidth) / 2));
-          usedColumns.forEach((columnPods, columnIndex) => {
-            const columnX = startX + columnIndex * (podWidth + columnGap);
-            const columnOffsetY = columnOffsets[columnIndex % columnOffsets.length];
-            const columnRole = columnPods[0]?.[0] ? agentRole(columnPods[0][0]) : "default";
-            if (showOverlayLabels) {
-              const label = columnIndex === 0 ? "Lead column" : stationRoleLabel(columnRole, columnPods.flat().filter(Boolean).length);
-              boothHtml.push(
-                '<div class="' + (columnIndex === 0 ? "lead-banner" : "station-tag") + '" style="left:' + columnX + 'px; top:' + Math.max(8, rowStartY + columnOffsetY - (compact ? 18 : 22)) + 'px; ' + (columnIndex === 0 ? "border-color:" + roleTone(columnRole) + ";" : "--station-tone:" + roleTone(columnRole) + ";") + ' z-index:' + (90 + Math.round(rowStartY + columnOffsetY)) + ';">' + escapeHtml(label) + "</div>"
-              );
+          }
+
+          const cubicleLabels = new Map();
+          deskAssignments.forEach((entry) => {
+            const role = agentRole(entry.agents[0]);
+            const label = stationRoleLabel(role, entry.agents.length);
+            if (!cubicleLabels.has(entry.slot.cubicleId)) {
+              cubicleLabels.set(entry.slot.cubicleId, {
+                x: entry.slot.x,
+                y: entry.slot.y,
+                role,
+                label
+              });
             }
-            columnPods.forEach((podAgents, rowIndex) => {
-              const podY = rowStartY + columnOffsetY + rowIndex * (podHeight + podGap);
-              const podRole = podAgents[0] ? agentRole(podAgents[0]) : columnRole;
+            boothHtml.push(
+              renderDeskPod(
+                snapshot,
+                entry.agents,
+                role,
+                entry.slot.x,
+                entry.slot.y,
+                entry.slot.width,
+                entry.slot.height,
+                compact,
+                {
+                  liveOnly: options.liveOnly,
+                  roomId: room.id,
+                  entrance: entranceDecor.entrance,
+                  slotId: entry.slot.id,
+                  leftSlotId: entry.slot.id,
+                  rightSlotId: entry.slot.id
+                }
+              )
+            );
+          });
+
+          officeAssignments.forEach((entry) => {
+            boothHtml.push(
+              renderBossOffice(
+                snapshot,
+                entry.agent,
+                entry.slot.x,
+                entry.slot.y,
+                entry.slot.width,
+                entry.slot.height,
+                compact,
+                {
+                  liveOnly: options.liveOnly,
+                  roomId: room.id,
+                  entrance: entranceDecor.entrance,
+                  slotId: entry.slot.id
+                }
+              )
+            );
+          });
+
+          if (showOverlayLabels) {
+            cubicleLabels.forEach((entry) => {
               boothHtml.push(
-                renderDeskPod(
-                  snapshot,
-                  podAgents,
-                  podRole,
-                  columnX,
-                  podY,
-                  podWidth,
-                  podHeight,
-                  compact,
-                  {
-                    lead: columnIndex === 0 && rowIndex === 0,
-                    liveOnly: options.liveOnly,
-                    roomId: room.id,
-                    entrance: entranceDecor.entrance,
-                    columnIndex,
-                    rowIndex
-                  }
-                )
+                \`<div class="station-tag" style="left:\${entry.x}px; top:\${Math.max(8, entry.y - (compact ? 18 : 22))}px; --station-tone:\${roleTone(entry.role)}; z-index:\${90 + Math.round(entry.y)};">\${escapeHtml(entry.label)}</div>\`
               );
             });
-          });
-          const paddingTop = rowStartY;
+            if (officeAssignments.length > 0) {
+              boothHtml.push(
+                \`<div class="lead-banner" style="left:\${layoutConfig.bossLaneX}px; top:\${Math.max(8, layoutConfig.bossOfficeTopY - (compact ? 20 : 24))}px; border-color:#ffcf4d; z-index:120;">Boss Offices</div>\`
+              );
+            }
+          }
 
           const ghosts = departingAgents.filter(
             (ghost) => ghost.projectRoot === snapshot.projectRoot
@@ -2315,6 +3564,7 @@ export function renderClientScript({
           if (room.width >= 9 && !isPrimaryRoom) {
             decor.push(renderSprite(pixelOffice.props.calendar, roomPixelWidth - pixelOffice.props.calendar.w * calendarScale - 14, compact ? 12 : 16, calendarScale, "office-sprite", "z-index:2;"));
           }
+          const relationshipLinesHtml = renderBossRelationshipLines(snapshot, room.id, roomPixelWidth, roomPixelHeight);
 
           const visibleRecOccupants = isPrimaryRoom ? waitingAgents.length + restingAgents.length : 0;
           const empty = occupants.length === 0 && visibleRecOccupants === 0
@@ -2326,17 +3576,18 @@ export function renderClientScript({
             ? \` <span class="muted">[\${escapeHtml(room.path)}]</span>\`
             : "";
 
-          return \`<div class="room" style="left:\${room.x * tile}px; top:\${room.y * tile}px; width:\${roomPixelWidth}px; height:\${roomPixelHeight}px;"><div class="room-meta"><div class="room-head">\${escapeHtml(room.name)}\${pathLabel}</div><span class="muted">\${activeDeskOccupants.length} active agent\${activeDeskOccupants.length === 1 ? "" : "s"}</span></div><div class="room-stage"><div class="room-mural"></div><div class="room-floor"></div>\${decor.join("")}\${recAreaHtml}\${boothHtml.join("")}\${empty}</div></div>\`;
+          return \`<div class="room" style="left:\${room.x * tile}px; top:\${room.y * tile}px; width:\${roomPixelWidth}px; height:\${roomPixelHeight}px;"><div class="room-meta"><div class="room-head">\${escapeHtml(room.name)}\${pathLabel}</div><span class="muted">\${activeDeskOccupants.length} active agent\${activeDeskOccupants.length === 1 ? "" : "s"}</span></div><div class="room-stage"><div class="room-mural"></div><div class="room-floor"></div>\${decor.join("")}\${recAreaHtml}\${boothHtml.join("")}\${relationshipLinesHtml}\${empty}</div></div>\`;
         }).join("");
 
-          const hint = options.showHint === false
+          const hint = options.showHint === false || focusMode
           ? ""
           : (options.liveOnly
             ? '<div class="muted">Showing live agents plus the 4 most recent lead sessions. Recent leads cool down in the rec area while live subagents stay on the floor.</div>'
             : '<div class="muted">Room shells come from the project XML, while booths are generated live from Codex sessions and grouped by parent session and subagent role.</div>');
         const sceneClass = compact ? "scene-grid compact" : "scene-grid";
+        const sceneMode = focusMode ? "focus" : "default";
 
-        return \`<div class="scene-shell">\${hint}<div class="scene-fit \${compact ? "compact" : ""}" data-scene-fit><div class="scene-notifications" data-scene-notifications></div><div class="\${sceneClass}" data-scene-grid style="width:\${sceneWidth}px; height:\${maxY * tile}px;">\${html}</div></div></div>\`;
+        return \`<div class="scene-shell" data-scene-shell="\${sceneMode}">\${hint}<div class="scene-fit \${compact ? "compact" : ""}" data-scene-fit data-scene-mode="\${sceneMode}" data-scene-fitted="\${focusMode ? "false" : "true"}"><div class="scene-notifications" data-scene-notifications></div><div class="\${sceneClass}" data-scene-grid style="width:\${sceneWidth}px; height:\${maxY * tile}px;">\${html}</div></div></div>\`;
       }
 
       function renderTerminalSnapshot(snapshot) {
@@ -2457,16 +3708,12 @@ export function renderClientScript({
 
         const sorted = [...snapshot.agents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
-          const primaryAction = agent.url
-            ? \`<a href="\${escapeHtml(agent.url)}" target="_blank" rel="noreferrer"><button>Open task</button></a>\`
-            : "";
           const appearanceAction = \`<button data-action="cycle-look" data-project-root="\${escapeHtml(snapshot.projectRoot)}" data-agent-id="\${escapeHtml(agent.id)}">Cycle look</button>\`;
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
-
-          const location = cleanReportedPath(snapshot.projectRoot, agent.cwd || agent.url || "");
-          const parentLabel = parentLabelFor(snapshot, agent);
-          const leaderText = parentLabel ? \` · lead=\${escapeHtml(parentLabel)}\` : "";
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:start;"><div><strong>\${escapeHtml(agent.label)}</strong><div class="muted">\${escapeHtml(agentRankLabel(snapshot, agent))} · \${escapeHtml(agentRole(agent))} · [\${escapeHtml(agent.state)}] \${escapeHtml(normalizeDisplayText(snapshot.projectRoot, agent.detail))}</div></div><span class="muted">\${escapeHtml(agent.appearance.label)}</span></div><div class="inline-code" style="margin-top:8px;">\${escapeHtml(location)}</div><div class="inline-code" style="margin-top:6px;">room=\${escapeHtml(agent.roomId || "cloud")} · source=\${escapeHtml(agent.sourceKind)} · live=\${escapeHtml(agent.liveSubscription)} · provenance=\${escapeHtml(agentProvenanceLabel(agent))}\${leaderText}</div><div class="inline-code" style="margin-top:6px;">updated=\${escapeHtml(agent.updatedAt)}</div><div class="card-actions">\${primaryAction}\${appearanceAction}</div></article>\`;
+          const description = normalizeDisplayText(snapshot.projectRoot, agent.detail)
+            || latestAgentMessage(agent)
+            || \`[\${agent.state}]\`;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(agent.label)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div></article>\`;
         }).join("");
       }
 
@@ -2481,15 +3728,13 @@ export function renderClientScript({
 
         entries.sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
         return renderNeedsAttention(projects) + entries.map(({ snapshot, agent }) => {
-          const primaryAction = agent.url
-            ? \`<a href="\${escapeHtml(agent.url)}" target="_blank" rel="noreferrer"><button>Open task</button></a>\`
-            : "";
           const appearanceAction = \`<button data-action="cycle-look" data-project-root="\${escapeHtml(snapshot.projectRoot)}" data-agent-id="\${escapeHtml(agent.id)}">Cycle look</button>\`;
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
-          const location = cleanReportedPath(snapshot.projectRoot, agent.cwd || agent.url || "");
-          const parentLabel = parentLabelFor(snapshot, agent);
-          const leaderText = parentLabel ? \` · lead=\${escapeHtml(parentLabel)}\` : "";
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:start;"><div><strong>\${escapeHtml(agent.label)}</strong><div class="muted">\${escapeHtml(projectLabel(snapshot.projectRoot))} · \${escapeHtml(agentRankLabel(snapshot, agent))} · \${escapeHtml(agentRole(agent))} · [\${escapeHtml(agent.state)}] \${escapeHtml(normalizeDisplayText(snapshot.projectRoot, agent.detail))}</div></div><span class="muted">\${escapeHtml(agent.appearance.label)}</span></div><div class="inline-code" style="margin-top:8px;">\${escapeHtml(location)}</div><div class="inline-code" style="margin-top:6px;">room=\${escapeHtml(agent.roomId || "cloud")} · source=\${escapeHtml(agent.sourceKind)} · live=\${escapeHtml(agent.liveSubscription)} · provenance=\${escapeHtml(agentProvenanceLabel(agent))}\${leaderText}</div><div class="inline-code" style="margin-top:6px;">updated=\${escapeHtml(agent.updatedAt)}</div><div class="card-actions">\${primaryAction}\${appearanceAction}</div></article>\`;
+          const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail)
+            || latestAgentMessage(agent)
+            || \`[\${agent.state}]\`;
+          const description = \`\${projectLabel(snapshot.projectRoot)} · \${detail}\`;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(agent.label)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div></article>\`;
         }).join("");
       }
 
@@ -2512,16 +3757,22 @@ export function renderClientScript({
           }
           element.classList.toggle("is-focused", hasFocus && focusedKeys.has(element.dataset.focusKey || ""));
         });
+        document.querySelectorAll("[data-focus-line]").forEach((element) => {
+          if (!(element instanceof SVGElement)) {
+            return;
+          }
+          element.classList.toggle("is-focused", hasFocus && focusedKeys.has(element.dataset.focusBossKey || ""));
+        });
       }
 
-      function setSessionFocusFromCard(card) {
-        if (!(card instanceof HTMLElement)) {
+      function setSessionFocusFromElement(element) {
+        if (!(element instanceof HTMLElement)) {
           state.focusedSessionKeys = [];
           applySessionFocus();
           return;
         }
         try {
-          const parsed = JSON.parse(card.dataset.focusKeys || "[]");
+          const parsed = JSON.parse(element.dataset.focusKeys || "[]");
           state.focusedSessionKeys = Array.isArray(parsed) ? parsed.map((value) => String(value)) : [];
         } catch {
           state.focusedSessionKeys = [];
@@ -2530,9 +3781,14 @@ export function renderClientScript({
       }
 
       function syncSessionFocusFromDom() {
+        const activeSceneAgent = document.querySelector("[data-focus-agent]:focus-within, [data-focus-agent]:hover");
+        if (activeSceneAgent instanceof HTMLElement) {
+          setSessionFocusFromElement(activeSceneAgent);
+          return;
+        }
         const activeCard = document.querySelector(".session-card:focus-within, .session-card:hover");
         if (activeCard instanceof HTMLElement) {
-          setSessionFocusFromCard(activeCard);
+          setSessionFocusFromElement(activeCard);
           return;
         }
         state.focusedSessionKeys = [];
@@ -2562,11 +3818,7 @@ export function renderClientScript({
 
         for (const [key, entry] of liveAgentMemory.entries()) {
           if (!nextMemory.has(key)) {
-            departingAgents.push({
-              ...entry,
-              sceneState: renderedAgentSceneState.get(key) || null,
-              expiresAt: now + 420
-            });
+            continue;
           }
         }
 
@@ -2592,16 +3844,32 @@ export function renderClientScript({
             return;
           }
 
-          const availableWidth = Math.max(wrapper.clientWidth - 4, 1);
+          const focusMode = wrapper.dataset.sceneMode === "focus";
+          const availableWidth = Math.max(wrapper.clientWidth - (focusMode ? 0 : 4), 1);
           const wrapperRect = wrapper.getBoundingClientRect();
-          const viewportRemaining = Math.max(window.innerHeight - wrapperRect.top - 20, 1);
-          const availableHeight = Math.max(
-            Math.min(
-              viewportRemaining,
-              window.innerHeight * (wrapper.classList.contains("compact") ? 0.34 : 0.68)
-            ),
-            wrapper.classList.contains("compact") ? 180 : 220
-          );
+          const viewportRemaining = Math.max(window.innerHeight - wrapperRect.top - (focusMode ? 0 : 20), 1);
+          const availableHeight = focusMode
+            ? Math.max(wrapper.clientHeight || viewportRemaining, 1)
+            : Math.max(
+              Math.min(
+                viewportRemaining,
+                window.innerHeight * (wrapper.classList.contains("compact") ? 0.34 : 0.68)
+              ),
+              wrapper.classList.contains("compact") ? 180 : 220
+            );
+          if (focusMode) {
+            const coverScale = Math.max(availableWidth / rawWidth, availableHeight / rawHeight);
+            const boundedCoverScale = Number.isFinite(coverScale) && coverScale > 0
+              ? Math.min(Math.max(coverScale, 0.2), 6)
+              : 1;
+
+            wrapper.style.height = \`\${Math.max(1, Math.round(availableHeight))}px\`;
+            grid.style.zoom = "";
+            grid.style.transform = \`translate(-50%, -50%) scale(\${boundedCoverScale})\`;
+            wrapper.dataset.sceneFitted = "true";
+            return;
+          }
+
           const heightScale = wrapper.classList.contains("compact")
             ? availableHeight / rawHeight
             : Math.max(1, availableHeight / rawHeight);
@@ -2618,6 +3886,7 @@ export function renderClientScript({
             grid.style.zoom = "";
             grid.style.transform = \`scale(\${boundedScale})\`;
           }
+          wrapper.dataset.sceneFitted = "true";
         });
       }
 
@@ -2686,14 +3955,20 @@ export function renderClientScript({
       }
 
       function ingestFleet(fleet) {
+        const nextFleetSemanticToken = fleetSemanticToken(fleet);
+        if (nextFleetSemanticToken && nextFleetSemanticToken === lastFleetSemanticToken) {
+          return;
+        }
         const previousFleet = state.fleet;
         queueSnapshotEvents(previousFleet, fleet);
         queueAgentNotifications(previousFleet, fleet);
         state.fleet = fleet;
+        lastFleetSemanticToken = nextFleetSemanticToken;
         if (state.selected !== "all") {
           const exists = state.fleet.projects.some((project) => project.projectRoot === state.selected);
           if (!exists) {
             state.selected = "all";
+            state.workspaceFullscreen = false;
             syncUrl();
           }
         }
@@ -2704,12 +3979,19 @@ export function renderClientScript({
         if (!state.fleet) return;
 
         const fleet = state.fleet;
-        const displayedProjects = visibleProjects(fleet).map(viewSnapshot);
+        const rawProjects = visibleProjects(fleet);
+        const displayedProjects = rawProjects.map((project) => viewSnapshot(project, SCENE_RECENT_LEAD_LIMIT));
+        const sessionProjects = rawProjects.map((project) => viewSessionSnapshot(project, SESSION_RECENT_LEAD_LIMIT));
         const selectedRawSnapshot = currentSnapshot();
-        const snapshot = selectedRawSnapshot ? viewSnapshot(selectedRawSnapshot) : null;
+        const snapshot = selectedRawSnapshot ? viewSnapshot(selectedRawSnapshot, SCENE_RECENT_LEAD_LIMIT) : null;
+        const sessionSnapshot = selectedRawSnapshot ? viewSessionSnapshot(selectedRawSnapshot, SESSION_RECENT_LEAD_LIMIT) : null;
+        if (!snapshot && state.workspaceFullscreen) {
+          state.workspaceFullscreen = false;
+          syncUrl();
+        }
         syncLiveAgentState(displayedProjects);
         sceneStateDraft = null;
-        const counts = fleetCounts({ projects: displayedProjects });
+        const counts = fleetCounts({ projects: sessionProjects });
         const nextSceneToken = state.view === "map"
           ? (snapshot
             ? \`project::\${sceneSnapshotToken(snapshot)}\`
@@ -2717,19 +3999,20 @@ export function renderClientScript({
           : null;
 
         setTextIfChanged(stamp, \`Updated \${fleet.generatedAt}\`);
-        setTextIfChanged(projectCount, \`\${fleet.projects.length} tracked · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live · 4 recent leads\`);
+        setTextIfChanged(projectCount, \`\${fleet.projects.length} tracked · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live · \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`);
         mapViewButton.classList.toggle("active", state.view === "map");
         terminalViewButton.classList.toggle("active", state.view === "terminal");
         setConnection(state.connection);
+        syncWorkspaceFullscreenUi();
 
         setHtmlIfChanged(heroSummary, renderHeroSummary(counts));
 
         setHtmlIfChanged(projectTabs, [
           \`<button class="project-tab\${state.selected === "all" ? " active" : ""}" data-action="select-project" data-project-root="all">All</button>\`,
-          ...visibleProjects(fleet).map((project) => {
-            const counts = countsForSnapshot(viewSnapshot(project));
+          ...displayedProjects.map((project) => {
+            const counts = countsForSnapshot(project);
             const activeClass = project.projectRoot === state.selected ? " active" : "";
-            const badge = busyCount(project);
+            const badge = counts.active;
             return \`<button class="project-tab\${activeClass}" data-action="select-project" data-project-root="\${escapeHtml(project.projectRoot)}" title="\${escapeHtml(project.projectRoot)}">\${escapeHtml(projectLabel(project.projectRoot))} <span class="muted">\${badge}</span></button>\`;
           })
         ].join(""));
@@ -2743,9 +4026,9 @@ export function renderClientScript({
             if (shouldRenderScene) {
               lastSceneRenderToken = nextSceneToken;
             }
-            setHtmlIfChanged(sessionList, renderFleetSessions(displayedProjects), { preserveScroll: true });
+            setHtmlIfChanged(sessionList, renderFleetSessions(sessionProjects), { preserveScroll: true });
             setTextIfChanged(centerTitle, "All Workspaces");
-            setTextIfChanged(roomsPath, "Live agents plus 4 recent lead sessions across tracked workspaces");
+            setTextIfChanged(roomsPath, \`Live agents on the floor plus \${SESSION_RECENT_LEAD_LIMIT} recent sessions in the panel across tracked workspaces\`);
             if (centerChanged) {
               fitScenes();
             }
@@ -2754,6 +4037,7 @@ export function renderClientScript({
             }
             sceneStateDraft = null;
             syncSessionFocusFromDom();
+            syncWorkstationEffects();
             renderNotifications();
             return;
           }
@@ -2765,16 +4049,25 @@ export function renderClientScript({
               centerContent,
               state.view === "terminal"
                 ? renderTerminalSnapshot(snapshot)
-                : renderRoomScene(snapshot, { liveOnly: state.activeOnly }),
+                : renderRoomScene(snapshot, {
+                  liveOnly: state.activeOnly,
+                  showHint: !state.workspaceFullscreen,
+                  focusMode: state.workspaceFullscreen
+                }),
               { preserveScroll: true }
             )
             : false;
           if (shouldRenderScene) {
             lastSceneRenderToken = nextSceneToken;
           }
-          const sessionsHtml = renderSessions(snapshot);
+          const sessionsHtml = renderSessions(sessionSnapshot || snapshot);
           setHtmlIfChanged(sessionList, sessionsHtml, { preserveScroll: true });
-          setTextIfChanged(roomsPath, snapshot.rooms.generated ? "Auto rooms" : ".codex-agents/rooms.xml");
+          setTextIfChanged(
+            roomsPath,
+            snapshot.rooms.generated
+              ? \`Auto rooms · floor shows live agents plus \${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`
+              : \`.codex-agents/rooms.xml · floor shows live agents plus \${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`
+          );
           if (centerChanged) {
             fitScenes();
           }
@@ -2783,6 +4076,7 @@ export function renderClientScript({
           }
           sceneStateDraft = null;
           syncSessionFocusFromDom();
+          syncWorkstationEffects();
           renderNotifications();
         } catch (error) {
           console.error("render failed", error);
@@ -2793,6 +4087,7 @@ export function renderClientScript({
           lastSceneRenderToken = null;
           renderedAgentSceneState = new Map();
           sceneStateDraft = null;
+          syncWorkstationEffects();
         }
       }
 
@@ -2821,7 +4116,7 @@ export function renderClientScript({
       }
 
       document.body.addEventListener("click", async (event) => {
-        const target = event.target instanceof HTMLElement ? event.target.closest("[data-action], [data-view]") : null;
+        const target = event.target instanceof HTMLElement ? event.target.closest("[data-action], [data-view], #preview-toasts-button, #workspace-focus-button") : null;
         if (!(target instanceof HTMLElement)) return;
 
         if (target.dataset.view) {
@@ -2835,6 +4130,16 @@ export function renderClientScript({
           return;
         }
 
+        if (target === previewToastsButton) {
+          runToastPreview();
+          return;
+        }
+
+        if (target === workspaceFocusButton) {
+          toggleWorkspaceFullscreen();
+          return;
+        }
+
         if (action === "cycle-look" && target.dataset.projectRoot && target.dataset.agentId) {
           await postJson("/api/appearance/cycle", {
             projectRoot: target.dataset.projectRoot,
@@ -2844,52 +4149,60 @@ export function renderClientScript({
       });
 
       document.body.addEventListener("pointerover", (event) => {
-        const card = event.target instanceof HTMLElement ? event.target.closest(".session-card[data-focus-keys]") : null;
+        const focusTarget = event.target instanceof HTMLElement
+          ? event.target.closest(".session-card[data-focus-keys], [data-focus-agent][data-focus-keys]")
+          : null;
         const relatedTarget = event.relatedTarget;
-        if (!(card instanceof HTMLElement)) {
+        if (!(focusTarget instanceof HTMLElement)) {
           return;
         }
-        if (relatedTarget instanceof Node && card.contains(relatedTarget)) {
+        if (relatedTarget instanceof Node && focusTarget.contains(relatedTarget)) {
           return;
         }
-        setSessionFocusFromCard(card);
+        setSessionFocusFromElement(focusTarget);
       });
 
       document.body.addEventListener("pointerout", (event) => {
-        const card = event.target instanceof HTMLElement ? event.target.closest(".session-card[data-focus-keys]") : null;
+        const focusTarget = event.target instanceof HTMLElement
+          ? event.target.closest(".session-card[data-focus-keys], [data-focus-agent][data-focus-keys]")
+          : null;
         const relatedTarget = event.relatedTarget;
-        if (!(card instanceof HTMLElement)) {
+        if (!(focusTarget instanceof HTMLElement)) {
           return;
         }
-        if (relatedTarget instanceof Node && card.contains(relatedTarget)) {
+        if (relatedTarget instanceof Node && focusTarget.contains(relatedTarget)) {
           return;
         }
-        if (relatedTarget instanceof HTMLElement && relatedTarget.closest(".session-card[data-focus-keys]")) {
+        if (relatedTarget instanceof HTMLElement && relatedTarget.closest(".session-card[data-focus-keys], [data-focus-agent][data-focus-keys]")) {
           return;
         }
-        setSessionFocusFromCard(null);
+        setSessionFocusFromElement(null);
       });
 
       document.body.addEventListener("focusin", (event) => {
-        const card = event.target instanceof HTMLElement ? event.target.closest(".session-card[data-focus-keys]") : null;
-        if (card instanceof HTMLElement) {
-          setSessionFocusFromCard(card);
+        const focusTarget = event.target instanceof HTMLElement
+          ? event.target.closest(".session-card[data-focus-keys], [data-focus-agent][data-focus-keys]")
+          : null;
+        if (focusTarget instanceof HTMLElement) {
+          setSessionFocusFromElement(focusTarget);
         }
       });
 
       document.body.addEventListener("focusout", (event) => {
-        const card = event.target instanceof HTMLElement ? event.target.closest(".session-card[data-focus-keys]") : null;
+        const focusTarget = event.target instanceof HTMLElement
+          ? event.target.closest(".session-card[data-focus-keys], [data-focus-agent][data-focus-keys]")
+          : null;
         const relatedTarget = event.relatedTarget;
-        if (!(card instanceof HTMLElement)) {
+        if (!(focusTarget instanceof HTMLElement)) {
           return;
         }
-        if (relatedTarget instanceof Node && card.contains(relatedTarget)) {
+        if (relatedTarget instanceof Node && focusTarget.contains(relatedTarget)) {
           return;
         }
-        if (relatedTarget instanceof HTMLElement && relatedTarget.closest(".session-card[data-focus-keys]")) {
+        if (relatedTarget instanceof HTMLElement && relatedTarget.closest(".session-card[data-focus-keys], [data-focus-agent][data-focus-keys]")) {
           return;
         }
-        setSessionFocusFromCard(null);
+        setSessionFocusFromElement(null);
       });
 
       refreshButton.addEventListener("click", async () => {
@@ -2907,6 +4220,23 @@ export function renderClientScript({
         window.addEventListener("online", () => setConnection("reconnecting"));
         window.addEventListener("offline", () => setConnection("offline"));
       }
+      document.addEventListener("keydown", (event) => {
+        if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey) {
+          return;
+        }
+        if (isTypingTarget(event.target)) {
+          return;
+        }
+        if (event.key === "Escape" && state.workspaceFullscreen) {
+          event.preventDefault();
+          setWorkspaceFullscreen(false);
+          return;
+        }
+        if ((event.key === "f" || event.key === "F") && canFocusWorkspace()) {
+          event.preventDefault();
+          toggleWorkspaceFullscreen();
+        }
+      });
       window.addEventListener("resize", () => {
         fitScenes();
         renderNotifications();

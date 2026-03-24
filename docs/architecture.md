@@ -45,9 +45,16 @@ Local session JSONL files are still useful as a fallback, and Codex can persist 
 The live browser path now uses a hybrid approach:
 
 - `thread/list` and `thread/read` stay authoritative for stable thread state
+- `thread/list` is discovery-oriented only; ongoing occupancy also follows `thread/read` turn state so a `notLoaded` thread with an in-progress turn still stays live on the floor
 - active and recent threads are resumed on the observer connection so the app can receive live `turn/*`, `item/*`, approval, input, and `serverRequest/resolved` events
+- observer runtime unload notifications such as `thread/closed` or `thread/status/changed -> notLoaded` are treated as subscription state, not as proof that the underlying thread resolved
+- slow desktop `thread/resume` attaches now happen in the background so the web server does not block initial rendering on them
 - watched thread JSONL paths trigger quick re-reads when a local session changes
+- reread desktop rollout threads can synthesize message notifications from the newest assistant text when the live subscription path is degraded
+- streamed `item/agentMessage/delta` notifications are intentionally opted out on the observer connection; reply toasts prefer full reply items or reread thread messages
 - periodic discovery still runs so newly created sessions appear without a page refresh
+
+In fleet mode, every discovered workspace now keeps a live `ProjectLiveMonitor`. Selection in the UI only changes what is centered in the browser; it does not rebuild the live monitor set.
 
 The observer does attach to resumable threads now, but only for active/recent sessions and only to observe. It does not answer approval or input requests; it only visualizes them.
 
@@ -78,13 +85,15 @@ Sources:
   - deep-linkable single-project room view through `?project=<abs-path>`
   - explicit CLI project roots stay pinned to those roots instead of being replaced by auto-discovered workspace lists
   - live SSE updates for browser clients
+  - all discovered workspaces stay live-monitored at once
   - map and terminal-style views through `?view=map|terminal`
   - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
-  - local threads still marked active by Codex remain seated even if they pause between visible events
-  - recently finished local threads remain seated for a short 5-second grace window so final replies are still readable
+  - local threads remain seated while the thread is still ongoing, even if they pause between visible events or the latest turn already looks done
+  - once a thread actually stops, it remains seated for a short 5-second grace window so final replies are still readable
+  - after that grace window, only recent top-level lead sessions cool down into the rec area; finished subagents despawn instead of idling there
 - session panel includes a durable cross-project "needs you" queue for approval/input waits
   these entries now come from typed request hooks, not from regexes over session detail
-  - session cards expose provenance/confidence so Codex-native and Claude-inferred state stay distinguishable
+  - session cards expose provenance/confidence so Codex-native, Claude transcript, and Claude hook-backed state stay distinguishable
   - snapshot-only rendering through `?screenshot=1`
   - session-card hover/focus dims unrelated agents so the visible thread cluster for that session stands out in the map
   - HTTP endpoints for snapshot refresh, room scaffolding, and appearance cycling
@@ -164,7 +173,7 @@ The browser now carries a stronger event attribution path:
 - server-initiated approval/input requests are normalized into both snapshot `events` and per-agent `needsUser` state
 - browser notifications can react to those event-native records directly
 - approval and input waits are also surfaced in a durable cross-project "needs you" queue
-- Claude-derived sessions are explicitly marked as inferred through provenance/confidence metadata
+- Claude-derived sessions are explicitly marked through provenance/confidence metadata so transcript inference and hook-backed state do not read the same
 
 What is still missing is richer motion and posture tied to those events. The product can now explain more of what changed; the next step is making those changes feel more visible in-scene.
 
@@ -180,6 +189,7 @@ Current mapping:
   waiting indicator, ask-user toast, and durable needs-you queue entry
 - `item/*` command execution
   running / completed / failed command notifications, rendered as a command-prompt style mini window with monospace command text
+  one command window toast is kept per agent; new commands append to the bottom, keep the last 3 lines, and extend the visible lifetime
 - read-only shell inspection actions
   short summary toasts such as `Read workload.ts` or `Exploring 2 files`, instead of replaying the full shell command string
 - `fileChange`
@@ -190,6 +200,10 @@ Current mapping:
   parent-linked spawn/finish notifications and motion updates
 - exact app-server method icons
   toast icons resolve from `/assets/pixel-office/sprites/icons/<method>.svg` when a matching pixel icon exists
+- semantic thread-item icons
+  generic item fallbacks and the visual audit page resolve from `/assets/pixel-office/sprites/icons/thread-item/*.svg` plus reused exact-method icons where appropriate
+- icon audit route
+  `/icon-audit` renders the current official thread-item list and every exact method icon for visual inspection
 
 Remaining roadmap:
 
@@ -202,11 +216,19 @@ Remaining roadmap:
 The active office view currently favors an open station language over enclosed cubicles:
 
 - mirrored two-seat workstation pods define the primary desk language
+- workstation slots are pinned to a fixed floor grid instead of being repacked when new agents appear
+- desk columns start around one-fifth of the room width, leaving room for a boss-office lane on the left when needed
+- each workstation column is split into 2 fixed cubicles, and each cubicle holds 3 tightly stacked workstation rows
+- role grouping prefers to keep the same agent types inside the same cubicle before spilling into a new cubicle
 - a pod collapses to a single centered seat when only one live agent occupies it
 - newly occupied seats use a short retro blink reveal so the workstation appears before the worker settles
+- avatars themselves no longer flash on enter or exit; only the workstation reveal animates, and removals disappear immediately once the thread leaves current workload
 - left and right seats face opposite directions inside each pod
 - seated agents flip with the workstation direction and align to the desk/chair reach point
-- live spawn and finish motion uses the center-top room entrance as the path anchor so workers walk in and out from a visible doorway
+- lead-session arrivals and all departures use the center-top room entrance as the path anchor so workers visibly leave through the doorway
+- entering subagents split off from a nearby position around their parent, blink briefly in place, then move to their assigned desk or wall-side slot
+- lead sessions with more than one spawned subagent move into a dedicated left-side boss-office lane with a distinct floor treatment
+- hovering a boss reveals arrow lines from that office to the related spawned subagents
 - chairs and seated reach points sit slightly outward from the desk so the monitor relationship reads cleanly
 - workstation computers currently use the single complete desk cut, avoiding the broken narrow pseudo-monitor asset
 - waiting and resting agents move to an integrated wall-side rec strip instead of a detached room
@@ -222,8 +244,9 @@ Claude support uses a deliberately weaker contract than Codex:
 
 - project discovery merges Codex-discovered roots with roots inferred from `~/.claude/projects`
 - the snapshot builder can include recent Claude sessions for matching project roots
-- Claude session state is inferred from recent tool uses such as read, edit, bash, and task delegation
-- Claude agents are rendered in the same room model, but with explicit provenance/confidence so they do not pretend to have Codex-grade typed status
+- transcript-only Claude session state is still inferred from recent tool uses such as read, edit, bash, and task delegation
+- optional project-local hook sidecars in `.codex-agents/claude-hooks/<session-id>.jsonl` can upgrade Claude sessions to typed permission, tool, subagent, and stop state
+- Claude agents are rendered in the same room model, but with explicit provenance/confidence so transcript inference and hook-backed state do not pretend to have Codex-grade app-server coverage
 
 This is useful because it broadens observability across the machine, but it should remain visually and architecturally secondary to the official Codex path.
 

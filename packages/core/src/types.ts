@@ -85,6 +85,24 @@ export interface ThreadItem {
   [key: string]: unknown;
 }
 
+export type AgentActivityEventType =
+  | "userMessage"
+  | "agentMessage"
+  | "plan"
+  | "reasoning"
+  | "commandExecution"
+  | "fileChange"
+  | "mcpToolCall"
+  | "dynamicToolCall"
+  | "collabToolCall"
+  | "collabAgentToolCall"
+  | "webSearch"
+  | "imageView"
+  | "enteredReviewMode"
+  | "exitedReviewMode"
+  | "contextCompaction"
+  | "other";
+
 export type ThreadStatus =
   | { type: "notLoaded" }
   | { type: "idle" }
@@ -135,7 +153,7 @@ export interface CloudTask {
 }
 
 export interface AgentActivityEvent {
-  type: "fileChange" | "commandExecution" | "agentMessage" | "other";
+  type: AgentActivityEventType;
   action: "created" | "edited" | "deleted" | "moved" | "ran" | "said" | "updated";
   path: string | null;
   title: string;
@@ -169,6 +187,7 @@ export interface DashboardEvent {
   method: string;
   turnId?: string;
   itemId?: string;
+  itemType?: string;
   requestId?: string;
   kind: "turn" | "item" | "approval" | "input" | "command" | "fileChange" | "subagent" | "status" | "message" | "tool" | "other";
   phase: "started" | "completed" | "interrupted" | "failed" | "waiting" | "updated";
@@ -195,6 +214,7 @@ export interface DashboardAgent {
   parentThreadId: string | null;
   depth: number;
   isCurrent: boolean;
+  isOngoing: boolean;
   statusText: string | null;
   role: string | null;
   nickname: string | null;
@@ -205,6 +225,7 @@ export interface DashboardAgent {
   roomId: string | null;
   appearance: AppearanceProfile;
   updatedAt: string;
+  stoppedAt: string | null;
   paths: string[];
   activityEvent: AgentActivityEvent | null;
   latestMessage: string | null;
@@ -233,4 +254,5 @@ export interface SnapshotOptions {
   projectRoot: string;
   includeCloud?: boolean;
   localLimit?: number;
+  readThreads?: boolean;
 }

@@ -34,6 +34,21 @@ function shorten(text: string, maxLength: number): string {
   return `${normalized.slice(0, maxLength - 1)}…`;
 }
 
+function isMeaningfulAgentText(text: string | null | undefined): text is string {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  return !/^[.\-_~`"'!,;:|/\\()[\]{}]+$/.test(normalized);
+}
+
+function threadTurns(thread: CodexThread): CodexTurn[] {
+  return Array.isArray(thread.turns) ? thread.turns : [];
+}
+
 export function pickThreadLabel(thread: CodexThread): string {
   return (
     thread.name ??
@@ -132,7 +147,10 @@ function extractPathsFromText(text: string): string[] {
 }
 
 function describeAgentMessage(item: ThreadItem): { detail: string; paths: string[] } {
-  const text = typeof item.text === "string" ? item.text : "Responding";
+  const candidateText = typeof item.text === "string" ? item.text : null;
+  const text = isMeaningfulAgentText(candidateText)
+    ? candidateText
+    : "Responding";
   return {
     detail: shorten(text, 88),
     paths: extractPathsFromText(text)
@@ -140,16 +158,21 @@ function describeAgentMessage(item: ThreadItem): { detail: string; paths: string
 }
 
 function latestAgentMessageForThread(thread: CodexThread): string | null {
-  for (const turn of [...thread.turns].reverse()) {
+  const turns = threadTurns(thread);
+  for (const turn of [...turns].reverse()) {
     for (const item of [...turn.items].reverse()) {
       if (item.type !== "agentMessage" || typeof item.text !== "string") {
         continue;
       }
       const text = shorten(item.text, 240);
-      if (text.trim().length > 0) {
+      if (isMeaningfulAgentText(text)) {
         return text;
       }
     }
+  }
+  if (turns.length === 0) {
+    const preview = shorten(thread.preview || "", 240);
+    return isMeaningfulAgentText(preview) ? preview : null;
   }
   return null;
 }
@@ -216,12 +239,14 @@ function inferThreadAgentRole(thread: CodexThread, sourceKind: string): string |
       return previewRole;
     }
 
-    const userMessageRole = [...thread.turns]
+    const userMessageRole = [...threadTurns(thread)]
       .reverse()
       .flatMap((turn) => [...turn.items].reverse())
       .find((item) => item.type === "userMessage");
     const extractedUserRole = userMessageRole
-      ? extractPromptRole(extractTextContent(userMessageRole.content)[0] ?? null)
+      ? extractPromptRole(
+        extractTextContent((userMessageRole as ThreadItem & { content?: unknown }).content)[0] ?? null
+      )
       : null;
     if (extractedUserRole && extractedUserRole !== "default") {
       return extractedUserRole;
@@ -235,6 +260,14 @@ function turnHasFinalAnswer(turn: CodexTurn): boolean {
   return turn.items.some((item) => item.type === "agentMessage" && item.phase === "final_answer");
 }
 
+export function isOngoingThread(thread: CodexThread): boolean {
+  if (thread.status.type === "active") {
+    return true;
+  }
+  const lastTurn = threadTurns(thread).at(-1);
+  return lastTurn?.status === "inProgress";
+}
+
 function selectRelevantItem(items: ThreadItem[]): ThreadItem | null {
   const priority = [
     "fileChange",
@@ -242,10 +275,14 @@ function selectRelevantItem(items: ThreadItem[]): ThreadItem | null {
     "dynamicToolCall",
     "mcpToolCall",
     "webSearch",
+    "imageView",
     "collabToolCall",
     "collabAgentToolCall",
+    "enteredReviewMode",
+    "exitedReviewMode",
     "plan",
     "reasoning",
+    "contextCompaction",
     "agentMessage",
     "userMessage"
   ];
@@ -293,11 +330,23 @@ export function summariseThread(thread: CodexThread): {
     };
   }
 
-  const lastTurn = thread.turns.at(-1);
+  const turns = threadTurns(thread);
+  const lastTurn = turns.at(-1);
   if (!lastTurn) {
+    const ageMs = Date.now() - thread.updatedAt * 1000;
+    const preview = shorten(thread.preview || "", 88);
+    const recentState = ageMs <= DONE_WINDOW_MS ? "done" : "idle";
     return {
-      state: "idle",
-      detail: "No turns yet",
+      state:
+        thread.status.type === "active" ? "thinking"
+        : recentState,
+      detail:
+        preview
+        || (thread.status.type === "active"
+          ? "Thinking"
+          : recentState === "done"
+            ? "Finished recently"
+            : "Idle"),
       paths: [thread.cwd],
       activityEvent: null
     };
@@ -390,7 +439,13 @@ export function summariseThread(thread: CodexThread): {
         state: "scanning",
         detail: query,
         paths: [thread.cwd],
-        activityEvent: null
+        activityEvent: {
+          type: "webSearch",
+          action: "updated",
+          path: thread.cwd,
+          title: query,
+          isImage: false
+        }
       };
     }
     case "dynamicToolCall":
@@ -405,7 +460,13 @@ export function summariseThread(thread: CodexThread): {
         state: status === "failed" ? "blocked" : "scanning",
         detail: item.type === "dynamicToolCall" ? tool : `${server}.${tool}`,
         paths: [thread.cwd],
-        activityEvent: null
+        activityEvent: {
+          type: item.type,
+          action: "updated",
+          path: thread.cwd,
+          title: item.type === "dynamicToolCall" ? tool : `${server}.${tool}`,
+          isImage: false
+        }
       };
     }
     case "collabAgentToolCall":
@@ -413,7 +474,13 @@ export function summariseThread(thread: CodexThread): {
         state: "delegating",
         detail: "Delegating to another agent",
         paths: [thread.cwd],
-        activityEvent: null
+        activityEvent: {
+          type: "collabAgentToolCall",
+          action: "updated",
+          path: thread.cwd,
+          title: "Delegating to another agent",
+          isImage: false
+        }
       };
     case "collabToolCall": {
       const tool = typeof item.tool === "string" ? item.tool : "subagents";
@@ -445,7 +512,13 @@ export function summariseThread(thread: CodexThread): {
         state: "delegating",
         detail: label,
         paths: [thread.cwd],
-        activityEvent: null
+        activityEvent: {
+          type: "collabToolCall",
+          action: "updated",
+          path: thread.cwd,
+          title: label,
+          isImage: false
+        }
       };
     }
     case "plan":
@@ -453,14 +526,84 @@ export function summariseThread(thread: CodexThread): {
         state: "planning",
         detail: "Updating plan",
         paths: [thread.cwd],
-        activityEvent: null
+        activityEvent: {
+          type: "plan",
+          action: "updated",
+          path: thread.cwd,
+          title: "Updating plan",
+          isImage: false
+        }
       };
     case "reasoning":
       return {
         state: "thinking",
         detail: "Reasoning",
         paths: [thread.cwd],
-        activityEvent: null
+        activityEvent: {
+          type: "reasoning",
+          action: "updated",
+          path: thread.cwd,
+          title: "Reasoning",
+          isImage: false
+        }
+      };
+    case "imageView": {
+      const imagePath = typeof item.path === "string" ? item.path : thread.cwd;
+      return {
+        state: "scanning",
+        detail: imagePath ? `Viewing ${imagePath}` : "Viewing image",
+        paths: [imagePath],
+        activityEvent: {
+          type: "imageView",
+          action: "updated",
+          path: imagePath,
+          title: imagePath ? `Viewing ${imagePath}` : "Viewing image",
+          isImage: true
+        }
+      };
+    }
+    case "enteredReviewMode": {
+      const review = typeof item.review === "string" ? item.review : "Review";
+      return {
+        state: "validating",
+        detail: shorten(review, 88),
+        paths: [thread.cwd],
+        activityEvent: {
+          type: "enteredReviewMode",
+          action: "updated",
+          path: thread.cwd,
+          title: "Review started",
+          isImage: false
+        }
+      };
+    }
+    case "exitedReviewMode": {
+      const review = typeof item.review === "string" ? item.review : "Review";
+      return {
+        state: treatAsInProgress ? "thinking" : "done",
+        detail: shorten(review, 88),
+        paths: [thread.cwd],
+        activityEvent: {
+          type: "exitedReviewMode",
+          action: "updated",
+          path: thread.cwd,
+          title: "Review finished",
+          isImage: false
+        }
+      };
+    }
+    case "contextCompaction":
+      return {
+        state: "thinking",
+        detail: "Compacting context",
+        paths: [thread.cwd],
+        activityEvent: {
+          type: "contextCompaction",
+          action: "updated",
+          path: thread.cwd,
+          title: "Compacting context",
+          isImage: false
+        }
       };
     case "agentMessage":
       {
@@ -487,7 +630,13 @@ export function summariseThread(thread: CodexThread): {
         state: treatAsInProgress ? "planning" : "idle",
         detail: shorten(text, 88),
         paths: paths.length > 0 ? paths : [thread.cwd],
-        activityEvent: null
+        activityEvent: {
+          type: "userMessage",
+          action: "updated",
+          path: paths[0] ?? thread.cwd,
+          title: shorten(text, 88),
+          isImage: false
+        }
       };
     }
     default:
@@ -621,7 +770,8 @@ function matchesProjectCloudTask(task: CloudTask, projectRoot: string): boolean 
 async function buildLocalAgents(
   projectRoot: string,
   localLimit: number,
-  notes: string[]
+  notes: string[],
+  readThreads = true
 ): Promise<CodexThread[]> {
   try {
     return await withAppServerClient(async (client) => {
@@ -629,6 +779,9 @@ async function buildLocalAgents(
         cwd: projectRoot,
         limit: localLimit
       });
+      if (!readThreads) {
+        return threads;
+      }
       return Promise.all(threads.map((thread) => client.readThread(thread.id)));
     });
   } catch (error) {
@@ -646,6 +799,8 @@ export async function buildDashboardSnapshotFromState(input: {
   notes?: string[];
   needsUserByThreadId?: Map<string, NeedsUserState>;
   subscribedThreadIds?: Set<string>;
+  stoppedAtByThreadId?: Map<string, number>;
+  ongoingThreadIds?: Set<string>;
 }): Promise<DashboardSnapshot> {
   const projectRoot = input.projectRoot;
   const roomConfig = await loadRoomConfig(projectRoot);
@@ -665,11 +820,21 @@ export async function buildDashboardSnapshotFromState(input: {
   const threads = [...input.threads].sort((left, right) => right.updatedAt - left.updatedAt);
 
   for (const thread of threads) {
+    const inferredOngoing =
+      (input.ongoingThreadIds?.has(thread.id) ?? false)
+      || isOngoingThread(thread);
     const summary = applyRecentActivityEvent(
       thread,
       summariseThread(thread),
       recentEventsByThreadId.get(thread.id) ?? []
     );
+    const stoppedAtMs =
+      inferredOngoing ? null
+      : input.stoppedAtByThreadId
+        ? (input.stoppedAtByThreadId.get(thread.id) ?? null)
+        : !input.ongoingThreadIds && thread.status.type !== "active" && (summary.state === "done" || summary.state === "idle")
+          ? thread.updatedAt * 1000
+          : null;
     const latestMessage = latestAgentMessageForThread(thread);
     const appearance = await ensureAgentAppearance(projectRoot, thread.id);
     const sourceMeta = parseThreadSourceMeta(thread);
@@ -682,6 +847,7 @@ export async function buildDashboardSnapshotFromState(input: {
       parentThreadId: sourceMeta.parentThreadId,
       depth: sourceMeta.depth,
       isCurrent: false,
+      isOngoing: inferredOngoing,
       statusText: thread.status.type,
       role: resolvedRole,
       nickname: thread.agentNickname,
@@ -692,6 +858,7 @@ export async function buildDashboardSnapshotFromState(input: {
       roomId: findRoomForPaths(roomConfig, projectRoot, summary.paths),
       appearance,
       updatedAt: new Date(thread.updatedAt * 1000).toISOString(),
+      stoppedAt: stoppedAtMs ? new Date(stoppedAtMs).toISOString() : null,
       paths: summary.paths,
       activityEvent: summary.activityEvent,
       latestMessage,
@@ -718,6 +885,7 @@ export async function buildDashboardSnapshotFromState(input: {
       parentThreadId: null,
       depth: 0,
       isCurrent: false,
+      isOngoing: false,
       statusText: task.status,
       role: null,
       nickname: null,
@@ -728,6 +896,7 @@ export async function buildDashboardSnapshotFromState(input: {
       roomId: null,
       appearance,
       updatedAt: task.updatedAt,
+      stoppedAt: null,
       paths: [],
       activityEvent: null,
       latestMessage: null,
@@ -748,6 +917,8 @@ export async function buildDashboardSnapshotFromState(input: {
     agents.push({
       ...presenceAgent,
       roomId: findRoomForPaths(roomConfig, projectRoot, presenceAgent.paths),
+      isOngoing: false,
+      stoppedAt: null,
       activityEvent: null,
       latestMessage: null,
       provenance: "presence",
@@ -791,7 +962,12 @@ export async function buildDashboardSnapshot(
   const projectRoot = options.projectRoot;
   const notes: string[] = [];
 
-  const threads = await buildLocalAgents(projectRoot, options.localLimit ?? 10, notes);
+  const threads = await buildLocalAgents(
+    projectRoot,
+    options.localLimit ?? 10,
+    notes,
+    options.readThreads !== false
+  );
   let cloudTasks: CloudTask[] = [];
   if (options.includeCloud !== false) {
     try {

@@ -5,8 +5,7 @@ import {
   cycleAgentAppearance,
   discoverProjects,
   ProjectLiveMonitor,
-  scaffoldRoomsFile,
-  type DashboardSnapshot
+  scaffoldRoomsFile
 } from "@codex-agents-office/core";
 
 import { buildFleetResponse } from "./server-metadata";
@@ -14,10 +13,12 @@ import { buildProjectDescriptors } from "./server-options";
 import type { FleetResponse, ProjectDescriptor } from "./server-types";
 
 export class FleetLiveService {
+  private static readonly PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
   private readonly monitors = new Map<string, ProjectLiveMonitor>();
   private readonly clients = new Set<ServerResponse>();
   private projects: ProjectDescriptor[] = [];
   private fleet: FleetResponse | null = null;
+  private lastProjectSetRefreshAt = 0;
 
   constructor(
     private readonly seedProjects: ProjectDescriptor[],
@@ -25,7 +26,7 @@ export class FleetLiveService {
   ) {}
 
   async start(): Promise<void> {
-    await this.refreshProjectSet();
+    await this.ensureProjectSet(true);
     await this.publish();
   }
 
@@ -42,13 +43,13 @@ export class FleetLiveService {
 
   async getFleet(): Promise<FleetResponse> {
     if (!this.fleet) {
-      await this.publish();
+      await this.publish(true);
     }
-    return this.fleet ?? buildFleetResponse(this.projects, new Map<string, DashboardSnapshot>());
+    return this.fleet ?? buildFleetResponse(this.projects, new Map());
   }
 
   async refreshAll(): Promise<FleetResponse> {
-    await this.refreshProjectSet();
+    await this.ensureProjectSet(true);
     await Promise.all(Array.from(this.monitors.values()).map((monitor) => monitor.refreshNow()));
     await this.publish();
     return this.getFleet();
@@ -91,9 +92,9 @@ export class FleetLiveService {
     });
   }
 
-  private async publish(): Promise<void> {
-    await this.refreshProjectSet();
-    const snapshotsByRoot = new Map<string, DashboardSnapshot>();
+  private async publish(forceProjectRefresh = false): Promise<void> {
+    await this.ensureProjectSet(forceProjectRefresh);
+    const snapshotsByRoot = new Map();
     for (const project of this.projects) {
       const snapshot = this.monitors.get(project.root)?.getSnapshot();
       if (snapshot) {
@@ -108,10 +109,18 @@ export class FleetLiveService {
     }
   }
 
+  private async ensureProjectSet(force = false): Promise<void> {
+    const stale = Date.now() - this.lastProjectSetRefreshAt >= FleetLiveService.PROJECT_SET_REFRESH_INTERVAL_MS;
+    if (!force && this.projects.length > 0 && !stale) {
+      return;
+    }
+    await this.refreshProjectSet();
+  }
+
   private async refreshProjectSet(): Promise<void> {
-    const discoveredProjects = this.explicitProjects
+    const discoveredProjects: ProjectDescriptor[] = this.explicitProjects
       ? []
-      : await discoverProjects(50).catch(() => []);
+      : await discoverProjects(10).catch(() => []);
     const normalizedSeeds = this.seedProjects
       .map((project) => {
         const root = canonicalizeProjectPath(project.root);
@@ -129,6 +138,8 @@ export class FleetLiveService {
     const nextProjects = buildProjectDescriptors(nextProjectRoots);
     const nextRoots = new Set(nextProjects.map((project) => project.root));
 
+    const newMonitors: ProjectLiveMonitor[] = [];
+
     for (const project of nextProjects) {
       if (this.monitors.has(project.root)) {
         continue;
@@ -142,8 +153,10 @@ export class FleetLiveService {
         void this.publish();
       });
       this.monitors.set(project.root, monitor);
-      await monitor.start();
+      newMonitors.push(monitor);
     }
+
+    await Promise.all(newMonitors.map((monitor) => monitor.start()));
 
     for (const [projectRoot, monitor] of Array.from(this.monitors.entries())) {
       if (nextRoots.has(projectRoot)) {
@@ -154,5 +167,6 @@ export class FleetLiveService {
     }
 
     this.projects = nextProjects;
+    this.lastProjectSetRefreshAt = Date.now();
   }
 }
