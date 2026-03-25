@@ -7,6 +7,7 @@ const {
   buildRolloutHookEvent,
   buildThreadReadAgentMessageEvent,
   parseApplyPatchInput,
+  ProjectLiveMonitor,
   shouldMarkThreadLiveFromAppServerNotification,
   shouldMarkThreadStoppedFromAppServerNotification
 } = require("../dist/live-monitor.js");
@@ -471,7 +472,7 @@ test("recently finished local threads stay current for a short grace window", as
   const recentDoneThread = {
     ...sampleThread(),
     status: { type: "idle" },
-    updatedAt: Math.floor((Date.now() - 2000) / 1000),
+    updatedAt: Math.floor((Date.now() - 1000) / 1000),
     turns: [
       {
         id: "turn_1",
@@ -539,11 +540,50 @@ test("recently finished subagents leave current workload faster than top-level t
   assert.equal(isCurrentWorkloadAgent(subagent, now), false);
 });
 
+test("stale local blocked threads do not stay current forever without ongoing state", () => {
+  const now = Date.parse("2026-03-25T12:00:00.000Z");
+  const blockedAgent = {
+    id: "thr_blocked_old",
+    label: "Old blocked thread",
+    source: "local",
+    sourceKind: "vscode",
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "notLoaded",
+    role: null,
+    nickname: null,
+    isSubagent: false,
+    state: "blocked",
+    detail: "old failed command",
+    cwd: "/mnt/f/AI/CodexAgentsOffice",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-24T15:32:00.000Z",
+    stoppedAt: null,
+    paths: ["/mnt/f/AI/CodexAgentsOffice"],
+    activityEvent: null,
+    latestMessage: null,
+    threadId: "thr_blocked_old",
+    taskId: null,
+    resumeCommand: "codex resume thr_blocked_old",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly"
+  };
+
+  assert.equal(isCurrentWorkloadAgent(blockedAgent, now), false);
+});
+
 test("recently finished local threads stay current even when live monitor bookkeeping has not set stoppedAt yet", async () => {
   const recentDoneThread = {
     ...sampleThread(),
     status: { type: "idle" },
-    updatedAt: Math.floor((Date.now() - 2000) / 1000),
+    updatedAt: Math.floor((Date.now() - 1000) / 1000),
     turns: [
       {
         id: "turn_1",
@@ -808,6 +848,20 @@ test("fresh completed reply events keep final reply activity without reactivatin
   assert.equal(agent.isCurrent, false);
   assert.equal(agent.activityEvent?.type, "agentMessage");
   assert.equal(agent.detail, "Final reply text");
+});
+
+test("shared cloud rate-limit notes stay human readable", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    includeCloud: false
+  });
+
+  monitor.setSharedCloudTasks([], "Codex cloud temporarily rate-limited; retrying in 5 minutes.");
+  await monitor.rebuildSnapshot();
+
+  const snapshot = monitor.getSnapshot();
+  assert.ok(snapshot);
+  assert.deepEqual(snapshot.notes, ["Codex cloud temporarily rate-limited; retrying in 5 minutes."]);
 });
 
 test("explicitly stopped threads leave only after the stop grace window", async () => {

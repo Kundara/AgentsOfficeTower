@@ -144,6 +144,7 @@ How we use it:
 
 In fleet mode, every discovered workspace keeps a live monitor. The selected workspace only changes browser focus; it does not change which projects are subscribed.
 The web server's `/api/server-meta` route now reports that live bound project set, so fleet diagnostics reflect the current monitor scope instead of only the startup seed roots.
+Fleet mode also shares one `codex cloud list --json` poller across those monitors instead of running the same cloud query once per project, and a `429` now degrades into a single human-readable rate-limit note plus temporary backoff rather than duplicated raw failure notes on every project.
 
 ### Thread status and active flags
 
@@ -176,7 +177,7 @@ Current-workload occupancy rules on top of that state:
 - a `notLoaded` thread still stays `isCurrent` when `thread/read` shows its latest turn is `inProgress`
 - observer-owned unload/runtime-idle transitions such as `thread/closed` or `thread/status/changed -> notLoaded` are not treated as stop signals by themselves; the monitor confirms stops from turn-terminal events plus reread thread state
 - local desk occupancy no longer uses a generic freshness fallback for non-idle summaries; if a thread is not ongoing, not waiting on the user, and not inside the stop grace window, it is no longer `isCurrent`
-- once the thread actually stops, it stays `isCurrent` for about 5 seconds so its final reply can still be read before it leaves the desk
+- once the thread actually stops, it stays `isCurrent` for about 2 seconds so its final reply can still be read before it leaves the desk
 - non-local `idle` sessions still drop out of current-workload filtering immediately
 
 In the browser this becomes:

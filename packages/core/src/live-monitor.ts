@@ -38,6 +38,8 @@ const MAX_RECENT_EVENTS = 64;
 // sessions, and a too-short timeout drops the live item stream we need for
 // `item/agentMessage/*` notifications.
 const APP_SERVER_SUBSCRIPTION_TIMEOUT_MS = 25000;
+const CLOUD_NOTE_LEGACY_PREFIX = "Codex cloud list unavailable:";
+const CLOUD_NOTE_PREFIX = "Codex cloud ";
 const ROLLOUT_TAIL_BYTES = 512 * 1024;
 const STOPPED_THREAD_REMOVAL_BUFFER_MS = 1000;
 const DEFAULT_LOCAL_THREAD_LIMIT = 24;
@@ -1185,9 +1187,17 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   async refreshNow(): Promise<void> {
-    await this.refreshCloudTasks();
+    if (this.includeCloud) {
+      await this.refreshCloudTasks();
+    }
     await this.discoverThreads();
     await this.rebuildSnapshot();
+  }
+
+  setSharedCloudTasks(tasks: CloudTask[], errorMessage: string | null): void {
+    this.cloudTasks = filterProjectCloudTasks(tasks, this.projectRoot);
+    this.setCloudErrorNote(errorMessage);
+    this.scheduleSnapshot();
   }
 
   async stop(): Promise<void> {
@@ -1263,6 +1273,19 @@ export class ProjectLiveMonitor extends EventEmitter {
         this.notes.delete(note);
       }
     }
+  }
+
+  private setCloudErrorNote(errorMessage: string | null): void {
+    this.clearMatchingNote(CLOUD_NOTE_LEGACY_PREFIX);
+    this.clearMatchingNote(CLOUD_NOTE_PREFIX);
+    if (!errorMessage) {
+      return;
+    }
+    this.addNote(
+      errorMessage.startsWith(CLOUD_NOTE_PREFIX)
+        ? errorMessage
+        : `${CLOUD_NOTE_LEGACY_PREFIX} ${errorMessage}`
+    );
   }
 
   private async discoverThreads(): Promise<void> {
@@ -1711,11 +1734,11 @@ export class ProjectLiveMonitor extends EventEmitter {
     try {
       const listed = await listCloudTasks(10);
       this.cloudTasks = filterProjectCloudTasks(listed, this.projectRoot);
-      this.clearMatchingNote("Codex cloud list unavailable:");
+      this.setCloudErrorNote(null);
       this.scheduleSnapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.addNote(`Codex cloud list unavailable: ${message}`);
+      this.setCloudErrorNote(message);
       this.scheduleSnapshot();
     }
   }

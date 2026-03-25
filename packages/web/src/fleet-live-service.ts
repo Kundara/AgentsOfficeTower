@@ -4,9 +4,11 @@ import {
   canonicalizeProjectPath,
   cycleAgentAppearance,
   discoverProjects,
+  listCloudTasks,
   ProjectLiveMonitor,
   scaffoldRoomsFile
 } from "@codex-agents-office/core";
+import type { CloudTask } from "@codex-agents-office/core";
 
 import { buildFleetResponse } from "./server-metadata";
 import { buildProjectDescriptors } from "./server-options";
@@ -14,11 +16,17 @@ import type { FleetResponse, ProjectDescriptor } from "./server-types";
 
 export class FleetLiveService {
   private static readonly PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
+  private static readonly CLOUD_REFRESH_INTERVAL_MS = 30000;
+  private static readonly CLOUD_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
   private readonly monitors = new Map<string, ProjectLiveMonitor>();
   private readonly clients = new Set<ServerResponse>();
   private projects: ProjectDescriptor[] = [];
   private fleet: FleetResponse | null = null;
   private lastProjectSetRefreshAt = 0;
+  private sharedCloudTasks: CloudTask[] = [];
+  private sharedCloudErrorMessage: string | null = null;
+  private cloudTimer: NodeJS.Timeout | null = null;
+  private cloudBackoffUntil = 0;
 
   constructor(
     private readonly seedProjects: ProjectDescriptor[],
@@ -27,10 +35,18 @@ export class FleetLiveService {
 
   async start(): Promise<void> {
     await this.ensureProjectSet(true);
+    await this.refreshSharedCloudTasks();
+    this.cloudTimer = setInterval(() => {
+      void this.refreshSharedCloudTasks();
+    }, FleetLiveService.CLOUD_REFRESH_INTERVAL_MS);
     await this.publish();
   }
 
   async stop(): Promise<void> {
+    if (this.cloudTimer) {
+      clearInterval(this.cloudTimer);
+      this.cloudTimer = null;
+    }
     for (const monitor of this.monitors.values()) {
       await monitor.stop();
     }
@@ -55,6 +71,7 @@ export class FleetLiveService {
 
   async refreshAll(): Promise<FleetResponse> {
     await this.ensureProjectSet(true);
+    await this.refreshSharedCloudTasks();
     await Promise.all(Array.from(this.monitors.values()).map((monitor) => monitor.refreshNow()));
     await this.publish();
     return this.getFleet();
@@ -152,11 +169,12 @@ export class FleetLiveService {
 
       const monitor = new ProjectLiveMonitor({
         projectRoot: project.root,
-        includeCloud: true
+        includeCloud: false
       });
       monitor.on("snapshot", () => {
         void this.publish();
       });
+      monitor.setSharedCloudTasks(this.sharedCloudTasks, this.sharedCloudErrorMessage);
       this.monitors.set(project.root, monitor);
       newMonitors.push(monitor);
     }
@@ -173,5 +191,41 @@ export class FleetLiveService {
 
     this.projects = nextProjects;
     this.lastProjectSetRefreshAt = Date.now();
+  }
+
+  private async refreshSharedCloudTasks(): Promise<void> {
+    if (Date.now() < this.cloudBackoffUntil) {
+      this.applySharedCloudTasksToMonitors();
+      return;
+    }
+
+    try {
+      this.sharedCloudTasks = await listCloudTasks(10);
+      this.sharedCloudErrorMessage = null;
+      this.cloudBackoffUntil = 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.sharedCloudTasks = [];
+      const rateLimited = /429|rate limit/i.test(message);
+      if (rateLimited) {
+        this.cloudBackoffUntil = Date.now() + FleetLiveService.CLOUD_RATE_LIMIT_BACKOFF_MS;
+        this.sharedCloudErrorMessage = "Codex cloud temporarily rate-limited; retrying in 5 minutes.";
+      } else {
+        this.sharedCloudErrorMessage = message;
+      }
+    }
+
+    this.applySharedCloudTasksToMonitors();
+  }
+
+  private applySharedCloudTasksToMonitors(): void {
+    let emittedSharedError = false;
+    for (const monitor of this.monitors.values()) {
+      const errorMessage: string | null = this.sharedCloudErrorMessage && !emittedSharedError
+        ? this.sharedCloudErrorMessage
+        : null;
+      monitor.setSharedCloudTasks(this.sharedCloudTasks, errorMessage);
+      emittedSharedError = emittedSharedError || Boolean(errorMessage);
+    }
   }
 }

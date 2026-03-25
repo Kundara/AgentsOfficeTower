@@ -67,6 +67,8 @@ export function renderClientScript({
       const DEPARTING_AGENT_TTL_MS = 520;
       let lastSceneRenderToken = null;
       let lastFleetSemanticToken = null;
+      const recentLeadDisplayMemory = new Map();
+      const activeRecentLeadReservations = new Map();
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));
       function projectInfo(projectRoot) {
@@ -355,16 +357,58 @@ export function renderClientScript({
           && Boolean(agent.threadId || agent.taskId || agent.url || agent.source === "claude");
       }
 
+      function reservedRecentLeadSlots(snapshot) {
+        const reservations = activeRecentLeadReservations.get(snapshot.projectRoot);
+        return reservations ? reservations.size : 0;
+      }
+
+      function updateRecentLeadReservations(projects) {
+        for (const snapshot of projects) {
+          const previousVisibleIds = recentLeadDisplayMemory.get(snapshot.projectRoot) || [];
+          const activeIds = new Set(
+            snapshot.agents
+              .filter((agent) => isBusyAgent(agent) && isRecentLeadCandidate(agent))
+              .map((agent) => agent.id)
+          );
+          const nextReservations = new Set(
+            [...(activeRecentLeadReservations.get(snapshot.projectRoot) || new Set())]
+              .filter((agentId) => activeIds.has(agentId))
+          );
+
+          for (const agentId of previousVisibleIds) {
+            if (activeIds.has(agentId)) {
+              nextReservations.add(agentId);
+            }
+          }
+
+          if (nextReservations.size > 0) {
+            activeRecentLeadReservations.set(snapshot.projectRoot, nextReservations);
+          } else {
+            activeRecentLeadReservations.delete(snapshot.projectRoot);
+          }
+        }
+      }
+
+      function rememberVisibleRecentLeads(projects) {
+        for (const snapshot of projects) {
+          const visibleIds = snapshot.agents
+            .filter((agent) => isRecentLeadCandidate(agent) && !isBusyAgent(agent))
+            .map((agent) => agent.id);
+          recentLeadDisplayMemory.set(snapshot.projectRoot, visibleIds);
+        }
+      }
+
       function isRecentSessionCandidate(agent) {
         return agent.source !== "cloud" && agent.source !== "presence";
       }
 
       function recentLeadAgents(snapshot, limit = SCENE_RECENT_LEAD_LIMIT) {
         const activeIds = new Set(snapshot.agents.filter(isBusyAgent).map((agent) => agent.id));
+        const effectiveLimit = Math.max(0, limit - reservedRecentLeadSlots(snapshot));
         return [...snapshot.agents]
           .filter((agent) => isRecentLeadCandidate(agent) && !activeIds.has(agent.id))
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-          .slice(0, limit);
+          .slice(0, effectiveLimit);
       }
 
       function recentSessionAgents(snapshot, limit = SESSION_RECENT_LEAD_LIMIT) {
@@ -719,13 +763,13 @@ export function renderClientScript({
               deskTopY: 56,
               podWidth: 120,
               podHeight: 54,
-              bossLaneX: 14,
-              bossLaneWidth: 86,
-              bossOfficeGapToDesk: 14,
+              bossLaneX: 8,
+              bossLaneWidth: 64,
+              bossOfficeGapToDesk: 8,
               bossOfficeTopY: 68,
               bossOfficeGapY: 8,
-              bossOfficeWidth: 76,
-              bossOfficeHeight: 46
+              bossOfficeWidth: 56,
+              bossOfficeHeight: 34
             }
           : {
               deskStartRatio: 0.2,
@@ -737,13 +781,13 @@ export function renderClientScript({
               deskTopY: 66,
               podWidth: 152,
               podHeight: 70,
-              bossLaneX: 18,
-              bossLaneWidth: 102,
-              bossOfficeGapToDesk: 18,
+              bossLaneX: 10,
+              bossLaneWidth: 74,
+              bossOfficeGapToDesk: 10,
               bossOfficeTopY: 82,
               bossOfficeGapY: 10,
-              bossOfficeWidth: 88,
-              bossOfficeHeight: 58
+              bossOfficeWidth: 62,
+              bossOfficeHeight: 40
             };
       }
 
@@ -1400,20 +1444,34 @@ export function renderClientScript({
         });
       }
 
+      function latestTypedMessageEvent(snapshot, agent) {
+        if (!snapshot || !agent || !agent.threadId) {
+          return null;
+        }
+        const matching = (snapshot.events || [])
+          .filter((event) => event.threadId === agent.threadId && event.kind === "message");
+        if (matching.length === 0) {
+          return null;
+        }
+        return matching.sort((left, right) => {
+          const leftAt = Date.parse(left.createdAt || "");
+          const rightAt = Date.parse(right.createdAt || "");
+          return (Number.isFinite(rightAt) ? rightAt : 0) - (Number.isFinite(leftAt) ? leftAt : 0);
+        })[0] || null;
+      }
+
       function notificationDescriptor(snapshot, agent, previous) {
         const event = agent.activityEvent;
         const stateChanged = !previous || previous.state !== agent.state || previous.detail !== agent.detail;
         const latestMessageChanged = Boolean(agent.latestMessage) && agent.latestMessage !== (previous ? previous.latestMessage : null);
+        const typedMessageEvent = latestTypedMessageEvent(snapshot, agent);
 
         if (latestMessageChanged) {
-          if (agentHasTypedEvent(snapshot, agent)) {
-            return null;
-          }
           return {
             kindClass: "update",
             label: "",
             labelIconUrl: eventIconUrlForActivityType("agentMessage"),
-            title: normalizeDisplayText(snapshot.projectRoot, agent.latestMessage),
+            title: normalizeDisplayText(snapshot.projectRoot, typedMessageEvent?.detail || agent.latestMessage),
             imageUrl: null,
             anchor: "agent",
             isFileChange: false,
@@ -1428,7 +1486,7 @@ export function renderClientScript({
           return null;
         }
 
-        if (agentHasTypedEvent(snapshot, agent)) {
+        if (agentHasTypedEvent(snapshot, agent) && !(typedMessageEvent && stateChanged)) {
           return null;
         }
 
@@ -1477,7 +1535,7 @@ export function renderClientScript({
             };
           }
 
-          if (event.type === "agentMessage" && stateChanged && agent.state !== "done") {
+          if (event.type === "agentMessage" && stateChanged) {
             return {
               kindClass: "update",
               label: "",
@@ -2841,6 +2899,10 @@ export function renderClientScript({
         return slots[index % slots.length];
       }
 
+      function renderBlockedMarker(x, y) {
+        return \`<img class="avatar-status-marker blocked" src="/assets/pixel-office/sprites/icons/state/blocked.svg" alt="" style="left:\${Math.round(x)}px; top:\${Math.round(y)}px;" />\`;
+      }
+
       function chairSpriteForAgent(agent) {
         return pixelOffice.chairs[stableHash(agent.id) % pixelOffice.chairs.length];
       }
@@ -2948,13 +3010,18 @@ export function renderClientScript({
           : state === "waiting" ? "speech-bubble waiting"
           : "speech-bubble";
         const bubbleLabel = !agent ? null
-          : state === "blocked" ? "!"
           : state === "waiting" ? "..."
           : state === "cloud" ? "cloud"
           : state === "validating" ? "ok"
           : null;
         const bubble = bubbleLabel && !motionMode
           ? \`<div class="\${bubbleClass}" style="left:\${Math.round((avatarPose?.x || 0) + avatarWidth / 2)}px; top:\${Math.max(0, Math.round((avatarPose?.y || 0) - 12))}px;">\${escapeHtml(bubbleLabel)}</div>\`
+          : "";
+        const blockedMarker = agent && avatarPose && state === "blocked" && agent.isCurrent && !motionMode
+          ? renderBlockedMarker(
+            (avatarPose.x || 0) + avatarWidth / 2 - (compact ? 8 : 9),
+            Math.max(0, (avatarPose.y || 0) - (compact ? 19 : 21))
+          )
           : "";
         const avatarStyle = avatar && agent && avatarPose
           ? [
@@ -3033,7 +3100,7 @@ export function renderClientScript({
         const tabIndex = agent ? "0" : "-1";
         const cellClasses = ["cubicle-cell"];
         if (resolvedMotionMode) cellClasses.push(resolvedMotionMode);
-        return \`<div class="\${cellClasses.join(" ")}" tabindex="\${tabIndex}"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px; width:\${boothWidth}px; height:\${boothHeight}px;"><div class="desk-shell"\${agent ? \` data-workstation-key="\${escapeHtml(agentKey(snapshot.projectRoot, agent))}"\` : ""}>\${deskShell}</div>\${avatarHtml}\${bubble}\${hoverHtml}</div>\`;
+        return \`<div class="\${cellClasses.join(" ")}" tabindex="\${tabIndex}"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px; width:\${boothWidth}px; height:\${boothHeight}px;"><div class="desk-shell"\${agent ? \` data-workstation-key="\${escapeHtml(agentKey(snapshot.projectRoot, agent))}"\` : ""}>\${deskShell}</div>\${avatarHtml}\${blockedMarker}\${bubble}\${hoverHtml}</div>\`;
       }
 
       function renderDeskPod(snapshot, agents, role, x, y, podWidth, podHeight, compact, options = {}) {
@@ -3262,6 +3329,9 @@ export function renderClientScript({
         const bubble = bubbleLabel && !resolvedMotionMode
           ? \`<div class="\${bubbleClass}" style="left:\${Math.round(avatarWidth / 2)}px; top:-10px;">\${escapeHtml(bubbleLabel)}</div>\`
           : "";
+        const blockedMarker = visualState === "blocked" && agent.isCurrent && !resolvedMotionMode
+          ? renderBlockedMarker(avatarWidth / 2 - (compact ? 8 : 9), compact ? -18 : -20)
+          : "";
         const hoverClass = visualState === "waiting" ? "waiting-hover" : "lounge-hover";
         const wrapperClass = visualState === "waiting" ? "waiting-agent" : "lounge-agent";
         if (motionMode !== "departing") {
@@ -3279,7 +3349,7 @@ export function renderClientScript({
             avatarHeight: Math.round(avatarHeight)
           });
         }
-        return \`<div class="\${wrapperClass}\${resolvedMotionMode ? \` \${resolvedMotionMode}\` : ""}" tabindex="0"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px;">\${renderAvatarShell(snapshot, agent, visualState, shellStyle, avatarStyle, resolvedMotionMode)}\${bubble}\${renderAgentHover(snapshot, agent).replace("agent-hover", hoverClass)}</div>\`;
+        return \`<div class="\${wrapperClass}\${resolvedMotionMode ? \` \${resolvedMotionMode}\` : ""}" tabindex="0"\${focusWrapperAttrs(snapshot, agent)} style="left:\${Math.round(x)}px; top:\${Math.round(y)}px;">\${renderAvatarShell(snapshot, agent, visualState, shellStyle, avatarStyle, resolvedMotionMode)}\${blockedMarker}\${bubble}\${renderAgentHover(snapshot, agent).replace("agent-hover", hoverClass)}</div>\`;
       }
 
       function wallsideWaitingSlotAt(index, compact, roomPixelWidth, walkwayY) {
@@ -4056,6 +4126,7 @@ export function renderClientScript({
 
         const fleet = state.fleet;
         const rawProjects = visibleProjects(fleet);
+        updateRecentLeadReservations(rawProjects);
         const displayedProjects = rawProjects.map((project) => viewSnapshot(project, SCENE_RECENT_LEAD_LIMIT));
         const sessionProjects = rawProjects.map((project) => viewSessionSnapshot(project, SESSION_RECENT_LEAD_LIMIT));
         const selectedRawSnapshot = currentSnapshot();
@@ -4065,7 +4136,7 @@ export function renderClientScript({
           state.workspaceFullscreen = false;
           syncUrl();
         }
-        syncLiveAgentState(displayedProjects);
+        syncLiveAgentState(rawProjects);
         sceneStateDraft = null;
         const counts = fleetCounts({ projects: sessionProjects });
         const nextSceneToken = state.view === "map"
@@ -4079,6 +4150,7 @@ export function renderClientScript({
         mapViewButton.classList.toggle("active", state.view === "map");
         terminalViewButton.classList.toggle("active", state.view === "terminal");
         setConnection(state.connection);
+        rememberVisibleRecentLeads(displayedProjects);
         syncWorkspaceFullscreenUi();
         syncFleetBackdrop();
         syncSkyParallax();

@@ -6,7 +6,7 @@ const ACTIVE_PRESENCE_WINDOW_MS = 3 * 60 * 1000;
 const ACTIVE_CLOUD_WINDOW_MS = 8 * 60 * 60 * 1000;
 const ACTIVE_SUBSCRIBED_LOCAL_WINDOW_MS = 90 * 1000;
 const ACTIVE_FRESH_LOCAL_WINDOW_MS = 30 * 1000;
-export const RECENT_DONE_GRACE_MS = 5 * 1000;
+export const RECENT_DONE_GRACE_MS = 2 * 1000;
 const SUBAGENT_DONE_GRACE_MS = 1200;
 
 const TERMINAL_CLOUD_STATUSES = new Set([
@@ -73,11 +73,12 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
     if (
       agent.isOngoing
       || agent.statusText === "active"
-      || agent.state === "waiting"
-      || agent.state === "blocked"
       || agent.needsUser !== null
     ) {
       return true;
+    }
+    if (agent.state === "waiting" || agent.state === "blocked") {
+      return now - updatedAt <= WAITING_LOCAL_WINDOW_MS;
     }
     if (agent.state === "done") {
       return now - updatedAt <= doneGraceMs;

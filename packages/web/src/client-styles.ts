@@ -1318,7 +1318,6 @@ export const CLIENT_STYLES = `
       }
 
       .office-avatar.state-blocked {
-        outline: 2px solid rgba(240, 109, 94, 0.65);
         --state-animation: worker-alert 0.9s steps(2, end) infinite;
       }
 
@@ -1356,6 +1355,20 @@ export const CLIENT_STYLES = `
 
       .speech-bubble.resting {
         background: rgba(227, 244, 237, 0.96);
+      }
+
+      .avatar-status-marker {
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        z-index: 7;
+        pointer-events: none;
+        image-rendering: pixelated;
+        filter: drop-shadow(2px 2px 0 rgba(0,0,0,0.22));
+      }
+
+      .avatar-status-marker.blocked {
+        object-fit: contain;
       }
 
       .agent-hover,

@@ -4,6 +4,8 @@
 
 Render Codex work as a room-based "agent office" without depending on private internals. The current pass keeps the official Codex integration surface and renders active workload as room-based office stations built from PixelOffice assets.
 
+Behavior and renderer expectations now live in [docs/spec.md](/mnt/f/AI/CodexAgentsOffice/docs/spec.md). This file stays focused on system structure and module boundaries.
+
 ## Codex hook strategy
 
 The detailed hook inventory now lives in [docs/integration-hooks.md](/mnt/f/AI/CodexAgentsOffice/docs/integration-hooks.md). This file stays focused on architecture and product shape.
@@ -95,7 +97,7 @@ Sources:
 - map and terminal-style views through `?view=map|terminal`
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
 - local threads remain seated while the thread is still ongoing, even if they pause between visible events or the latest turn already looks done
-- once a thread actually stops, it remains seated for a short 5-second grace window so final replies are still readable
+- once a thread actually stops, it remains seated for a short 2-second grace window so final replies are still readable
 - after that grace window, only recent top-level lead sessions cool down into the rec area; finished subagents despawn instead of idling there
 - lead sessions with more than one active subagent now use a slimmer left-side lead lane with a distinct floor treatment and horizontal separators, instead of a large boxed office
 - session panel includes a durable cross-project "needs you" queue for approval/input waits
@@ -122,7 +124,7 @@ The web package now separates transport, lifecycle, and rendering concerns inste
 - `packages/web/src/server-metadata.ts`
   Builds startup fleet placeholders and the shared `/api/server-meta` payload shape.
 - `packages/web/src/fleet-live-service.ts`
-  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, and fans them out over SSE.
+  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, and fans them out over SSE. Fleet-wide cloud task polling also lives here now so `codex cloud list` runs once per fleet refresh cycle instead of once per project monitor, with shared backoff when the upstream cloud surface rate-limits.
 - `packages/web/src/router.ts`
   Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, and room scaffolding. In fleet mode, the meta route now reports the live project set from `FleetLiveService`, not just the startup seed options.
 - `packages/web/src/render-html.ts`
