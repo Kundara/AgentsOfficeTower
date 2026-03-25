@@ -8,9 +8,9 @@ import { parseArgs } from "./server-options";
 
 export async function startWebServer(argv: string[] = process.argv.slice(2)): Promise<void> {
   const options = parseArgs(argv);
-  const service = new FleetLiveService(options.projects, options.explicitProjects, options.host, options.port, options.lan);
+  const service = new FleetLiveService(options.projects, options.explicitProjects);
   await service.start();
-  const meta = buildServerMeta(options, options.projects, service.getLanStatus());
+  const meta = buildServerMeta(options, options.projects, service.getMultiplayerStatus());
 
   const server = createServer((request, response) => {
     void handleRequest(request, response, options, service).catch((error) => {
@@ -31,7 +31,7 @@ export async function startWebServer(argv: string[] = process.argv.slice(2)): Pr
     ? options.projects.map((project) => project.root).join(", ")
     : `autodiscover (seed ${options.projects.map((project) => project.root).join(", ")})`;
   console.log(
-    `Agents Office Tower web listening on http://${options.host}:${options.port} pid=${meta.pid} build=${meta.buildAt} mode=${mode} scope=${scope}${options.lan.enabled ? ` lan=on/${options.lan.discoveryPort}` : ""}`
+    `Agents Office Tower web listening on http://${options.host}:${options.port} pid=${meta.pid} build=${meta.buildAt} mode=${mode} scope=${scope}`
   );
 
   const shutdown = () => {

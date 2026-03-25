@@ -10,25 +10,12 @@ export interface FleetResponse {
   projects: DashboardSnapshot[];
 }
 
-export interface LanOptions {
+export interface MultiplayerStatus {
   enabled: boolean;
-  discoveryPort: number;
-  key: string | null;
-}
-
-export interface LanPeerDescriptor {
-  id: string;
-  label: string;
-  addresses: string[];
-  port: number;
-  seenAt: string;
-}
-
-export interface LanStatus {
-  enabled: boolean;
-  peerId: string | null;
-  discoveryPort: number | null;
-  peers: LanPeerDescriptor[];
+  transport: string | null;
+  secure: boolean;
+  peerCount: number;
+  note: string | null;
 }
 
 export interface ServerOptions {
@@ -36,7 +23,6 @@ export interface ServerOptions {
   port: number;
   projects: ProjectDescriptor[];
   explicitProjects: boolean;
-  lan: LanOptions;
 }
 
 export interface ServerMeta {
@@ -48,5 +34,5 @@ export interface ServerMeta {
   port: number;
   explicitProjects: boolean;
   projects: ProjectDescriptor[];
-  lan: LanStatus;
+  multiplayer: MultiplayerStatus;
 }

@@ -221,6 +221,16 @@ function isMeaningfulTranscriptText(text: string | null | undefined): text is st
   return !/^[.\-_~`"'!,;:|/\\()[\]{}]+$/.test(normalized);
 }
 
+function isSyntheticClaudeUserText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return (
+    /^<local-command-stdout>[\s\S]*<\/local-command-stdout>$/i.test(normalized)
+    || /^<command-name>[\s\S]*<\/command-name>/i.test(normalized)
+    || /^<command-message>[\s\S]*<\/command-message>/i.test(normalized)
+    || /^<command-args>[\s\S]*<\/command-args>/i.test(normalized)
+  );
+}
+
 function parseJsonLines(text: string, dropFirstPartial = false): Array<Record<string, unknown>> {
   const lines = text.split(/\r?\n/);
   const usable = dropFirstPartial ? lines.slice(1) : lines;
@@ -337,10 +347,12 @@ function extractUserText(record: Record<string, unknown>): string | null {
   }
 
   if (typeof message.content === "string") {
-    return isMeaningfulTranscriptText(message.content) ? message.content : null;
+    return isMeaningfulTranscriptText(message.content) && !isSyntheticClaudeUserText(message.content) ? message.content : null;
   }
 
-  const text = extractTextEntries(message.content).find((entry) => isMeaningfulTranscriptText(entry));
+  const text = extractTextEntries(message.content).find(
+    (entry) => isMeaningfulTranscriptText(entry) && !isSyntheticClaudeUserText(entry)
+  );
   return text ?? null;
 }
 

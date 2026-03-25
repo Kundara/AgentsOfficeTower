@@ -115,11 +115,14 @@ function normalizeClaudeSdkMessage(
   entry: SessionMessage,
   sessionInfo: Pick<SDKSessionInfo, "cwd" | "gitBranch">
 ): Record<string, unknown> {
+  const entryRecord = asRecord(entry);
   const rawMessage = asRecord(entry.message);
   const message =
     rawMessage
     ?? (typeof entry.message === "string" ? { content: entry.message } : { content: [] });
-  const timestamp = extractSdkMessageTimestamp(message);
+  const timestamp =
+    extractSdkMessageTimestamp(entryRecord ?? {})
+    ?? extractSdkMessageTimestamp(message);
   return {
     type: entry.type,
     uuid: entry.uuid,
@@ -130,6 +133,13 @@ function normalizeClaudeSdkMessage(
     ...(timestamp ? { timestamp } : {}),
     message
   };
+}
+
+export function normalizeClaudeSdkMessageForTest(
+  entry: SessionMessage,
+  sessionInfo: Pick<SDKSessionInfo, "cwd" | "gitBranch">
+): Record<string, unknown> {
+  return normalizeClaudeSdkMessage(entry, sessionInfo);
 }
 
 export function claudeHooksFilePath(projectRoot: string, sessionId: string): string {

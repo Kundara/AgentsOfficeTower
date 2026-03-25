@@ -249,7 +249,7 @@ export interface DashboardAgent {
   liveSubscription: "subscribed" | "readOnly";
   network:
     | {
-      transport: "lan";
+      transport: string;
       peerId: string;
       peerLabel: string;
       peerHost: string | null;

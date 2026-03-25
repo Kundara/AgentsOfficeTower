@@ -5,7 +5,11 @@ const path = require("node:path");
 const { mkdtemp, readFile } = require("node:fs/promises");
 
 const { summariseClaudeHookRecord, summariseClaudeSession } = require("../dist/claude.js");
-const { claudeHooksFilePath, createClaudeSdkSidecarHooks } = require("../dist/claude-agent-sdk.js");
+const {
+  claudeHooksFilePath,
+  createClaudeSdkSidecarHooks,
+  normalizeClaudeSdkMessageForTest
+} = require("../dist/claude-agent-sdk.js");
 const {
   cursorAgentMatchesRepository,
   normalizeRepositoryUrl,
@@ -205,6 +209,93 @@ test("hook-backed Claude sessions still surface assistant reply text", () => {
   assert.equal(summary.latestMessage, "Finished the pass and updated the renderer.");
   assert.equal(summary.activityEvent?.type, "agentMessage");
   assert.equal(summary.state, "thinking");
+});
+
+test("Claude SDK message normalization preserves top-level timestamps", () => {
+  const normalizedUser = normalizeClaudeSdkMessageForTest(
+    {
+      type: "user",
+      uuid: "user-1",
+      session_id: "session-123",
+      parent_tool_use_id: null,
+      timestamp: "2026-03-26T10:00:00.000Z",
+      message: {
+        role: "user",
+        content: "hello"
+      }
+    },
+    {
+      cwd: "/mnt/f/AI/CodexAgentsOffice",
+      gitBranch: "main"
+    }
+  );
+  const normalizedAssistant = normalizeClaudeSdkMessageForTest(
+    {
+      type: "assistant",
+      uuid: "assistant-1",
+      session_id: "session-123",
+      parent_tool_use_id: null,
+      timestamp: "2026-03-26T10:00:02.000Z",
+      message: {
+        model: "claude-sonnet-4-5",
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "done"
+          }
+        ]
+      }
+    },
+    {
+      cwd: "/mnt/f/AI/CodexAgentsOffice",
+      gitBranch: "main"
+    }
+  );
+
+  const summary = summariseClaudeSession(
+    "session-123",
+    "/mnt/f/AI/CodexAgentsOffice",
+    [normalizedUser, normalizedAssistant],
+    Date.parse("2026-03-26T10:00:02.000Z")
+  );
+
+  assert.equal(summary.latestMessage, "done");
+  assert.equal(summary.detail, "done");
+});
+
+test("synthetic Claude command wrapper user records do not override assistant replies", () => {
+  const now = Date.now();
+  const summary = summariseClaudeSession(
+    "session-123",
+    "/mnt/f/AI/CodexAgentsOffice",
+    [
+      {
+        type: "assistant",
+        timestamp: new Date(now - 2_000).toISOString(),
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [
+            {
+              type: "text",
+              text: "Actual assistant reply"
+            }
+          ]
+        }
+      },
+      {
+        type: "user",
+        timestamp: new Date(now - 1_000).toISOString(),
+        message: {
+          content: "<local-command-stdout>Bye!</local-command-stdout>"
+        }
+      }
+    ],
+    now
+  );
+
+  assert.equal(summary.latestMessage, "Actual assistant reply");
+  assert.equal(summary.detail, "Actual assistant reply");
 });
 
 test("Claude SDK sidecar hooks append typed hook records per session", async () => {

@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import type { DashboardSnapshot } from "@codex-agents-office/core";
 
-import type { FleetResponse, LanStatus, ProjectDescriptor, ServerMeta, ServerOptions } from "./server-types";
+import type { FleetResponse, MultiplayerStatus, ProjectDescriptor, ServerMeta, ServerOptions } from "./server-types";
 
 const SERVER_ENTRY = resolve(__dirname, "server.js");
 const SERVER_STARTED_AT = new Date().toISOString();
@@ -45,11 +45,12 @@ export function buildFleetResponse(
 export function buildServerMeta(
   options: ServerOptions,
   projects = options.projects,
-  lan: LanStatus = {
-    enabled: options.lan.enabled,
-    peerId: null,
-    discoveryPort: options.lan.enabled ? options.lan.discoveryPort : null,
-    peers: []
+  multiplayer: MultiplayerStatus = {
+    enabled: false,
+    transport: null,
+    secure: false,
+    peerCount: 0,
+    note: "Multiplayer transport not configured."
   }
 ): ServerMeta {
   return {
@@ -61,6 +62,6 @@ export function buildServerMeta(
     port: options.port,
     explicitProjects: options.explicitProjects,
     projects,
-    lan
+    multiplayer
   };
 }
