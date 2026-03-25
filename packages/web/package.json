@@ -11,6 +11,7 @@
   "dependencies": {
     "@codex-agents-office/core": "file:../core",
     "easystarjs": "^0.4.4",
+    "partysocket": "^1.1.16",
     "pixi.js": "^8.17.1"
   }
 }

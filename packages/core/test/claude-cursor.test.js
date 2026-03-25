@@ -4,7 +4,11 @@ const os = require("node:os");
 const path = require("node:path");
 const { mkdtemp, readFile } = require("node:fs/promises");
 
-const { summariseClaudeHookRecord, summariseClaudeSession } = require("../dist/claude.js");
+const {
+  buildClaudeSessionEventsForTest,
+  summariseClaudeHookRecord,
+  summariseClaudeSession
+} = require("../dist/claude.js");
 const {
   claudeHooksFilePath,
   createClaudeSdkSidecarHooks,
@@ -209,6 +213,43 @@ test("hook-backed Claude sessions still surface assistant reply text", () => {
   assert.equal(summary.latestMessage, "Finished the pass and updated the renderer.");
   assert.equal(summary.activityEvent?.type, "agentMessage");
   assert.equal(summary.state, "thinking");
+});
+
+test("Claude session events include the latest assistant reply and file-change hooks", () => {
+  const now = Date.now();
+  const events = buildClaudeSessionEventsForTest({
+    sessionId: "session-123",
+    fallbackCwd: "/mnt/f/AI/CodexAgentsOffice",
+    records: [
+      {
+        type: "assistant",
+        timestamp: new Date(now - 2_000).toISOString(),
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [
+            {
+              type: "text",
+              text: "Updated /mnt/f/AI/CodexAgentsOffice/README.md"
+            }
+          ]
+        }
+      }
+    ],
+    fallbackUpdatedAt: now,
+    hookRecords: [
+      {
+        hook_event_name: "FileChanged",
+        timestamp: new Date(now - 1_000).toISOString(),
+        cwd: "/mnt/f/AI/CodexAgentsOffice",
+        file_path: "/mnt/f/AI/CodexAgentsOffice/README.md",
+        event: "change"
+      }
+    ]
+  });
+
+  assert.ok(events.some((event) => event.kind === "message" && event.method === "claude/agentMessage"));
+  assert.ok(events.some((event) => event.kind === "fileChange" && event.method === "claude/fileChange"));
+  assert.ok(events.every((event) => event.threadId === "session-123"));
 });
 
 test("Claude SDK message normalization preserves top-level timestamps", () => {

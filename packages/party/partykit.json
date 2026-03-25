@@ -1,0 +1,6 @@
+{
+  "name": "codex-agents-office-sync",
+  "main": "src/server.ts",
+  "compatibilityDate": "2025-03-26",
+  "minify": true
+}

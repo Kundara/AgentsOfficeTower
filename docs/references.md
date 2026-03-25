@@ -75,6 +75,15 @@
 
 These matter because the long-term renderer should use authored slice/tag metadata where possible instead of ad-hoc coordinate guesses.
 
+## PartyKit
+
+- [PartyKit Quickstart](https://docs.partykit.io/quickstart/)
+  Current create, local dev, and first deploy flow.
+- [PartyKit CLI](https://docs.partykit.io/reference/partykit-cli/)
+  Reference for `init`, `dev`, `deploy`, auth, and environment variable commands.
+- [Deploy your PartyKit server](https://docs.partykit.io/guides/deploying-your-partykit-server/)
+  Current deploy behavior, GitHub login flow, generated `partykit.dev` hostnames, and live log tailing.
+
 ## Adjacent inspiration
 
 - [pixel-agents](https://github.com/pablodelucca/pixel-agents)

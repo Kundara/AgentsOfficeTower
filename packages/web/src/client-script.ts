@@ -6,6 +6,7 @@ interface ClientScriptOptions {
 }
 
 import { DEFAULT_GLOBAL_SCENE_SETTINGS, INTERNAL_SCENE_SETTINGS } from "./scene-config";
+import { MULTIPLAYER_SCRIPT } from "./multiplayer-script";
 import { SCENE_GRID_SCRIPT } from "./scene-grid-script";
 import { TOAST_SCRIPT } from "./toast-script";
 
@@ -25,6 +26,8 @@ export function renderClientScript({
       const internalSceneSettings = ${JSON.stringify(INTERNAL_SCENE_SETTINGS)};
       const sceneSettingsStorageKey = "codex-agents-office:scene-settings";
       const furnitureLayoutStorageKey = "codex-agents-office:furniture-layout";
+      const multiplayerSettingsStorageKey = "codex-agents-office:multiplayer-settings";
+      const multiplayerPeerIdStorageKey = "codex-agents-office:multiplayer-peer-id";
       const clampSceneTextScale = (value) => {
         if (!Number.isFinite(value)) {
           return defaultGlobalSceneSettings.textScale;
@@ -38,11 +41,13 @@ export function renderClientScript({
       const initialWorkspaceFullscreen = params.get("focus") === "1" && initialProject !== "all";
       const initialActiveOnly = true;
       const screenshotMode = params.get("screenshot") === "1";
+      ${MULTIPLAYER_SCRIPT}
       if (screenshotMode) {
         document.body.classList.add("snapshot-mode");
       }
       const state = {
         fleet: null,
+        localFleet: null,
         selected: initialProject,
         view: initialView === "terminal" ? "terminal" : "map",
         workspaceFullscreen: initialWorkspaceFullscreen,
@@ -51,7 +56,12 @@ export function renderClientScript({
         connection: screenshotMode ? "snapshot" : "connecting",
         focusedSessionKeys: [],
         globalSceneSettings: loadGlobalSceneSettings(),
-        furnitureLayoutOverrides: loadFurnitureLayoutOverrides()
+        furnitureLayoutOverrides: loadFurnitureLayoutOverrides(),
+        multiplayerSettings: loadMultiplayerSettings(),
+        multiplayerStatus: {
+          state: "disabled",
+          detail: "Shared room sync is off."
+        }
       };
       let furnitureDragState = null;
       let events = null;
@@ -390,6 +400,10 @@ export function renderClientScript({
       const debugTilesButton = document.getElementById("debug-tiles-button");
       const textScaleInput = document.getElementById("text-scale-input");
       const textScaleOutput = document.getElementById("text-scale-output");
+      const multiplayerHostInput = document.getElementById("multiplayer-host-input");
+      const multiplayerRoomInput = document.getElementById("multiplayer-room-input");
+      const multiplayerNicknameInput = document.getElementById("multiplayer-nickname-input");
+      const multiplayerStatus = document.getElementById("multiplayer-status");
       const connectionPill = document.getElementById("connection-pill");
       const stamp = document.getElementById("stamp");
       const heroSummary = document.getElementById("hero-summary");
@@ -403,6 +417,8 @@ export function renderClientScript({
       const roomsPath = document.getElementById("rooms-path");
       applyGlobalSceneSettings();
       syncSettingsPopup();
+      syncMultiplayerSettingsUi();
+      multiplayerPruneTimer = setInterval(pruneMultiplayerPeers, 5000);
 
       function syncSettingsPopup() {
         if (settingsButton instanceof HTMLButtonElement) {
@@ -1362,7 +1378,7 @@ export function renderClientScript({
           return "";
         }
         const location = agent.network.peerHost ? \` @ \${agent.network.peerHost}\` : "";
-        return \`LAN \${agent.network.peerLabel}\${location}\`;
+        return \`Shared \${agent.network.peerLabel}\${location}\`;
       }
 
       function agentHoverSourceLabel(agent, summarySource) {
@@ -4328,24 +4344,9 @@ export function renderClientScript({
       }
 
       function ingestFleet(fleet) {
-        const nextFleetSemanticToken = fleetSemanticToken(fleet);
-        if (nextFleetSemanticToken && nextFleetSemanticToken === lastFleetSemanticToken) {
-          return;
-        }
-        const previousFleet = state.fleet;
-        queueSnapshotEvents(previousFleet, fleet);
-        queueAgentNotifications(previousFleet, fleet);
-        state.fleet = fleet;
-        lastFleetSemanticToken = nextFleetSemanticToken;
-        if (state.selected !== "all") {
-          const exists = state.fleet.projects.some((project) => project.projectRoot === state.selected);
-          if (!exists) {
-            state.selected = "all";
-            state.workspaceFullscreen = false;
-            syncUrl();
-          }
-        }
-        render();
+        state.localFleet = fleet;
+        applyFleet(fleet);
+        scheduleMultiplayerBroadcast();
       }
 
       function render() {
@@ -4668,6 +4669,44 @@ export function renderClientScript({
           render();
         });
       }
+      const commitMultiplayerInputs = () => {
+        commitMultiplayerSettings({
+          host: multiplayerHostInput instanceof HTMLInputElement ? multiplayerHostInput.value : "",
+          room: multiplayerRoomInput instanceof HTMLInputElement ? multiplayerRoomInput.value : "",
+          nickname: multiplayerNicknameInput instanceof HTMLInputElement ? multiplayerNicknameInput.value : ""
+        });
+      };
+      if (multiplayerHostInput instanceof HTMLInputElement) {
+        multiplayerHostInput.addEventListener("change", commitMultiplayerInputs);
+        multiplayerHostInput.addEventListener("blur", commitMultiplayerInputs);
+        multiplayerHostInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitMultiplayerInputs();
+          }
+        });
+      }
+      if (multiplayerRoomInput instanceof HTMLInputElement) {
+        multiplayerRoomInput.addEventListener("change", commitMultiplayerInputs);
+        multiplayerRoomInput.addEventListener("blur", commitMultiplayerInputs);
+        multiplayerRoomInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitMultiplayerInputs();
+          }
+        });
+      }
+      if (multiplayerNicknameInput instanceof HTMLInputElement) {
+        multiplayerNicknameInput.addEventListener("change", commitMultiplayerInputs);
+        multiplayerNicknameInput.addEventListener("blur", commitMultiplayerInputs);
+        multiplayerNicknameInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitMultiplayerInputs();
+          }
+        });
+      }
+      void refreshMultiplayerConnection();
 
       if (!screenshotMode) {
         window.addEventListener("online", () => setConnection("reconnecting"));

@@ -19,6 +19,7 @@ Browser office view, terminal snapshot, and VS Code panel for current Codex, Cla
 
 - Browser office view with fleet mode and single-project focus.
 - A reserved multiplayer interface so a secured sync method can plug into the web surface later.
+- Optional browser-side shared-room sync via PartyKit `host`, `room`, and short `nickname` settings.
 - Terminal snapshot and watch mode.
 - VS Code activity-bar panel.
 - Current-workload-first scene with subtle recent history.
@@ -72,6 +73,24 @@ Fleet mode is the default. For a focused single-project run:
 ```bash
 npm start -- /abs/project/path --port 4181
 ```
+
+To join a shared PartyKit room from the browser, open `Settings` and fill in:
+
+- `Host`: your PartyKit deployment host such as `your-app.partykit.dev`
+- `Room`: a shared room name such as `team/project-name`
+- `Nickname`: an optional 12-character label shown on your remote agents
+
+The browser publishes all tracked workspace activity into that room and only renders remote workspace activity whose workspace name also exists locally.
+
+Quick PartyKit hosting path:
+
+1. Run the bundled relay locally with `npm run party:dev`
+2. Deploy the bundled relay with `npm run party:deploy`
+3. On first deploy, sign in with GitHub when the CLI prompts you
+4. After provisioning, use the generated `partykit.dev` hostname in the app `Host` field
+
+PartyKit’s docs say first deploys go to a hostname shaped like `[project-name].[github-username].partykit.dev`, and provisioning can take up to two minutes.
+Official docs: [Quickstart](https://docs.partykit.io/quickstart/), [CLI](https://docs.partykit.io/reference/partykit-cli/), [Deploying](https://docs.partykit.io/guides/deploying-your-partykit-server/)
 
 Optional dev check:
 

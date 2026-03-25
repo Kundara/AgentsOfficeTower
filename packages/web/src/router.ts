@@ -20,6 +20,7 @@ type RouteHandler = (context: RequestContext) => Promise<boolean>;
 
 const PIXI_BROWSER_BUNDLE = resolve(__dirname, "../../../node_modules/pixi.js/dist/pixi.min.js");
 const EASYSTAR_BROWSER_BUNDLE = resolve(__dirname, "../../../node_modules/easystarjs/bin/easystar-0.4.4.min.js");
+const PARTYSOCKET_BROWSER_DIR = resolve(__dirname, "../../../node_modules/partysocket/dist");
 
 function requestMethod(context: RequestContext): string {
   return context.request.method ?? "GET";
@@ -72,6 +73,16 @@ async function handleVendorRoute(context: RequestContext): Promise<boolean> {
 
   if (context.url.pathname === "/vendor/easystar.min.js") {
     await sendAbsoluteFileAsset(context.response, EASYSTAR_BROWSER_BUNDLE, requestMethod(context));
+    return true;
+  }
+
+  if (context.url.pathname.startsWith("/vendor/partysocket/")) {
+    const relativePath = context.url.pathname.slice("/vendor/partysocket/".length);
+    const filePath = resolve(PARTYSOCKET_BROWSER_DIR, relativePath);
+    if (!(filePath === PARTYSOCKET_BROWSER_DIR || filePath.startsWith(PARTYSOCKET_BROWSER_DIR + "/") || filePath.startsWith(PARTYSOCKET_BROWSER_DIR + "\\"))) {
+      return false;
+    }
+    await sendAbsoluteFileAsset(context.response, filePath, requestMethod(context));
     return true;
   }
 

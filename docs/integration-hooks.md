@@ -469,6 +469,7 @@ How we use it:
 - prefer supported Agent SDK session reads over raw transcript layout assumptions
 - infer the most recent meaningful activity from transcript data when no hook sidecar exists
 - prefer typed Claude hook events when a sidecar exists for that session
+- assign the Claude `sessionId` to the normalized `threadId` field so browser event matching can treat Claude like other tracked sessions
 - assign an appearance and render it as a `claude` agent
 
 ### Official Claude hook surface
@@ -558,6 +559,8 @@ What we synthesize:
 
 How we use it:
 
+- merge Claude session activity into normalized `DashboardEvent` records on `snapshot.events`
+- use the Claude `sessionId` as the event and agent `threadId` match key
 - exactly the same browser notification path as Codex agents
 - same room mapping via normalized `paths`
 - same session-card and hover-card surfaces
@@ -751,7 +754,7 @@ How it works:
 - `/api/multiplayer` exposes the current multiplayer transport status; it is currently a disabled placeholder until a secured sync path exists
 - `/api/events` streams live fleet updates over SSE
 - `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
-- browser-side rendering and event reaction live in `client-script.ts`
+- browser-side rendering and event reaction live in `client-script.ts`, while optional PartyKit room sync and shared-room settings persistence live in `multiplayer-script.ts`
 
 - server-sent events from `/api/events`
 

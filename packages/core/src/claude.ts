@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { ensureAgentAppearance } from "./appearance";
 import { claudeHooksFilePath, getClaudeSdkSessionRecords, listClaudeSdkSessions } from "./claude-agent-sdk";
 import type { DiscoveredProject } from "./project-paths";
-import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, NeedsUserState } from "./types";
+import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, DashboardEvent, NeedsUserState } from "./types";
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 const LOG_HEAD_BYTES = 4096;
@@ -35,6 +35,18 @@ interface ClaudeSdkSessionEntry {
   gitBranch: string | null;
   records: Array<Record<string, unknown>>;
 }
+
+interface ClaudeLoadedSession {
+  sessionId: string;
+  cwd: string;
+  gitBranch: string | null;
+  updatedAt: number;
+  records: Array<Record<string, unknown>>;
+  hookRecords: Array<Record<string, unknown>>;
+  summary: ClaudeActivitySummary;
+}
+
+const CLAUDE_EVENT_WINDOW_MS = 2 * 60 * 1000;
 
 interface ClaudeActivitySummary {
   label: string;
@@ -99,6 +111,176 @@ function ageClaudeSummary(summary: ClaudeActivitySummary, now = Date.now()): Cla
     activityEvent: null,
     latestMessage: null
   };
+}
+
+function claudeEventKindFromActivityEvent(event: AgentActivityEvent | null): DashboardEvent["kind"] {
+  if (!event) {
+    return "other";
+  }
+  if (event.type === "fileChange") {
+    return "fileChange";
+  }
+  if (event.type === "commandExecution") {
+    return "command";
+  }
+  if (event.type === "userMessage" || event.type === "agentMessage") {
+    return "message";
+  }
+  return "other";
+}
+
+function claudeEventFromSummary(input: {
+  sessionId: string;
+  createdAt: string;
+  summary: ClaudeActivitySummary;
+  confidence: AgentConfidence;
+  id: string;
+}): DashboardEvent | null {
+  const createdAtMs = Date.parse(input.createdAt);
+  if (!Number.isFinite(createdAtMs) || Date.now() - createdAtMs > CLAUDE_EVENT_WINDOW_MS) {
+    return null;
+  }
+
+  const event = input.summary.activityEvent;
+  if (!event && input.summary.needsUser === null && !input.summary.latestMessage) {
+    return null;
+  }
+
+  return {
+    id: input.id,
+    source: "claude",
+    confidence: input.confidence,
+    threadId: input.sessionId,
+    createdAt: input.createdAt,
+    method:
+      event?.type === "fileChange" ? "claude/fileChange"
+      : event?.type === "commandExecution" ? "claude/commandExecution"
+      : event?.type === "userMessage" ? "claude/userMessage"
+      : event?.type === "agentMessage" ? "claude/agentMessage"
+      : input.summary.needsUser?.kind === "approval" ? "claude/permissionRequest"
+      : input.summary.needsUser?.kind === "input" ? "claude/inputRequest"
+      : "claude/activity",
+    kind:
+      input.summary.needsUser?.kind === "approval" ? "approval"
+      : input.summary.needsUser?.kind === "input" ? "input"
+      : claudeEventKindFromActivityEvent(event),
+    phase:
+      input.summary.state === "blocked" ? "failed"
+      : input.summary.state === "waiting" ? "waiting"
+      : input.summary.state === "done" ? "completed"
+      : "updated",
+    title: input.summary.detail,
+    detail: input.summary.latestMessage ?? input.summary.detail,
+    path: event?.path ?? input.summary.paths[0] ?? null,
+    action: event?.action,
+    isImage: event?.isImage,
+    command: input.summary.needsUser?.command,
+    cwd: input.summary.paths[0] ?? null,
+    grantRoot: input.summary.needsUser?.grantRoot
+  };
+}
+
+function buildClaudeSessionEvents(input: {
+  sessionId: string;
+  fallbackCwd: string;
+  records: Array<Record<string, unknown>>;
+  fallbackUpdatedAt: number;
+  hookRecords: Array<Record<string, unknown>>;
+}): DashboardEvent[] {
+  const events = new Map<string, DashboardEvent>();
+
+  for (const [index, record] of input.hookRecords.entries()) {
+    const summary = summariseClaudeHookRecord({
+      sessionId: input.sessionId,
+      model: null,
+      fallbackCwd: input.fallbackCwd,
+      gitBranch: null,
+      record,
+      fallbackUpdatedAt: input.fallbackUpdatedAt
+    });
+    if (!summary) {
+      continue;
+    }
+    const createdAt = new Date(recordTimestampMs(record, input.fallbackUpdatedAt)).toISOString();
+    const event = claudeEventFromSummary({
+      sessionId: input.sessionId,
+      createdAt,
+      summary,
+      confidence: "typed",
+      id: `${input.sessionId}:hook:${index}:${createdAt}:${record.hook_event_name ?? "activity"}`
+    });
+    if (event) {
+      events.set(event.id, event);
+    }
+  }
+
+  for (const [index, record] of input.records.entries()) {
+    const createdAtMs = recordTimestampMs(record, input.fallbackUpdatedAt);
+    if (!Number.isFinite(createdAtMs) || Date.now() - createdAtMs > CLAUDE_EVENT_WINDOW_MS) {
+      continue;
+    }
+
+    const assistantText = extractAssistantText(record);
+    if (assistantText) {
+      const createdAt = new Date(createdAtMs).toISOString();
+      events.set(`${input.sessionId}:assistant:${index}:${createdAt}`, {
+        id: `${input.sessionId}:assistant:${index}:${createdAt}`,
+        source: "claude",
+        confidence: "inferred",
+        threadId: input.sessionId,
+        createdAt,
+        method: "claude/agentMessage",
+        kind: "message",
+        phase: "updated",
+        title: shorten(assistantText, 88),
+        detail: shorten(assistantText, 240),
+        path: extractPathsFromText(assistantText)[0] ?? input.fallbackCwd,
+        action: "said",
+        isImage: false
+      });
+    }
+
+    const tool = extractAssistantTool(record);
+    if (!tool) {
+      continue;
+    }
+    const summary = claudeToolSummary({
+      sessionId: input.sessionId,
+      model: null,
+      fallbackCwd: input.fallbackCwd,
+      gitBranch: null,
+      updatedAt: new Date(createdAtMs).toISOString(),
+      toolName: tool.name,
+      toolInput: tool.input,
+      failed: false
+    });
+    if (!summary) {
+      continue;
+    }
+    const createdAt = new Date(createdAtMs).toISOString();
+    const event = claudeEventFromSummary({
+      sessionId: input.sessionId,
+      createdAt,
+      summary,
+      confidence: "inferred",
+      id: `${input.sessionId}:tool:${index}:${createdAt}:${tool.name}`
+    });
+    if (event) {
+      events.set(event.id, event);
+    }
+  }
+
+  return [...events.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export function buildClaudeSessionEventsForTest(input: {
+  sessionId: string;
+  fallbackCwd: string;
+  records: Array<Record<string, unknown>>;
+  fallbackUpdatedAt: number;
+  hookRecords: Array<Record<string, unknown>>;
+}): DashboardEvent[] {
+  return buildClaudeSessionEvents(input);
 }
 
 function mergeClaudeAssistantTextSummary(input: {
@@ -1202,6 +1384,154 @@ async function loadClaudeSessionsViaSdk(projectRoot: string, limit = 12): Promis
   return entries.filter((entry): entry is ClaudeSdkSessionEntry => Boolean(entry));
 }
 
+async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Promise<ClaudeLoadedSession[]> {
+  const sdkSessions = await loadClaudeSessionsViaSdk(projectRoot, limit);
+  if (sdkSessions && sdkSessions.length > 0) {
+    return Promise.all(
+      sdkSessions.map(async (session) => {
+        const hookSample = await readLogSample(claudeHooksFilePath(projectRoot, session.sessionId)).catch(() => null);
+        const hookRecords = hookSample ? [...hookSample.headRecords, ...hookSample.tailRecords] : [];
+        const updatedAt = Math.max(session.updatedAt, hookSample?.mtimeMs ?? 0);
+        const summary = summariseClaudeSession(
+          session.sessionId,
+          session.cwd,
+          session.records,
+          updatedAt,
+          hookRecords
+        );
+        return {
+          sessionId: session.sessionId,
+          cwd: session.cwd,
+          gitBranch: session.gitBranch,
+          updatedAt,
+          records: session.records,
+          hookRecords,
+          summary
+        };
+      })
+    );
+  }
+
+  const projects = await scanClaudeProjectDirs();
+  const project = projects.find((entry) => entry.root === projectRoot);
+  if (!project) {
+    return [];
+  }
+
+  const sessions = await Promise.all(
+    project.files.slice(0, limit).map(async (file) => {
+      const sample = await readLogSample(file.path).catch(() => null);
+      if (!sample) {
+        return null;
+      }
+
+      const records = [...sample.headRecords, ...sample.tailRecords];
+      const cwd = extractProjectRoot(records) ?? projectRoot;
+      const sessionId = file.path.match(/([0-9a-f-]{36})\.jsonl$/i)?.[1] ?? file.path;
+      const hookSample = await readLogSample(claudeHooksFilePath(projectRoot, sessionId)).catch(() => null);
+      const hookRecords = hookSample ? [...hookSample.headRecords, ...hookSample.tailRecords] : [];
+      const updatedAt = Math.max(file.updatedAt, hookSample?.mtimeMs ?? 0);
+      const summary = summariseClaudeSession(
+        sessionId,
+        cwd,
+        records,
+        updatedAt,
+        hookRecords
+      );
+
+      return {
+        sessionId,
+        cwd,
+        gitBranch: summary.gitBranch,
+        updatedAt,
+        records,
+        hookRecords,
+        summary
+      };
+    })
+  );
+
+  return sessions.filter((entry): entry is ClaudeLoadedSession => Boolean(entry));
+}
+
+function claudeAgentFromLoadedSession(session: ClaudeLoadedSession, appearance: Awaited<ReturnType<typeof ensureAgentAppearance>>): DashboardAgent {
+  return {
+    id: `claude:${session.sessionId}`,
+    label: session.summary.label,
+    source: "claude",
+    sourceKind: session.summary.sourceKind,
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: false,
+    isOngoing: session.summary.isOngoing,
+    statusText: "claude",
+    role: "claude",
+    nickname: null,
+    isSubagent: false,
+    state: session.summary.state,
+    detail: session.summary.detail,
+    cwd: session.cwd,
+    roomId: null,
+    appearance,
+    updatedAt: session.summary.updatedAt,
+    stoppedAt: null,
+    paths: session.summary.paths,
+    activityEvent: session.summary.activityEvent,
+    latestMessage: session.summary.latestMessage,
+    threadId: session.sessionId,
+    taskId: null,
+    resumeCommand: null,
+    url: null,
+    git: {
+      sha: null,
+      branch: session.summary.gitBranch ?? session.gitBranch,
+      originUrl: null
+    },
+    provenance: "claude",
+    confidence: session.summary.confidence,
+    needsUser: session.summary.needsUser,
+    liveSubscription: "readOnly",
+    network: null
+  };
+}
+
+export async function loadClaudeProjectSnapshotData(projectRoot: string, limit = 12): Promise<{
+  agents: DashboardAgent[];
+  events: DashboardEvent[];
+}> {
+  const canonicalRoot = canonicalizeProjectPath(projectRoot);
+  if (!canonicalRoot) {
+    return { agents: [], events: [] };
+  }
+
+  const sessions = await collectClaudeLoadedSessions(canonicalRoot, limit);
+  if (sessions.length === 0) {
+    return { agents: [], events: [] };
+  }
+
+  const agents: DashboardAgent[] = [];
+  const events = new Map<string, DashboardEvent>();
+
+  for (const session of sessions) {
+    const appearance = await ensureAgentAppearance(canonicalRoot, `claude:${session.sessionId}`);
+    agents.push(claudeAgentFromLoadedSession(session, appearance));
+    for (const event of buildClaudeSessionEvents({
+      sessionId: session.sessionId,
+      fallbackCwd: session.cwd,
+      records: session.records,
+      fallbackUpdatedAt: session.updatedAt,
+      hookRecords: session.hookRecords
+    })) {
+      events.set(event.id, event);
+    }
+  }
+
+  return {
+    agents,
+    events: [...events.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+  };
+}
+
 export function summariseClaudeSession(
   sessionId: string,
   fallbackCwd: string,
@@ -1355,133 +1685,5 @@ export async function discoverClaudeProjects(limit = 50): Promise<DiscoveredProj
 }
 
 export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise<DashboardAgent[]> {
-  const canonicalRoot = canonicalizeProjectPath(projectRoot);
-  if (!canonicalRoot) {
-    return [];
-  }
-
-  const agents: DashboardAgent[] = [];
-  const sdkSessions = await loadClaudeSessionsViaSdk(canonicalRoot, limit);
-  if (sdkSessions && sdkSessions.length > 0) {
-    for (const session of sdkSessions) {
-      const hookSample = await readLogSample(claudeHooksFilePath(canonicalRoot, session.sessionId)).catch(() => null);
-      const hookRecords = hookSample ? [...hookSample.headRecords, ...hookSample.tailRecords] : [];
-      const summary = summariseClaudeSession(
-        session.sessionId,
-        session.cwd,
-        session.records,
-        Math.max(session.updatedAt, hookSample?.mtimeMs ?? 0),
-        hookRecords
-      );
-      const appearance = await ensureAgentAppearance(canonicalRoot, `claude:${session.sessionId}`);
-
-      agents.push({
-        id: `claude:${session.sessionId}`,
-        label: summary.label,
-        source: "claude",
-        sourceKind: summary.sourceKind,
-        parentThreadId: null,
-        depth: 0,
-        isCurrent: false,
-        isOngoing: summary.isOngoing,
-        statusText: "claude",
-        role: "claude",
-        nickname: null,
-        isSubagent: false,
-        state: summary.state,
-        detail: summary.detail,
-        cwd: session.cwd,
-        roomId: null,
-        appearance,
-        updatedAt: summary.updatedAt,
-        stoppedAt: null,
-        paths: summary.paths,
-        activityEvent: summary.activityEvent,
-        latestMessage: summary.latestMessage,
-        threadId: null,
-        taskId: null,
-        resumeCommand: null,
-        url: null,
-        git: {
-          sha: null,
-          branch: summary.gitBranch ?? session.gitBranch,
-          originUrl: null
-        },
-        provenance: "claude",
-        confidence: summary.confidence,
-        needsUser: summary.needsUser,
-        liveSubscription: "readOnly",
-        network: null
-      });
-    }
-    return agents;
-  }
-
-  const projects = await scanClaudeProjectDirs();
-  const project = projects.find((entry) => entry.root === canonicalRoot);
-  if (!project) {
-    return [];
-  }
-
-  for (const file of project.files.slice(0, limit)) {
-    const sample = await readLogSample(file.path).catch(() => null);
-    if (!sample) {
-      continue;
-    }
-
-    const records = [...sample.headRecords, ...sample.tailRecords];
-    const fallbackCwd = extractProjectRoot(records) ?? canonicalRoot;
-    const sessionId = file.path.match(/([0-9a-f-]{36})\.jsonl$/i)?.[1] ?? file.path;
-    const hookSample = await readLogSample(claudeHooksFilePath(canonicalRoot, sessionId)).catch(() => null);
-    const hookRecords = hookSample ? [...hookSample.headRecords, ...hookSample.tailRecords] : [];
-    const summary = summariseClaudeSession(
-      sessionId,
-      fallbackCwd,
-      records,
-      Math.max(file.updatedAt, hookSample?.mtimeMs ?? 0),
-      hookRecords
-    );
-    const appearance = await ensureAgentAppearance(canonicalRoot, `claude:${sessionId}`);
-
-    agents.push({
-      id: `claude:${sessionId}`,
-      label: summary.label,
-      source: "claude",
-      sourceKind: summary.sourceKind,
-      parentThreadId: null,
-      depth: 0,
-      isCurrent: false,
-      isOngoing: summary.isOngoing,
-      statusText: "claude",
-      role: "claude",
-      nickname: null,
-      isSubagent: false,
-      state: summary.state,
-      detail: summary.detail,
-      cwd: fallbackCwd,
-      roomId: null,
-      appearance,
-      updatedAt: summary.updatedAt,
-      stoppedAt: null,
-      paths: summary.paths,
-      activityEvent: summary.activityEvent,
-      latestMessage: summary.latestMessage,
-      threadId: null,
-      taskId: null,
-      resumeCommand: null,
-      url: null,
-      git: {
-        sha: null,
-        branch: summary.gitBranch,
-        originUrl: null
-      },
-      provenance: "claude",
-      confidence: summary.confidence,
-      needsUser: summary.needsUser,
-      liveSubscription: "readOnly",
-      network: null
-    });
-  }
-
-  return agents;
+  return (await loadClaudeProjectSnapshotData(projectRoot, limit)).agents;
 }

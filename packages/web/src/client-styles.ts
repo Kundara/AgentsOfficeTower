@@ -217,6 +217,37 @@ export const CLIENT_STYLES = `
         gap: 10px;
       }
 
+      .settings-section {
+        display: grid;
+        gap: 8px;
+        padding: 8px 10px 10px;
+        border: 1px solid var(--border);
+        background: var(--panel-strong);
+      }
+
+      .settings-field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .settings-field input {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        background: rgba(7, 12, 11, 0.92);
+        color: var(--text);
+        font: inherit;
+      }
+
+      .settings-field input::placeholder {
+        color: var(--text-dim);
+      }
+
+      .settings-note {
+        min-height: 2.5em;
+        line-height: 1.4;
+      }
+
       .text-scale-control {
         display: inline-flex;
         align-items: center;

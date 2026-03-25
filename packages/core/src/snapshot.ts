@@ -2,7 +2,7 @@ import { basename } from "node:path";
 
 import { ensureAgentAppearance } from "./appearance";
 import { withAppServerClient } from "./app-server";
-import { loadClaudeAgents } from "./claude";
+import { loadClaudeProjectSnapshotData } from "./claude";
 import { listCloudTasks } from "./cloud";
 import { loadCursorAgents } from "./cursor";
 import { loadOpenClawAgents } from "./openclaw";
@@ -988,7 +988,8 @@ export async function buildDashboardSnapshotFromState(input: {
     });
   }
 
-  const claudeAgents = await loadClaudeAgents(projectRoot);
+  const claudeData = await loadClaudeProjectSnapshotData(projectRoot);
+  const claudeAgents = claudeData.agents;
   for (const claudeAgent of claudeAgents) {
     agents.push({
       ...claudeAgent,
@@ -1034,7 +1035,7 @@ export async function buildDashboardSnapshotFromState(input: {
     rooms: roomConfig,
     agents,
     cloudTasks,
-    events: [...(input.events ?? [])]
+    events: [...(input.events ?? []), ...claudeData.events]
       .filter((event) => {
         const createdAtMs = Date.parse(event.createdAt);
         return Number.isFinite(createdAtMs) && Date.now() - createdAtMs <= SNAPSHOT_EVENT_WINDOW_MS;

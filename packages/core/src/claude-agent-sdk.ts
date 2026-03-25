@@ -38,7 +38,6 @@ const CLAUDE_SDK_HOOK_EVENTS: HookEvent[] = [
   "CwdChanged",
   "FileChanged"
 ];
-const CLAUDE_SDK_MESSAGE_LIMIT = 200;
 
 type ClaudeAgentSdkModule = {
   getSessionMessages: (
@@ -187,7 +186,7 @@ export async function getClaudeSdkSessionRecords(input: {
   try {
     const messages = await sdk.getSessionMessages(input.sessionId, {
       dir: input.dir,
-      limit: input.limit ?? CLAUDE_SDK_MESSAGE_LIMIT,
+      ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
       offset: input.offset
     });
     return messages.map((entry) => normalizeClaudeSdkMessage(entry, {

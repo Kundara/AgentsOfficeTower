@@ -82,6 +82,44 @@ export function renderHtml(options: ServerOptions): string {
                     />
                     <output id="text-scale-output">${DEFAULT_GLOBAL_SCENE_SETTINGS.textScale.toFixed(2)}x</output>
                   </label>
+                  <div class="settings-section">
+                    <strong>Shared Room</strong>
+                    <label class="settings-field" for="multiplayer-host-input">
+                      <span class="muted">Host</span>
+                      <input
+                        id="multiplayer-host-input"
+                        type="text"
+                        placeholder="your-app.partykit.dev"
+                        spellcheck="false"
+                        autocapitalize="off"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="settings-field" for="multiplayer-room-input">
+                      <span class="muted">Room</span>
+                      <input
+                        id="multiplayer-room-input"
+                        type="text"
+                        placeholder="team/project-name"
+                        spellcheck="false"
+                        autocapitalize="off"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="settings-field" for="multiplayer-nickname-input">
+                      <span class="muted">Nickname</span>
+                      <input
+                        id="multiplayer-nickname-input"
+                        type="text"
+                        placeholder="octocat"
+                        maxlength="12"
+                        spellcheck="false"
+                        autocapitalize="off"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <div id="multiplayer-status" class="settings-note muted">Shared room sync is off.</div>
+                  </div>
                   <button id="debug-tiles-button" class="toggle-button settings-toggle" type="button" aria-pressed="false">Debug Tiles</button>
                 </div>
               </div>

@@ -10,6 +10,8 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Added
 
 - Added a neutral multiplayer status interface in the web server so a secured sync transport can plug in later without another contract change.
+- Added browser-side PartyKit shared-room settings with persisted `host`, `room`, and short `nickname` inputs, publishing all tracked workspace activity into the room and labeling remote agents with that nickname when available.
+- Added a bundled PartyKit relay package in `packages/party` plus root `party:dev` and `party:deploy` scripts so the shared-room transport can be hosted from this repo.
 - Added this changelog and a repo-level maintenance policy for tracking notable additions, fixes, and behavior changes.
 - Added a grid-first scene layout foundation in the web renderer with explicit tile-based scene configuration and scene grid helpers aligned to the `16px` PixelOffice unit.
 - Added persisted browser scene settings and local furniture layout overrides, including a user-facing text-scale control for the office view.
@@ -28,8 +30,13 @@ Entries stay under the active version until an explicit version bump is requeste
 - Moved scene controls into a toggleable settings popup in the web header, removing the manual refresh and rooms scaffold actions from the main toolbar and hiding the toast preview trigger.
 - Changed the scene text-size slider to apply on release instead of during drag so the settings popup stays stable while adjusting scale.
 - Extracted browser toast queueing, stacking, preview, and DOM rendering from the main client script into a dedicated `toast-script` module.
+- Extracted PartyKit shared-room transport, settings persistence, and remote fleet merge helpers from the main client script into a dedicated `multiplayer-script` module.
 - Removed the unused DOM office-map renderer path from the web client so the browser map now runs through the retained Pixi scene only.
 - Changed Claude secondary discovery to prefer the official Agent SDK `listSessions()` and `getSessionMessages()` APIs before falling back to raw JSONL transcript sampling.
+
+### Docs
+
+- Added a short PartyKit hosting walkthrough to the README and references so shared-room setup includes the current official create, deploy, and generated-host flow.
 
 ### Fixed
 
@@ -44,6 +51,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed Claude typed hook handling so official events such as `FileChanged`, `Notification`, `TeammateIdle`, `Setup`, and compaction transitions map into normalized office states instead of dropping back to transcript-only inference.
 - Fixed stale Claude hook-backed live states so quiet Claude chats age into done/idle instead of holding a workstation indefinitely after activity stops.
 - Fixed Claude hook-backed sessions so assistant reply text from transcripts or Agent SDK session messages still surfaces in the UI instead of only showing user prompts and tool-state updates.
+- Fixed Claude session snapshots so they now emit normalized events with stable session-backed `threadId` values, restoring file-change bubbles and later message updates in the browser.
 
 ### Removed
 

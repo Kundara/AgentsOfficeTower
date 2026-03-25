@@ -101,6 +101,7 @@ Sources:
   - live SSE updates for browser clients
   - all discovered workspaces stay live-monitored at once
   - reserved multiplayer status surface for a future secured sync transport
+  - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; remote activity is merged client-side only for workspace names that also exist locally
 - map and terminal-style views through `?view=map|terminal`
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
 - local threads remain seated while the thread is still ongoing, even if they pause between visible events or the latest turn already looks done
@@ -144,6 +145,10 @@ The web package now separates transport, lifecycle, and rendering concerns inste
   Builds the HTML shell and injects the browser assets.
 - `packages/web/src/client-script.ts`
   Holds the browser-side office/terminal renderer, scene state wiring, and live update client.
+- `packages/web/src/multiplayer-script.ts`
+  Holds the browser-side PartyKit room sync overlay, shared-room settings persistence, and remote fleet merge helpers so the realtime room transport stays outside the main renderer script.
+- `packages/party`
+  Holds the deployable PartyKit room relay that validates and rebroadcasts the browser `fleet-sync` payloads over shared room sockets.
 - `packages/web/src/toast-script.ts`
   Holds browser-side toast queueing, stacking, timing, preview, and DOM rendering so notification behavior does not stay embedded in the main renderer script.
 - `packages/web/src/client-styles.ts`
