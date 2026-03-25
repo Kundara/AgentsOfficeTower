@@ -19,6 +19,12 @@
 
 ## Claude
 
+- [Claude Agent SDK TypeScript reference](https://platform.claude.com/docs/en/agent-sdk/typescript)
+  Official session APIs, hook callback contracts, and SDK-managed Claude Code integration surface.
+- [Claude Agent SDK TypeScript V2 preview](https://platform.claude.com/docs/en/agent-sdk/typescript-v2-preview)
+  Preview reference for `createSession()` / `resumeSession()` and the newer session lifecycle shape.
+- [Claude API client SDKs](https://platform.claude.com/docs/en/api/client-sdks)
+  Useful contrast with the Agent SDK: model API wrappers, not Claude Code session observability.
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
   Official hook lifecycle and input schema for `PermissionRequest`, `PreToolUse`, `PostToolUse`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, and related events.
 - [Automate workflows with hooks](https://code.claude.com/docs/en/automate-workflows-with-hooks)

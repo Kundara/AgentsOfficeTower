@@ -439,20 +439,23 @@ Primary code path:
 
 What we read:
 
+- `listSessions()` from `@anthropic-ai/claude-agent-sdk` when available
 - `~/.claude/projects/*/*.jsonl`
 
 How we use it:
 
+- prefer official Claude session metadata when the Agent SDK is installed
 - scan project directories
-- sample the head and tail of each log
-- infer the project root from `cwd`
+- fall back to sampling the head and tail of each log when the SDK path is unavailable
+- infer the project root from session `cwd`
 - merge Claude-discovered roots into workspace discovery
 
 ### Claude session sampling
 
 What we read:
 
-- recent JSONL records from the head and tail of each session file
+- `getSessionMessages()` from `@anthropic-ai/claude-agent-sdk` when available
+- recent JSONL records from the head and tail of each session file as fallback
 - optional project-local hook sidecars in `.codex-agents/claude-hooks/<session-id>.jsonl`
 - record timestamps
 - message model names
@@ -463,6 +466,7 @@ How we use it:
 
 - identify the session
 - derive a display label from the Claude model
+- prefer supported Agent SDK session reads over raw transcript layout assumptions
 - infer the most recent meaningful activity from transcript data when no hook sidecar exists
 - prefer typed Claude hook events when a sidecar exists for that session
 - assign an appearance and render it as a `claude` agent
@@ -471,6 +475,7 @@ How we use it:
 
 Official docs:
 
+- [Claude Agent SDK TypeScript reference](https://platform.claude.com/docs/en/agent-sdk/typescript)
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
 
 What Anthropic exposes in hook input:
@@ -484,11 +489,16 @@ What Anthropic exposes in hook input:
 - `tool_response` for successful tool completions
 - error information for failed tool calls
 - typed lifecycle events such as `PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, `Elicitation`, and `TaskCompleted`
+- supported session APIs such as `listSessions()` and `getSessionMessages()` for passive inspection
+- SDK hook callbacks that receive `tool_use_id` for tool-call correlation
+- `agent_id` and `agent_type` on subagent-scoped hook callbacks
 
 How this project uses that surface:
 
-- we do not scrape Claude internals directly from the hook stream
+- the loader now prefers the official Agent SDK session APIs for Claude project discovery and message backfill
+- we still do not scrape Claude internals directly from a private process stream
 - instead, we support a project-owned bridge that writes hook JSONL sidecars into `.codex-agents/claude-hooks/<session-id>.jsonl`
+- `packages/core/src/claude-agent-sdk.ts` exports a reusable Agent SDK hook bridge that appends those sidecars with `session_id`, `hook_event_name`, `tool_use_id`, `agent_id`, and `agent_type` when available
 - when those sidecars exist, Claude agents can surface typed permission, input, tool, subagent, stop, user-prompt, session-start/end, and compacting state with `confidence = typed`
 - when they do not exist, Claude falls back to transcript inference with `confidence = inferred`
 
@@ -518,17 +528,24 @@ When a project-local Claude hook sidecar exists, the loader can map these offici
 | --- | --- | --- |
 | `PermissionRequest` | `blocked` | typed approval-needed state from Claude hook input |
 | `Elicitation` | `waiting` | typed waiting-for-input state |
+| `ElicitationResult` | `planning` | typed input-submitted or declined state |
 | `UserPromptSubmit` | `planning` | typed user-prompt state with `userMessage` activity |
+| `Setup` | `planning` | typed initialization or maintenance state |
 | `SessionStart` | `planning` | typed session-start state |
 | `SessionEnd` | `done` | typed session-ended state |
 | `PreCompact` | `thinking` | typed context-compacting state |
+| `PostCompact` | `thinking` | typed context-compacted state |
 | `PreToolUse` / `PostToolUse` with edit or write tools | `editing` | file-change style notification and room mapping from paths |
 | `PreToolUse` / `PostToolUse` with bash or shell tools | `running` or `validating` | command-style notification |
 | `PostToolUseFailure` | `blocked` | failed command/tool state |
+| `FileChanged` | `editing` | typed file-change activity from Claude hook input |
+| `Notification` | `thinking`, `waiting`, or `blocked` | typed Claude-side message or warning surface |
 | `SubagentStart` | `delegating` | typed delegation summary |
 | `SubagentStop` | `done` | typed subagent-finished summary |
 | `Stop` / `TaskCompleted` | `done` | typed completion state |
 | `StopFailure` | `blocked` | typed turn-failure summary |
+| `TeammateIdle` | `waiting` | typed teammate-idle summary |
+| `CwdChanged` / `WorktreeCreate` / `WorktreeRemove` / `ConfigChange` / `InstructionsLoaded` | `planning` | typed workspace or config transitions |
 
 ### Claude activity events
 

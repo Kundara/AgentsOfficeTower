@@ -277,9 +277,11 @@ The active office view currently favors an open station language over enclosed c
 Claude support uses a deliberately weaker contract than Codex:
 
 - project discovery merges Codex-discovered roots with roots inferred from `~/.claude/projects`
+- when the Anthropic Agent SDK is available, Claude project discovery prefers `listSessions()` and per-session `cwd` metadata before falling back to raw directory scanning
 - the snapshot builder can include recent Claude sessions for matching project roots
-- transcript-only Claude session state is still inferred from recent tool uses such as read, edit, bash, and task delegation
-- optional project-local hook sidecars in `.codex-agents/claude-hooks/<session-id>.jsonl` can upgrade Claude sessions to typed permission, tool, subagent, and stop state
+- recent Claude session messages can now be read through the supported Agent SDK `getSessionMessages()` API before falling back to raw JSONL transcript sampling
+- transcript-only Claude session state is still inferred from recent tool uses such as read, edit, bash, and task delegation when no typed hook signal exists
+- optional project-local hook sidecars in `.codex-agents/claude-hooks/<session-id>.jsonl` can be produced either by a Claude Code hook script or by the exported Agent SDK sidecar bridge, and they upgrade Claude sessions to typed permission, tool, subagent, and stop state
 - Claude agents are rendered in the same room model, but with explicit provenance/confidence so transcript inference and hook-backed state do not pretend to have Codex-grade app-server coverage
 
 This is useful because it broadens observability across the machine, but it should remain visually and architecturally secondary to the official Codex path.

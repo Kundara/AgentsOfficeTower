@@ -1,7 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const os = require("node:os");
+const path = require("node:path");
+const { mkdtemp, readFile } = require("node:fs/promises");
 
 const { summariseClaudeHookRecord, summariseClaudeSession } = require("../dist/claude.js");
+const { claudeHooksFilePath, createClaudeSdkSidecarHooks } = require("../dist/claude-agent-sdk.js");
 const {
   cursorAgentMatchesRepository,
   normalizeRepositoryUrl,
@@ -87,6 +91,83 @@ test("synthetic Claude model placeholders do not leak into agent labels", () => 
   );
 
   assert.equal(summary.label, "Claude f06c");
+});
+
+test("typed Claude file-change hooks become editing file-change activity", () => {
+  const summary = summariseClaudeHookRecord({
+    sessionId: "session-123",
+    model: "claude-sonnet-4-5",
+    fallbackCwd: "/mnt/f/AI/CodexAgentsOffice",
+    gitBranch: "main",
+    fallbackUpdatedAt: Date.parse("2026-03-24T00:00:00.000Z"),
+    record: {
+      hook_event_name: "FileChanged",
+      cwd: "/mnt/f/AI/CodexAgentsOffice",
+      file_path: "/mnt/f/AI/CodexAgentsOffice/README.md",
+      event: "change"
+    }
+  });
+
+  assert.ok(summary);
+  assert.equal(summary.state, "editing");
+  assert.equal(summary.activityEvent?.type, "fileChange");
+  assert.equal(summary.activityEvent?.action, "edited");
+  assert.deepEqual(summary.paths, ["/mnt/f/AI/CodexAgentsOffice/README.md", "/mnt/f/AI/CodexAgentsOffice"]);
+});
+
+test("typed Claude notification hooks surface a recent agent message", () => {
+  const summary = summariseClaudeHookRecord({
+    sessionId: "session-123",
+    model: "claude-sonnet-4-5",
+    fallbackCwd: "/mnt/f/AI/CodexAgentsOffice",
+    gitBranch: "main",
+    fallbackUpdatedAt: Date.parse("2026-03-24T00:00:00.000Z"),
+    record: {
+      hook_event_name: "Notification",
+      cwd: "/mnt/f/AI/CodexAgentsOffice",
+      title: "Checkpoint",
+      message: "Analyzing renderer layout",
+      notification_type: "info"
+    }
+  });
+
+  assert.ok(summary);
+  assert.equal(summary.state, "thinking");
+  assert.equal(summary.activityEvent?.type, "agentMessage");
+  assert.equal(summary.latestMessage, "Analyzing renderer layout");
+});
+
+test("Claude SDK sidecar hooks append typed hook records per session", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "claude-hooks-"));
+  const hooks = createClaudeSdkSidecarHooks({
+    projectRoot,
+    watchPaths: [projectRoot]
+  });
+  const matcher = hooks.SessionStart?.[0];
+  assert.ok(matcher);
+
+  const output = await matcher.hooks[0]({
+    hook_event_name: "SessionStart",
+    session_id: "session-123",
+    transcript_path: "/tmp/transcript.jsonl",
+    cwd: projectRoot,
+    source: "startup"
+  }, undefined, {
+    signal: AbortSignal.timeout(1000)
+  });
+
+  assert.equal(output.continue, true);
+  assert.deepEqual(output.hookSpecificOutput, {
+    hookEventName: "SessionStart",
+    watchPaths: [projectRoot]
+  });
+
+  const sidecar = await readFile(claudeHooksFilePath(projectRoot, "session-123"), "utf8");
+  const [recordText] = sidecar.trim().split("\n");
+  const record = JSON.parse(recordText);
+  assert.equal(record.hook_source, "claude-agent-sdk");
+  assert.equal(record.hook_event_name, "SessionStart");
+  assert.equal(record.session_id, "session-123");
 });
 
 test("cursor repository URLs normalize across ssh and https forms", () => {

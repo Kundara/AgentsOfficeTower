@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
 import { ensureAgentAppearance } from "./appearance";
+import { claudeHooksFilePath, getClaudeSdkSessionRecords, listClaudeSdkSessions } from "./claude-agent-sdk";
 import type { DiscoveredProject } from "./project-paths";
 import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, NeedsUserState } from "./types";
 
@@ -18,6 +19,20 @@ interface ClaudeProjectDir {
   updatedAt: number;
   count: number;
   files: Array<{ path: string; updatedAt: number }>;
+}
+
+interface ClaudeSdkProject {
+  root: string;
+  updatedAt: number;
+  count: number;
+}
+
+interface ClaudeSdkSessionEntry {
+  sessionId: string;
+  updatedAt: number;
+  cwd: string;
+  gitBranch: string | null;
+  records: Array<Record<string, unknown>>;
 }
 
 interface ClaudeActivitySummary {
@@ -300,10 +315,6 @@ function isImagePath(path: string | null): boolean {
   return Boolean(path && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path));
 }
 
-function claudeHooksFilePath(projectRoot: string, sessionId: string): string {
-  return join(projectRoot, ".codex-agents", "claude-hooks", `${sessionId}.jsonl`);
-}
-
 function stringValue(record: Record<string, unknown>, ...keys: string[]): string | null {
   for (const key of keys) {
     const candidate = record[key];
@@ -572,6 +583,43 @@ export function summariseClaudeHookRecord(input: {
     };
   }
 
+  if (hookEventName === "PostCompact") {
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "thinking",
+      detail: "Context compacted",
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "Setup") {
+    const detail =
+      input.record.trigger === "maintenance" ? "Running Claude maintenance"
+      : "Initializing Claude session";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "planning",
+      detail,
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
   if (hookEventName === "SubagentStart") {
     const detail =
       typeof input.record.agent_type === "string" ? `Spawning ${input.record.agent_type} subagent`
@@ -634,11 +682,65 @@ export function summariseClaudeHookRecord(input: {
   }
 
   if (hookEventName === "Stop" || hookEventName === "TaskCompleted") {
+    const detail =
+      hookEventName === "TaskCompleted"
+        ? stringValue(input.record, "task_subject", "task_description", "message") ?? "Task completed"
+        : stringValue(input.record, "last_assistant_message") ?? "Finished recently";
     return {
       label: labelFromModel(input.model, input.sessionId),
       sourceKind: sourceKindFromModel(input.model),
       state: "done",
-      detail: hookEventName === "TaskCompleted" ? "Task completed" : "Finished recently",
+      detail: shorten(detail, 88),
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: hookEventName === "Stop" ? stringValue(input.record, "last_assistant_message") : null,
+      isOngoing: false
+    };
+  }
+
+  if (hookEventName === "Notification") {
+    const title = stringValue(input.record, "title");
+    const message = stringValue(input.record, "message") ?? title ?? "Claude notification";
+    const notificationType = stringValue(input.record, "notification_type");
+    const state =
+      notificationType && /(error|fail|denied|blocked)/i.test(notificationType) ? "blocked"
+      : notificationType && /(wait|input|approval)/i.test(notificationType) ? "waiting"
+      : "thinking";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state,
+      detail: shorten(message, 88),
+      updatedAt,
+      paths: [cwd],
+      activityEvent: {
+        type: "agentMessage",
+        action: "said",
+        path: cwd,
+        title: shorten(title ? `${title}: ${message}` : message, 88),
+        isImage: false
+      },
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: message,
+      isOngoing: state !== "blocked"
+    };
+  }
+
+  if (hookEventName === "TeammateIdle") {
+    const teammate = stringValue(input.record, "teammate_name") ?? "Teammate";
+    const teamName = stringValue(input.record, "team_name");
+    const detail = teamName ? `${teammate} is idle in ${teamName}` : `${teammate} is idle`;
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "waiting",
+      detail,
       updatedAt,
       paths: [cwd],
       activityEvent: null,
@@ -646,7 +748,139 @@ export function summariseClaudeHookRecord(input: {
       confidence: "typed",
       needsUser: null,
       latestMessage: null,
-      isOngoing: false
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "ElicitationResult") {
+    const action = stringValue(input.record, "action") ?? "accept";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "planning",
+      detail:
+        action === "decline" ? "Input request declined"
+        : action === "cancel" ? "Input request cancelled"
+        : "Input submitted",
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "ConfigChange") {
+    const source = stringValue(input.record, "source") ?? "settings";
+    const changedPath = stringValue(input.record, "file_path");
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "planning",
+      detail: changedPath ? `Updated ${source} via ${changedPath}` : `Updated ${source}`,
+      updatedAt,
+      paths: changedPath ? [canonicalizeProjectPath(changedPath) ?? changedPath, cwd] : [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "InstructionsLoaded") {
+    const memoryType = stringValue(input.record, "memory_type") ?? "Project";
+    const filePath = stringValue(input.record, "file_path");
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "planning",
+      detail: filePath ? `Loaded ${memoryType} instructions from ${filePath}` : `Loaded ${memoryType} instructions`,
+      updatedAt,
+      paths: filePath ? [canonicalizeProjectPath(filePath) ?? filePath, cwd] : [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "CwdChanged") {
+    const nextCwd =
+      canonicalizeProjectPath(stringValue(input.record, "new_cwd"))
+      ?? cwd;
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "planning",
+      detail: `Moved to ${nextCwd}`,
+      updatedAt,
+      paths: [nextCwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "FileChanged") {
+    const filePath = stringValue(input.record, "file_path");
+    const normalizedPath = canonicalizeProjectPath(filePath) ?? filePath ?? cwd;
+    const fileEvent = stringValue(input.record, "event") ?? "change";
+    const action =
+      fileEvent === "add" ? "created"
+      : fileEvent === "unlink" ? "deleted"
+      : "edited";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "editing",
+      detail: normalizedPath ? `${action[0].toUpperCase()}${action.slice(1)} ${normalizedPath}` : "Changed files",
+      updatedAt,
+      paths: normalizedPath ? [normalizedPath, cwd] : [cwd],
+      activityEvent: {
+        type: "fileChange",
+        action,
+        path: normalizedPath ?? null,
+        title: normalizedPath ? `${action} ${normalizedPath}` : "Changed files",
+        isImage: isImagePath(normalizedPath ?? null)
+      },
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "WorktreeCreate" || hookEventName === "WorktreeRemove") {
+    const worktreePath =
+      canonicalizeProjectPath(stringValue(input.record, "worktree_path"))
+      ?? canonicalizeProjectPath(stringValue(input.record, "name"))
+      ?? cwd;
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "planning",
+      detail:
+        hookEventName === "WorktreeCreate" ? `Created worktree ${worktreePath}`
+        : `Removed worktree ${worktreePath}`,
+      updatedAt,
+      paths: [worktreePath],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: hookEventName === "WorktreeCreate"
     };
   }
 
@@ -762,6 +996,74 @@ async function scanClaudeProjectDirs(): Promise<ClaudeProjectDir[]> {
   }
 
   return projects.sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+async function discoverClaudeProjectsViaSdk(limit = 50): Promise<ClaudeSdkProject[]> {
+  const sessions = await listClaudeSdkSessions({ limit });
+  if (!sessions || sessions.length === 0) {
+    return [];
+  }
+
+  const grouped = new Map<string, ClaudeSdkProject>();
+  for (const session of sessions) {
+    const root = canonicalizeProjectPath(session.cwd);
+    if (!root) {
+      continue;
+    }
+
+    const existing = grouped.get(root);
+    if (existing) {
+      existing.count += 1;
+      existing.updatedAt = Math.max(existing.updatedAt, session.lastModified);
+      continue;
+    }
+
+    grouped.set(root, {
+      root,
+      updatedAt: session.lastModified,
+      count: 1
+    });
+  }
+
+  return [...grouped.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, limit);
+}
+
+async function loadClaudeSessionsViaSdk(projectRoot: string, limit = 12): Promise<ClaudeSdkSessionEntry[] | null> {
+  const sessions = await listClaudeSdkSessions({
+    dir: projectRoot,
+    limit,
+    includeWorktrees: true
+  });
+  if (!sessions || sessions.length === 0) {
+    return null;
+  }
+
+  const entries = await Promise.all(
+    sessions.map(async (session) => {
+      const cwd = canonicalizeProjectPath(session.cwd) ?? projectRoot;
+      const records = await getClaudeSdkSessionRecords({
+        sessionId: session.sessionId,
+        dir: projectRoot,
+        cwd,
+        gitBranch: session.gitBranch,
+        limit: 200
+      });
+      if (!records || records.length === 0) {
+        return null;
+      }
+      return {
+        sessionId: session.sessionId,
+        updatedAt: session.lastModified,
+        cwd,
+        gitBranch: session.gitBranch ?? null,
+        records
+      };
+    })
+  );
+
+  return entries.filter((entry): entry is ClaudeSdkSessionEntry => Boolean(entry));
 }
 
 export function summariseClaudeSession(
@@ -890,6 +1192,16 @@ export function summariseClaudeSession(
 }
 
 export async function discoverClaudeProjects(limit = 50): Promise<DiscoveredProject[]> {
+  const sdkProjects = await discoverClaudeProjectsViaSdk(limit);
+  if (sdkProjects.length > 0) {
+    return sdkProjects.map((project) => ({
+      root: project.root,
+      label: basename(project.root) || project.root,
+      updatedAt: project.updatedAt,
+      count: project.count
+    }));
+  }
+
   const projects = await scanClaudeProjectDirs();
   return projects
     .slice(0, limit)
@@ -907,13 +1219,68 @@ export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise
     return [];
   }
 
+  const agents: DashboardAgent[] = [];
+  const sdkSessions = await loadClaudeSessionsViaSdk(canonicalRoot, limit);
+  if (sdkSessions && sdkSessions.length > 0) {
+    for (const session of sdkSessions) {
+      const hookSample = await readLogSample(claudeHooksFilePath(canonicalRoot, session.sessionId)).catch(() => null);
+      const hookRecords = hookSample ? [...hookSample.headRecords, ...hookSample.tailRecords] : [];
+      const summary = summariseClaudeSession(
+        session.sessionId,
+        session.cwd,
+        session.records,
+        Math.max(session.updatedAt, hookSample?.mtimeMs ?? 0),
+        hookRecords
+      );
+      const appearance = await ensureAgentAppearance(canonicalRoot, `claude:${session.sessionId}`);
+
+      agents.push({
+        id: `claude:${session.sessionId}`,
+        label: summary.label,
+        source: "claude",
+        sourceKind: summary.sourceKind,
+        parentThreadId: null,
+        depth: 0,
+        isCurrent: false,
+        isOngoing: summary.isOngoing,
+        statusText: "claude",
+        role: "claude",
+        nickname: null,
+        isSubagent: false,
+        state: summary.state,
+        detail: summary.detail,
+        cwd: session.cwd,
+        roomId: null,
+        appearance,
+        updatedAt: summary.updatedAt,
+        stoppedAt: null,
+        paths: summary.paths,
+        activityEvent: summary.activityEvent,
+        latestMessage: summary.latestMessage,
+        threadId: null,
+        taskId: null,
+        resumeCommand: null,
+        url: null,
+        git: {
+          sha: null,
+          branch: summary.gitBranch ?? session.gitBranch,
+          originUrl: null
+        },
+        provenance: "claude",
+        confidence: summary.confidence,
+        needsUser: summary.needsUser,
+        liveSubscription: "readOnly"
+      });
+    }
+    return agents;
+  }
+
   const projects = await scanClaudeProjectDirs();
   const project = projects.find((entry) => entry.root === canonicalRoot);
   if (!project) {
     return [];
   }
 
-  const agents: DashboardAgent[] = [];
   for (const file of project.files.slice(0, limit)) {
     const sample = await readLogSample(file.path).catch(() => null);
     if (!sample) {

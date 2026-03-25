@@ -1,97 +1,102 @@
-# Codex Agents Office
+# Agents Office Tower
 
 <div align="center">
 
-### The office view for real Codex work
+### Live workload visibility for coding agents
 
-Turn live Codex activity into a browser office, terminal snapshot, and VS Code panel that show which workspaces are active, which parent sessions are leading, which subagents are blocked or waiting, and where that work belongs in the project.
+Browser office view, terminal snapshot, and VS Code panel for current Codex, Claude, Cursor, and OpenClaw work.
 
-[Quick start](#quick-start) • [What it does](#what-it-does) • [How it works](#how-it-works) • [Docs](#docs)
+[Quick start](#quick-start) • [Support matrix](#support-matrix) • [How it works](#how-it-works) • [Docs](#docs)
 
 </div>
 
-## Why this exists
+## What it is
 
-Codex already exposes real workload signals: threads, turns, item activity, approvals, file changes, and cloud tasks.
+- Workspace-level observability for active agent work.
+- Focused on current workload, not transcript replay.
 
-What is still hard is reading that workload at a glance across multiple active projects.
+## What you get
 
-Codex Agents Office turns those signals into a live observability surface instead of a transcript replay.
+- Browser office view with fleet mode and single-project focus.
+- Terminal snapshot and watch mode.
+- VS Code activity-bar panel.
+- Current-workload-first scene with subtle recent history.
+- Shared model across all renderers.
 
-## What it does
+## Support matrix
 
-- **Browser office view**
-  Live room-based rendering with fleet view, single-project focus, hover details, a user text-size control, and a terminal-style fallback.
-- **Terminal snapshot and watch mode**
-  Fast shell output grouped by room, including current state, useful detail, and resume commands when available.
-- **VS Code activity-bar panel**
-  The same workload model inside the editor, backed by the same room and appearance data.
-- **Data-driven rooms**
-  Each project maps paths to rooms through `.codex-agents/rooms.xml`.
-- **Persistent appearance overrides**
-  Agent looks are stored in `.codex-agents/agents.json`.
-- **Current-workload-first rendering**
-  The product is optimized for what is happening now, with recent history kept visible only where it helps the scene read cleanly.
-- **Grid-first office layout**
-  The floor renderer uses an explicit tile grid and a retained Pixi scene with HTML anchor overlays for toasts and interaction hooks.
-  The base tile is fixed at `16px` so the floor grid uses the same unit as the PixelOffice sprite sheet.
-- **Minimal viewer controls**
-  User-facing scene controls stay global and small; today that means a text-size setting, while prefab geometry and spacing remain internal until furniture editing exists.
+| Source | Project discovery | Live state | Typed approvals/input | Subagent correlation | Resume/open |
+| --- | --- | --- | --- | --- | --- |
+| Codex app-server | V | V | V | V | V |
+| Claude Agent SDK + hooks | V | basic | V | basic | X |
+| Claude local transcripts only | V | inferred | X | X | X |
+| Cursor cloud agents | V | cloud | X | basic | V |
+| OpenClaw gateway | V | basic | X | basic | X |
 
 ## Quick start
+
+### One line
+
+From the cloned repo root:
+
+```bash
+npm start
+```
+
+That bootstraps the workspace if needed, rebuilds, and starts the web server on `http://127.0.0.1:4181`.
 
 ### Requirements
 
 - Node.js and npm
-- a runnable Codex command if you want live Codex session visibility
-  The normal path is Codex CLI on `PATH`. On macOS, Codex Agents Office falls back to the bundled app binary in `/Applications/Codex.app/Contents/Resources/codex` when the CLI is absent. On Windows, Codex Agents Office can fall back to the Microsoft Store app by extracting the bundled `codex.exe` into a local cache automatically.
-- optional Claude local logs if you want secondary discovery
-- optional OpenClaw gateway access if you want OpenClaw session and workspace visibility
-- optional `CURSOR_API_KEY` if you want Cursor cloud-agent visibility
+- a cloned copy of this repo
 
-### Install and build
+### Optional integrations
 
-```bash
-npm install
-npm run build
-npm run typecheck
-```
+- Codex CLI or Codex app for the strongest local visibility
+- Claude local sessions for passive Claude visibility
+- Claude hooks or Agent SDK bridge for stronger typed Claude visibility
+- `CURSOR_API_KEY` for Cursor cloud-agent visibility
+- OpenClaw gateway access for OpenClaw visibility
 
 ### Run the web view
 
 ```bash
-npx codex-agents-office web --port 4181
+npm start
 ```
 
 Open [http://127.0.0.1:4181](http://127.0.0.1:4181).
 
-This is the normal fleet-mode launch. For a focused single-project run:
+Fleet mode is the default. For a focused single-project run:
 
 ```bash
-npx codex-agents-office web /abs/project/path --port 4181
+npm start -- /abs/project/path --port 4181
+```
+
+Optional dev check:
+
+```bash
+npm run typecheck
 ```
 
 ### Run the terminal view
 
-Print one snapshot:
+Snapshot once:
 
 ```bash
-npx codex-agents-office snapshot /abs/project/path
+node packages/cli/dist/index.js snapshot /abs/project/path
 ```
 
-Watch live updates:
+Watch live:
 
 ```bash
-npx codex-agents-office watch /abs/project/path
+node packages/cli/dist/index.js watch /abs/project/path
 ```
 
-### Run the disposable preview
+### Run the demo
 
 ```bash
-npx codex-agents-office demo preview --port 4181
+node packages/cli/dist/index.js demo preview --port 4181
 ```
-
-This creates a temporary demo workspace with scripted activity so you can see the office view without wiring a real project first.
 
 ### Run the VS Code panel
 
@@ -99,63 +104,45 @@ This creates a temporary demo workspace with scripted activity so you can see th
 npm run build -w packages/vscode
 ```
 
-Then open this repo in VS Code and press `F5` to launch the extension host.
+Then open this repo in VS Code and press `F5`.
 
 ## How it works
 
-Codex Agents Office is an observability layer over real Codex work.
+The product normalizes everything into one shared workload model, then renders it in the browser, terminal, and VS Code.
 
-It prefers official surfaces first:
+Preferred sources:
 
-- `codex app-server` for local threads, turns, approvals, input waits, commands, file changes, and live notifications
+- `codex app-server` for local Codex threads, approvals, turns, and notifications
 - `codex cloud list --json` for cloud and web tasks
-- `.codex-agents/rooms.xml` for room layout and path mapping
-- `.codex-agents/agents.json` for persistent appearance overrides
+- Claude Agent SDK session APIs and Claude hook sidecars when available
+- Claude local transcripts as fallback
+- Cursor cloud-agent API
+- OpenClaw gateway sessions
 
-If `codex` is not on `PATH`, set `CODEX_CLI_PATH` to a runnable Codex executable.
-When both a WSL-side Codex CLI and the Windows app exist, `PATH` still wins. Set `CODEX_CLI_PATH` if you need to force one specific runtime.
+Important product rule:
 
-Claude local logs, OpenClaw gateway sessions, and Cursor cloud agents are supported as secondary sources, but the product is designed to treat Codex-native signals as the primary truth when they exist.
-OpenClaw support is opt-in and uses the official gateway surfaces; set `OPENCLAW_GATEWAY_URL` or `OPENCLAW_GATEWAY_TOKEN` to enable it.
+- Codex is still the strongest integration surface today.
+- Claude, Cursor, and OpenClaw are useful secondary sources.
+- Provenance and confidence stay visible so inferred state does not look like typed state.
 
-## Project layout
+## Repo layout
 
-- [`packages/core`](packages/core)
-  Shared discovery, room parsing, workload classification, appearance storage, and snapshot plumbing.
-- [`packages/web`](packages/web)
-  Browser server and renderer for office and terminal browser views.
-- [`packages/cli`](packages/cli)
-  CLI entrypoints for `watch`, `snapshot`, room scaffolding, preview demos, and web hosting.
-- [`packages/vscode`](packages/vscode)
-  VS Code activity-bar integration.
-- [`docs`](docs)
-  Internal architecture, spec, hook mapping, references, and project priorities.
+- `packages/core`: shared discovery, normalization, rooms, appearance, and snapshot plumbing
+- `packages/web`: browser server and office renderer
+- `packages/cli`: `watch`, `snapshot`, demo, and web entrypoints
+- `packages/vscode`: VS Code activity-bar integration
+- `docs`: architecture, integration hooks, references, and priorities
 
 ## Docs
 
-- [docs/spec.md](docs/spec.md)
-  Product expectations, current behavior rules, and renderer contract.
-- [CHANGELOG.md](CHANGELOG.md)
-  Versioned summary of notable additions, fixes, and behavior changes.
-- [docs/architecture.md](docs/architecture.md)
-  Internal system design and package/module responsibilities.
-- [docs/integration-hooks.md](docs/integration-hooks.md)
-  Exact Codex, Claude, OpenClaw, Cursor, and cloud integration surfaces.
-- [docs/self-development.md](docs/self-development.md)
-  Priorities and improvement backlog.
-- [docs/references.md](docs/references.md)
-  External references that shaped the implementation.
+- [docs/spec.md](docs/spec.md): product and renderer expectations
+- [docs/architecture.md](docs/architecture.md): system design and package boundaries
+- [docs/integration-hooks.md](docs/integration-hooks.md): exact source surfaces and mappings
+- [docs/self-development.md](docs/self-development.md): priorities and backlog
+- [docs/references.md](docs/references.md): external references
+- [CHANGELOG.md](CHANGELOG.md): notable shipped changes
 
-## Development
+## Notes
 
-Useful commands:
-
-```bash
-npm install
-npm run build
-npm run typecheck
-npx codex-agents-office web --port 4181
-npx codex-agents-office watch /abs/project/path
-```
-
-For runtime operations, behavioral expectations, and debugging details, use the internal docs instead of extending this landing page.
+- The repo and package names still use `codex-agents-office` for now.
+- The product name in the UI and docs is `Agents Office Tower`.
