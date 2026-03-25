@@ -1,7 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { buildCodexCommandCandidates } = require("../dist/codex-command.js");
+const {
+  buildCodexCommandCandidates,
+  windowsPathToWslPath
+} = require("../dist/codex-command.js");
 
 test("candidate list prefers explicit override before PATH", () => {
   assert.deepEqual(
@@ -29,5 +32,28 @@ test("macOS candidates include the app bundle after PATH", () => {
         label: "Codex app bundle"
       }
     ]
+  );
+});
+
+test("Windows app bundle candidate is included after PATH", () => {
+  assert.deepEqual(
+    buildCodexCommandCandidates({
+      platform: "win32",
+      windowsAppPath: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe"
+    }),
+    [
+      { command: "codex.cmd", label: "Codex CLI on PATH" },
+      {
+        command: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe",
+        label: "Codex Windows app bundle"
+      }
+    ]
+  );
+});
+
+test("Windows paths convert to WSL mount paths", () => {
+  assert.equal(
+    windowsPathToWslPath("C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\codex.exe"),
+    "/mnt/c/Users/test/AppData/Local/CodexAgentsOffice/cache/codex.exe"
   );
 });

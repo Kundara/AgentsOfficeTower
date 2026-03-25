@@ -2,6 +2,7 @@ import { basename, normalize } from "node:path";
 
 import { withAppServerClient } from "./app-server";
 import { discoverClaudeProjects } from "./claude";
+import { discoverOpenClawProjects } from "./openclaw";
 import type { CodexThread } from "./types";
 
 export interface DiscoveredProject {
@@ -108,12 +109,13 @@ export async function discoverCodexProjects(limit = 20): Promise<DiscoveredProje
 
 export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]> {
   const merged = new Map<string, DiscoveredProject>();
-  const [codexProjects, claudeProjects] = await Promise.all([
+  const [codexProjects, claudeProjects, openClawProjects] = await Promise.all([
     discoverCodexProjects(limit).catch(() => []),
-    discoverClaudeProjects(limit).catch(() => [])
+    discoverClaudeProjects(limit).catch(() => []),
+    discoverOpenClawProjects(limit).catch(() => [])
   ]);
 
-  for (const project of [...codexProjects, ...claudeProjects]) {
+  for (const project of [...codexProjects, ...claudeProjects, ...openClawProjects]) {
     const existing = merged.get(project.root);
     if (existing) {
       existing.updatedAt = Math.max(existing.updatedAt, project.updatedAt);

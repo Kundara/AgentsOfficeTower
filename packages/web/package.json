@@ -9,6 +9,8 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@codex-agents-office/core": "file:../core"
+    "@codex-agents-office/core": "file:../core",
+    "easystarjs": "^0.4.4",
+    "pixi.js": "^8.17.1"
   }
 }

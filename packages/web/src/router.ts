@@ -1,6 +1,7 @@
+import { resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { readJsonBody, notFound, sendHtml, sendJson, sendProjectFile, sendStaticAsset } from "./http-helpers";
+import { readJsonBody, notFound, sendAbsoluteFileAsset, sendHtml, sendJson, sendProjectFile, sendStaticAsset } from "./http-helpers";
 import { buildServerMeta } from "./server-metadata";
 import { renderHtml } from "./render-html";
 import { renderIconAuditHtml } from "./render-icon-audit-html";
@@ -16,6 +17,9 @@ interface RequestContext {
 }
 
 type RouteHandler = (context: RequestContext) => Promise<boolean>;
+
+const PIXI_BROWSER_BUNDLE = resolve(__dirname, "../../../node_modules/pixi.js/dist/pixi.min.js");
+const EASYSTAR_BROWSER_BUNDLE = resolve(__dirname, "../../../node_modules/easystarjs/bin/easystar-0.4.4.min.js");
 
 function requestMethod(context: RequestContext): string {
   return context.request.method ?? "GET";
@@ -54,6 +58,24 @@ async function handleHomeRoute(context: RequestContext): Promise<boolean> {
 
   sendHtml(context.response, renderHtml(context.options));
   return true;
+}
+
+async function handleVendorRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET", "HEAD")) {
+    return false;
+  }
+
+  if (context.url.pathname === "/vendor/pixi.min.js") {
+    await sendAbsoluteFileAsset(context.response, PIXI_BROWSER_BUNDLE, requestMethod(context));
+    return true;
+  }
+
+  if (context.url.pathname === "/vendor/easystar.min.js") {
+    await sendAbsoluteFileAsset(context.response, EASYSTAR_BROWSER_BUNDLE, requestMethod(context));
+    return true;
+  }
+
+  return false;
 }
 
 async function handleIconAuditRoute(context: RequestContext): Promise<boolean> {
@@ -160,6 +182,7 @@ async function handleRefreshRoute(context: RequestContext): Promise<boolean> {
 
 const ROUTES: RouteHandler[] = [
   handleAssetRoute,
+  handleVendorRoute,
   handleHomeRoute,
   handleIconAuditRoute,
   handleFleetRoute,

@@ -21,7 +21,7 @@ Codex Agents Office turns those signals into a live observability surface instea
 ## What it does
 
 - **Browser office view**
-  Live room-based rendering with fleet view, single-project focus, hover details, and a terminal-style fallback.
+  Live room-based rendering with fleet view, single-project focus, hover details, a user text-size control, and a terminal-style fallback.
 - **Terminal snapshot and watch mode**
   Fast shell output grouped by room, including current state, useful detail, and resume commands when available.
 - **VS Code activity-bar panel**
@@ -32,6 +32,11 @@ Codex Agents Office turns those signals into a live observability surface instea
   Agent looks are stored in `.codex-agents/agents.json`.
 - **Current-workload-first rendering**
   The product is optimized for what is happening now, with recent history kept visible only where it helps the scene read cleanly.
+- **Grid-first office layout**
+  The floor renderer uses an explicit tile grid and internal layout settings so the office scene can move toward a retained 2D renderer without losing room semantics.
+  The base tile is fixed at `16px` so the floor grid uses the same unit as the PixelOffice sprite sheet.
+- **Minimal viewer controls**
+  User-facing scene controls stay global and small; today that means a text-size setting, while prefab geometry and spacing remain internal until furniture editing exists.
 
 ## Quick start
 
@@ -39,9 +44,10 @@ Codex Agents Office turns those signals into a live observability surface instea
 
 - Node.js and npm
 - a runnable Codex command if you want live Codex session visibility
-  The normal path is Codex CLI on `PATH`. On macOS, Codex Agents Office also falls back to the bundled app binary in `/Applications/Codex.app/Contents/Resources/codex` when the CLI is absent. On Windows, the desktop app alone is not yet a reliable substitute for a runnable `codex` command.
+  The normal path is Codex CLI on `PATH`. On macOS, Codex Agents Office falls back to the bundled app binary in `/Applications/Codex.app/Contents/Resources/codex` when the CLI is absent. On Windows, Codex Agents Office can fall back to the Microsoft Store app by extracting the bundled `codex.exe` into a local cache automatically.
 - optional Claude local logs if you want secondary discovery
-- optional `CURSOR_API_KEY` if you want Cursor background-agent visibility
+- optional OpenClaw gateway access if you want OpenClaw session and workspace visibility
+- optional `CURSOR_API_KEY` if you want Cursor cloud-agent visibility
 
 ### Install and build
 
@@ -107,9 +113,10 @@ It prefers official surfaces first:
 - `.codex-agents/agents.json` for persistent appearance overrides
 
 If `codex` is not on `PATH`, set `CODEX_CLI_PATH` to a runnable Codex executable.
-On Windows+WSL, make sure the observer and the Codex app share the same `CODEX_HOME`; otherwise WSL-side discovery can miss Windows app sessions entirely.
+When both a WSL-side Codex CLI and the Windows app exist, `PATH` still wins. Set `CODEX_CLI_PATH` if you need to force one specific runtime.
 
-Claude local logs and Cursor background agents are supported as secondary sources, but the product is designed to treat Codex-native signals as the primary truth when they exist.
+Claude local logs, OpenClaw gateway sessions, and Cursor cloud agents are supported as secondary sources, but the product is designed to treat Codex-native signals as the primary truth when they exist.
+OpenClaw support is opt-in and uses the official gateway surfaces; set `OPENCLAW_GATEWAY_URL` or `OPENCLAW_GATEWAY_TOKEN` to enable it.
 
 ## Project layout
 
@@ -128,10 +135,12 @@ Claude local logs and Cursor background agents are supported as secondary source
 
 - [docs/spec.md](docs/spec.md)
   Product expectations, current behavior rules, and renderer contract.
+- [CHANGELOG.md](CHANGELOG.md)
+  Versioned summary of notable additions, fixes, and behavior changes.
 - [docs/architecture.md](docs/architecture.md)
   Internal system design and package/module responsibilities.
 - [docs/integration-hooks.md](docs/integration-hooks.md)
-  Exact Codex, Claude, Cursor, and cloud integration surfaces.
+  Exact Codex, Claude, OpenClaw, Cursor, and cloud integration surfaces.
 - [docs/self-development.md](docs/self-development.md)
   Priorities and improvement backlog.
 - [docs/references.md](docs/references.md)

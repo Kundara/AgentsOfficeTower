@@ -6,6 +6,7 @@ export * from "./claude";
 export * from "./codex-command";
 export * from "./cursor";
 export * from "./live-monitor";
+export * from "./openclaw";
 export * from "./presence";
 export * from "./project-paths";
 export * from "./room-config";

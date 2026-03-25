@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const { summariseClaudeHookRecord } = require("../dist/claude.js");
 const {
+  cursorAgentMatchesRepository,
   normalizeRepositoryUrl,
   cursorStatusToActivityState
 } = require("../dist/cursor.js");
@@ -75,6 +76,14 @@ test("cursor repository URLs normalize across ssh and https forms", () => {
     normalizeRepositoryUrl("ssh://git@github.com/OpenAI/CodexAgentsOffice.git"),
     "https://github.com/openai/codexagentsoffice"
   );
+  assert.equal(
+    normalizeRepositoryUrl("https://github.com/OpenAI/CodexAgentsOffice/pull/42"),
+    "https://github.com/openai/codexagentsoffice"
+  );
+  assert.equal(
+    normalizeRepositoryUrl("https://gitlab.example.com/team/platform/CodexAgentsOffice/-/merge_requests/42"),
+    "https://gitlab.example.com/team/platform/codexagentsoffice"
+  );
 });
 
 test("cursor background agent statuses map into workload states", () => {
@@ -83,4 +92,29 @@ test("cursor background agent statuses map into workload states", () => {
   assert.equal(cursorStatusToActivityState("FINISHED"), "done");
   assert.equal(cursorStatusToActivityState("ERROR"), "blocked");
   assert.equal(cursorStatusToActivityState("EXPIRED"), "idle");
+});
+
+test("cursor agents match the current repo when Cursor reports a PR URL instead of source.repository", () => {
+  assert.equal(
+    cursorAgentMatchesRepository(
+      {
+        source: {
+          prUrl: "https://github.com/Kundara/CodexAgentsOffice/pull/123"
+        }
+      },
+      "https://github.com/Kundara/CodexAgentsOffice.git"
+    ),
+    true
+  );
+  assert.equal(
+    cursorAgentMatchesRepository(
+      {
+        target: {
+          prUrl: "https://github.com/Kundara/CodexAgentsOffice/pull/456"
+        }
+      },
+      "git@github.com:Kundara/CodexAgentsOffice.git"
+    ),
+    true
+  );
 });

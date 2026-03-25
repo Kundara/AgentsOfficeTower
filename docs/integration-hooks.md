@@ -4,7 +4,7 @@
 
 This document answers two questions:
 
-1. What signals can Codex Agents Office read from Codex, Claude, and Cursor today?
+1. What signals can Codex Agents Office read from Codex, Claude, OpenClaw, and Cursor today?
 2. How does each signal get represented in this project?
 
 The goal is practical transparency. This is not a generic event catalog. It is the list of hooks this codebase can already ride, plus the places where we are still leaving signal on the table.
@@ -16,9 +16,9 @@ Everything eventually lands in the shared `DashboardSnapshot` and `DashboardAgen
 The important normalized agent fields are:
 
 - `source`
-  `local`, `cloud`, `cursor`, `presence`, or `claude`
+  `local`, `cloud`, `cursor`, `presence`, `claude`, or `openclaw`
 - `sourceKind`
-  where the session came from, such as `cli`, `vscode`, `subAgent`, `claude:<model>`, or `cursor:<model>`
+  where the session came from, such as `cli`, `vscode`, `subAgent`, `claude:<model>`, `openclaw:<provider/model>`, or `cursor:<model>`
 - `parentThreadId`
   parent Codex thread when the agent is a spawned subagent
 - `state`
@@ -30,7 +30,7 @@ The important normalized agent fields are:
 - `activityEvent`
   optional event object used for visual notifications
 - `provenance`
-  whether the visible state comes from typed Codex data, typed Cursor API data, inferred Claude data, cloud tasks, or synthetic presence
+  whether the visible state comes from typed Codex data, typed OpenClaw gateway data, typed Cursor API data, inferred Claude data, cloud tasks, or synthetic presence
 - `confidence`
   whether the visible state is typed truth or inferred best effort
 - `resumeCommand`
@@ -79,8 +79,8 @@ Resolution details:
 - prefer `CODEX_CLI_PATH` when explicitly set
 - otherwise prefer `codex` on `PATH`
 - on macOS, fall back to the bundled Codex app binary in `/Applications/Codex.app/Contents/Resources/codex` or `~/Applications/Codex.app/Contents/Resources/codex` when present
-- on Windows, the desktop app does not currently give this project a reliable app-server fallback by itself, so a runnable `codex` command is still required for native Codex visibility
-- on Windows+WSL, a WSL-side Codex CLI still needs a shared `CODEX_HOME` with the Windows app if you expect the observer to see the same local session history
+- on Windows and Windows+WSL, fall back to the Microsoft Store Codex app by copying its packaged `app/resources` bundle into `%LOCALAPPDATA%\\CodexAgentsOffice\\cache\\windows-store\\<version>` and spawning the cached `codex.exe`
+- when both a WSL-side Codex CLI and the Windows app exist, `codex` on `PATH` still wins unless `CODEX_CLI_PATH` overrides it
 
 ### `thread/list`
 
@@ -281,6 +281,34 @@ How we use it:
 - render floating text such as `Ran npm run build`
 - collapse read-only shell inspection commands such as `sed`, `cat`, `head`, `tail`, `rg`, `grep`, `ls`, `find`, and `tree` into short summary toasts like `Read workload.ts` or `Exploring 2 files`
 
+### Browser scene layout semantics
+
+Mapped in:
+
+- `packages/web/src/scene-config.ts`
+- `packages/web/src/client-script.ts`
+- `packages/web/src/client-styles.ts`
+
+What we define internally:
+
+- scene tile size and compact tile size
+- desk pod span and capacity
+- boss booth span
+- wall/top-band depth
+- desk-area start ratio
+- cubicle-group spacing
+- desk-column spacing
+- rec-strip furniture row and walkway row
+- rec-strip maximum depth from the top of the floor grid
+
+How we use it:
+
+- derive browser office layout from tile spans instead of free-floating per-renderer pixel literals
+- keep desk slots stable across live updates so current workload does not repack unpredictably
+- place rec-strip furniture on the first grid row and keep it within the top 2 rows of floor depth
+- treat text scale as a global viewer setting while keeping prefab geometry internal
+- keep the browser map as a retained scene host so live data updates scene entities without replacing the map subtree
+
 ### Tool call semantics
 
 Mapped in:
@@ -391,7 +419,7 @@ What we read:
 Resolution details:
 
 - `cloud list` uses the same Codex-command resolution path as `app-server`
-- app-only installs without a runnable Codex executable still cannot provide cloud task visibility here
+- Windows Store app installs can provide cloud task visibility through the same extracted-binary fallback
 
 How we use it:
 
@@ -523,9 +551,65 @@ What Claude still does not provide here:
 - Codex app-server style live push stream into this process without a user-configured hook bridge
 - Codex-grade parent/subagent hierarchy with stable parent thread ids in the shared snapshot
 
-## Cursor Background Agents
+## OpenClaw Gateway Sessions
 
-Cursor support uses the official background-agent API as a typed secondary source.
+OpenClaw support uses the official Gateway control plane as a typed secondary source.
+
+Primary code path:
+
+- `packages/core/src/openclaw.ts`
+
+### OpenClaw workspace matching
+
+What we read:
+
+- `config.get`
+- `agents.list`
+- `sessions.list`
+
+How we use it:
+
+- read configured agent workspace roots from `config.get`
+- read agent identities from `agents.list`
+- read typed session rows, parent links, timestamps, and previews from `sessions.list`
+- match OpenClaw workspaces onto the current office project by normalized workspace-path equality
+- map OpenClaw parent/child session structure into `parentThreadId` and depth instead of flattening it into project tasks
+
+### Official OpenClaw surface
+
+Official docs:
+
+- [OpenClaw repository](https://github.com/openclaw/openclaw)
+- [OpenClaw ACP bridge](https://github.com/openclaw/openclaw/blob/main/docs.acp.md)
+
+What OpenClaw exposes:
+
+- Gateway WebSocket `connect`
+- `config.get` for typed config snapshots
+- `agents.list` for agent identities
+- `sessions.list` for typed session rows with `parentSessionKey`, `childSessions`, timestamps, labels, status, and previews
+
+How this project uses that surface:
+
+- enables OpenClaw visibility only when `OPENCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` is configured
+- connects to the official Gateway WebSocket and performs the same nonce-based `connect.challenge` handshake model OpenClaw documents
+- keeps the integration read-only
+- renders OpenClaw sessions with `confidence = typed`
+- discovers OpenClaw-backed workspace floors only from active recent sessions, not from guessed local transcript files
+
+### OpenClaw state mapping
+
+| OpenClaw signal | State | Representation |
+| --- | --- | --- |
+| `status = running` with active child sessions | `delegating` | typed lead session supervising other OpenClaw sessions |
+| `status = running` without active child sessions | `thinking` | active typed OpenClaw session |
+| `status = done` | `done` | recently completed OpenClaw session |
+| `status = failed` / `killed` / `timeout` | `blocked` | typed terminal failure or interrupted session |
+| no usable status | `idle` | inactive OpenClaw session |
+
+## Cursor Cloud Agents
+
+Cursor support uses the official cloud-agent API as a typed secondary source.
 
 Primary code path:
 
@@ -536,11 +620,13 @@ Primary code path:
 What we read:
 
 - project git `remote.origin.url`
-- Cursor background-agent `source.repository`
+- Cursor cloud-agent `source.repository`
+- Cursor cloud-agent `source.prUrl` and `target.prUrl` when work is attached to an existing PR
 
 How we use it:
 
 - normalize both repo URLs into a comparable HTTPS form
+- collapse GitHub/GitLab/Bitbucket PR URLs back to their repository URL before comparison
 - match Cursor background agents onto the currently selected project
 - avoid transcript scraping or private local storage parsing
 
@@ -548,8 +634,8 @@ How we use it:
 
 Official docs:
 
-- [Cursor background agents](https://docs.cursor.com/en/background-agents)
-- [Cursor background-agent API overview](https://docs.cursor.com/background-agent/api/overview)
+- [Cursor background agents](https://cursor.com/docs/cloud-agent)
+- [Cursor cloud-agent API](https://cursor.com/docs/cloud-agent/api/endpoints)
 
 What Cursor exposes:
 
@@ -561,7 +647,9 @@ What Cursor exposes:
 How this project uses that surface:
 
 - reads the official Cursor API when `CURSOR_API_KEY` is configured
-- matches agents by normalized repository URL
+- follows `GET /v0/agents` pagination through `cursor` / `nextCursor`
+- authenticates against the current API surface and falls back to the older bearer form for compatibility
+- matches agents by normalized repository URL, including PR-backed repository URLs
 - maps agent status into shared workload state
 - renders Cursor agents with `confidence = typed`
 - keeps them read-only because this project is observing, not driving Cursor agent execution
@@ -595,6 +683,7 @@ The snapshot builder merges:
 - cloud tasks
 - optional synthetic presence entries
 - Claude sessions from transcript inference or optional hook sidecars
+- OpenClaw gateway sessions matched by configured workspace root
 - Cursor background agents matched by normalized repository URL
 
 Then it:

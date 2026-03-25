@@ -5,6 +5,9 @@ interface ClientScriptOptions {
   threadItemIconUrlsJson: string;
 }
 
+import { DEFAULT_GLOBAL_SCENE_SETTINGS, INTERNAL_SCENE_SETTINGS } from "./scene-config";
+import { SCENE_GRID_SCRIPT } from "./scene-grid-script";
+
 export function renderClientScript({
   projectsJson,
   pixelOfficeJson,
@@ -17,6 +20,17 @@ export function renderClientScript({
       const pixelOffice = ${pixelOfficeJson};
       const eventIconUrls = ${eventIconUrlsJson};
       const threadItemIconUrls = ${threadItemIconUrlsJson};
+      const defaultGlobalSceneSettings = ${JSON.stringify(DEFAULT_GLOBAL_SCENE_SETTINGS)};
+      const internalSceneSettings = ${JSON.stringify(INTERNAL_SCENE_SETTINGS)};
+      const sceneSettingsStorageKey = "codex-agents-office:scene-settings";
+      const furnitureLayoutStorageKey = "codex-agents-office:furniture-layout";
+      const clampSceneTextScale = (value) => {
+        if (!Number.isFinite(value)) {
+          return defaultGlobalSceneSettings.textScale;
+        }
+        const rounded = Math.round(value * 100) / 100;
+        return Math.min(internalSceneSettings.maxTextScale, Math.max(internalSceneSettings.minTextScale, rounded));
+      };
       const params = new URLSearchParams(window.location.search);
       const initialProject = params.get("project") || "all";
       const initialView = params.get("view") || "map";
@@ -31,10 +45,14 @@ export function renderClientScript({
         selected: initialProject,
         view: initialView === "terminal" ? "terminal" : "map",
         workspaceFullscreen: initialWorkspaceFullscreen,
+        settingsOpen: false,
         activeOnly: initialActiveOnly,
         connection: screenshotMode ? "snapshot" : "connecting",
-        focusedSessionKeys: []
+        focusedSessionKeys: [],
+        globalSceneSettings: loadGlobalSceneSettings(),
+        furnitureLayoutOverrides: loadFurnitureLayoutOverrides()
       };
+      let furnitureDragState = null;
       let events = null;
       const liveAgentMemory = new Map();
       let renderedAgentSceneState = new Map();
@@ -51,9 +69,13 @@ export function renderClientScript({
       const recentNotificationTimes = new Map();
       const recentNotificationFingerprintTimes = new Map();
       const recentToastLineTimes = new Map();
+      const loadedOfficeAssetUrls = new Set();
+      const officeSceneRenderers = new Map();
       const NOTIFICATION_TTL_MS = 2400;
       const MESSAGE_NOTIFICATION_TTL_MS = 4600;
+      const TEXT_MESSAGE_NOTIFICATION_EXTRA_TTL_MS = 1000;
       const TOAST_FLOAT_ANIMATION_MS = 3300;
+      const TEXT_MESSAGE_TOAST_FLOAT_ANIMATION_MS = 4300;
       const COMMAND_NOTIFICATION_BASE_TTL_MS = 2600;
       const COMMAND_NOTIFICATION_LINE_TTL_MS = 1200;
       const FILE_CHANGE_COMPUTER_FX_MS = 330;
@@ -70,6 +92,7 @@ export function renderClientScript({
       let lastFleetSemanticToken = null;
       const recentLeadDisplayMemory = new Map();
       const activeRecentLeadReservations = new Map();
+      const recSlotMemory = new Map();
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));
       function projectInfo(projectRoot) {
@@ -83,8 +106,146 @@ export function renderClientScript({
         return projectInfo(projectRoot).label;
       }
 
+      function stableSceneSlotAssignments(projectRoot, category, agents) {
+        const memoryKey = String(projectRoot) + "::" + String(category);
+        const previous = recSlotMemory.get(memoryKey) || new Map();
+        const next = new Map();
+        const assignments = [];
+        const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+        const usedIndexes = new Set();
+
+        for (const [agentId, slotIndex] of previous.entries()) {
+          const agent = agentById.get(agentId);
+          if (!agent || !Number.isFinite(slotIndex) || usedIndexes.has(slotIndex)) {
+            continue;
+          }
+          next.set(agentId, slotIndex);
+          usedIndexes.add(slotIndex);
+          assignments.push({ agent, slotIndex });
+        }
+
+        let nextSlotIndex = 0;
+        for (const agent of agents) {
+          if (next.has(agent.id)) {
+            continue;
+          }
+          while (usedIndexes.has(nextSlotIndex)) {
+            nextSlotIndex += 1;
+          }
+          next.set(agent.id, nextSlotIndex);
+          usedIndexes.add(nextSlotIndex);
+          assignments.push({ agent, slotIndex: nextSlotIndex });
+          nextSlotIndex += 1;
+        }
+
+        recSlotMemory.set(memoryKey, next);
+        return assignments.sort((left, right) => left.slotIndex - right.slotIndex);
+      }
+
       function agentKey(projectRoot, agent) {
         return \`\${projectRoot}::\${agent.id}\`;
+      }
+
+      function formatSceneTextScale(value) {
+        return clampSceneTextScale(Number(value)).toFixed(2) + "x";
+      }
+
+      function loadGlobalSceneSettings() {
+        try {
+          const raw = window.localStorage.getItem(sceneSettingsStorageKey);
+          if (!raw) {
+            return { ...defaultGlobalSceneSettings };
+          }
+          const parsed = JSON.parse(raw);
+          return {
+            textScale: clampSceneTextScale(Number(parsed && parsed.textScale)),
+            debugTiles: Boolean(parsed && parsed.debugTiles)
+          };
+        } catch {
+          return { ...defaultGlobalSceneSettings };
+        }
+      }
+
+      function saveGlobalSceneSettings() {
+        try {
+          window.localStorage.setItem(sceneSettingsStorageKey, JSON.stringify(state.globalSceneSettings));
+        } catch {
+          // Ignore storage failures; runtime styling can still update in-memory.
+        }
+      }
+
+      function loadFurnitureLayoutOverrides() {
+        try {
+          const raw = window.localStorage.getItem(furnitureLayoutStorageKey);
+          if (!raw) {
+            return {};
+          }
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveFurnitureLayoutOverrides() {
+        try {
+          window.localStorage.setItem(furnitureLayoutStorageKey, JSON.stringify(state.furnitureLayoutOverrides || {}));
+        } catch {}
+      }
+
+      function furnitureColumnOverride(projectRoot, roomId, furnitureId, fallbackColumn) {
+        return Number(
+          state.furnitureLayoutOverrides?.[projectRoot]?.[roomId]?.[furnitureId]
+        ) || fallbackColumn;
+      }
+
+      function setFurnitureColumnOverride(projectRoot, roomId, furnitureId, column) {
+        state.furnitureLayoutOverrides = {
+          ...state.furnitureLayoutOverrides,
+          [projectRoot]: {
+            ...(state.furnitureLayoutOverrides?.[projectRoot] || {}),
+            [roomId]: {
+              ...(state.furnitureLayoutOverrides?.[projectRoot]?.[roomId] || {}),
+              [furnitureId]: column
+            }
+          }
+        };
+        saveFurnitureLayoutOverrides();
+      }
+
+      function applyGlobalSceneSettings() {
+        const textScale = clampSceneTextScale(Number(state.globalSceneSettings && state.globalSceneSettings.textScale));
+        const debugTiles = Boolean(state.globalSceneSettings && state.globalSceneSettings.debugTiles);
+        state.globalSceneSettings = { textScale, debugTiles };
+        document.documentElement.style.setProperty("--ui-text-scale", String(textScale));
+        if (textScaleInput instanceof HTMLInputElement) {
+          textScaleInput.value = String(textScale);
+        }
+        syncTextScalePreview(textScale);
+        if (debugTilesButton instanceof HTMLButtonElement) {
+          debugTilesButton.classList.toggle("active", debugTiles);
+          debugTilesButton.setAttribute("aria-pressed", debugTiles ? "true" : "false");
+        }
+      }
+
+      function syncTextScalePreview(value) {
+        if (!(textScaleOutput instanceof HTMLOutputElement)) {
+          return;
+        }
+        const nextText = formatSceneTextScale(value);
+        textScaleOutput.value = nextText;
+        textScaleOutput.textContent = nextText;
+      }
+
+      function commitTextScale(value) {
+        state.globalSceneSettings = {
+          ...state.globalSceneSettings,
+          textScale: clampSceneTextScale(Number(value))
+        };
+        applyGlobalSceneSettings();
+        saveGlobalSceneSettings();
+        fitScenes();
+        renderNotifications();
       }
 
       function rememberAgentSceneState(snapshot, agent, sceneState) {
@@ -164,17 +325,20 @@ export function renderClientScript({
         });
       }
 
-      function roomEntranceLayout(roomPixelWidth, compact) {
+      function roomEntranceLayout(roomPixelWidth, compact, floorTop = null) {
         const doorScale = compact ? 1.42 : 1.7;
         const clockScale = compact ? 0.92 : 1.08;
-        const centerDoorY = compact ? 26 : 34;
+        const doorHeight = pixelOffice.props.boothDoor.h * doorScale;
+        const centerDoorY = Number.isFinite(floorTop)
+          ? Math.round(floorTop - doorHeight)
+          : (compact ? 26 : 34);
         return {
           doorScale,
           clockScale,
           centerDoorX: Math.round(roomPixelWidth / 2 - pixelOffice.props.boothDoor.w * doorScale),
           centerDoorY,
           entryX: Math.round(roomPixelWidth / 2),
-          entryY: Math.round(centerDoorY + pixelOffice.props.boothDoor.h * doorScale + (compact ? 2 : 3))
+          entryY: Math.round(centerDoorY + doorHeight + (compact ? 2 : 3))
         };
       }
 
@@ -210,11 +374,15 @@ export function renderClientScript({
         return mode ? \`office-avatar-shell \${mode}\` : "office-avatar-shell";
       }
 
+      ${SCENE_GRID_SCRIPT}
+
       const mapViewButton = document.getElementById("map-view-button");
       const terminalViewButton = document.getElementById("terminal-view-button");
-      const refreshButton = document.getElementById("refresh-button");
-      const previewToastsButton = document.getElementById("preview-toasts-button");
-      const scaffoldButton = document.getElementById("scaffold-button");
+      const settingsButton = document.getElementById("settings-button");
+      const settingsPopup = document.getElementById("settings-popup");
+      const debugTilesButton = document.getElementById("debug-tiles-button");
+      const textScaleInput = document.getElementById("text-scale-input");
+      const textScaleOutput = document.getElementById("text-scale-output");
       const connectionPill = document.getElementById("connection-pill");
       const stamp = document.getElementById("stamp");
       const heroSummary = document.getElementById("hero-summary");
@@ -226,6 +394,23 @@ export function renderClientScript({
       const centerContent = document.getElementById("center-content");
       const sessionList = document.getElementById("session-list");
       const roomsPath = document.getElementById("rooms-path");
+      applyGlobalSceneSettings();
+      syncSettingsPopup();
+
+      function syncSettingsPopup() {
+        if (settingsButton instanceof HTMLButtonElement) {
+          settingsButton.classList.toggle("active", state.settingsOpen);
+          settingsButton.setAttribute("aria-expanded", state.settingsOpen ? "true" : "false");
+        }
+        if (settingsPopup instanceof HTMLElement) {
+          settingsPopup.hidden = !state.settingsOpen;
+        }
+      }
+
+      function setSettingsOpen(nextOpen) {
+        state.settingsOpen = Boolean(nextOpen);
+        syncSettingsPopup();
+      }
 
       function syncFleetBackdrop() {
         const towerMode = state.view === "map";
@@ -297,6 +482,9 @@ export function renderClientScript({
           syncWorkspaceFullscreenUi();
           return;
         }
+        if (normalized) {
+          setSettingsOpen(false);
+        }
         state.workspaceFullscreen = normalized;
         lastSceneRenderToken = null;
         syncUrl();
@@ -351,6 +539,53 @@ export function renderClientScript({
         return agent.isCurrent === true;
       }
 
+      function parseAgentUpdatedAt(value) {
+        const parsed = Date.parse(value || "");
+        return Number.isFinite(parsed) ? parsed : Number.NaN;
+      }
+
+      function isDeskLiveLocalState(state) {
+        return [
+          "editing",
+          "running",
+          "validating",
+          "scanning",
+          "thinking",
+          "planning",
+          "delegating",
+          "blocked"
+        ].includes(String(state || "").toLowerCase());
+      }
+
+      function shouldSeatAtWorkstation(agent) {
+        if (!agent || agent.source === "cloud" || agent.source === "presence") {
+          return false;
+        }
+        if (agent.source === "local") {
+          const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
+          const recentlyLive = Number.isFinite(updatedAt)
+            && Date.now() - updatedAt <= 90 * 1000;
+          if (agent.isCurrent === true || agent.isOngoing === true || agent.needsUser !== null) {
+            return true;
+          }
+          if (
+            isDeskLiveLocalState(agent.state)
+            && agent.statusText !== "notLoaded"
+            && recentlyLive
+          ) {
+            return true;
+          }
+          return false;
+        }
+        return agent.isCurrent === true;
+      }
+
+      function isFinishedLeadForRec(agent) {
+        return isRecentLeadCandidate(agent)
+          && !shouldSeatAtWorkstation(agent)
+          && (agent.state === "idle" || agent.state === "done");
+      }
+
       function isRecentLeadCandidate(agent) {
         return agent.source !== "cloud"
           && agent.source !== "presence"
@@ -368,7 +603,7 @@ export function renderClientScript({
           const previousVisibleIds = recentLeadDisplayMemory.get(snapshot.projectRoot) || [];
           const activeIds = new Set(
             snapshot.agents
-              .filter((agent) => isBusyAgent(agent) && isRecentLeadCandidate(agent))
+              .filter((agent) => shouldSeatAtWorkstation(agent) && isRecentLeadCandidate(agent))
               .map((agent) => agent.id)
           );
           const nextReservations = new Set(
@@ -393,7 +628,7 @@ export function renderClientScript({
       function rememberVisibleRecentLeads(projects) {
         for (const snapshot of projects) {
           const visibleIds = snapshot.agents
-            .filter((agent) => isRecentLeadCandidate(agent) && !isBusyAgent(agent))
+            .filter((agent) => isFinishedLeadForRec(agent))
             .map((agent) => agent.id);
           recentLeadDisplayMemory.set(snapshot.projectRoot, visibleIds);
         }
@@ -404,11 +639,11 @@ export function renderClientScript({
       }
 
       function recentLeadAgents(snapshot, limit = SCENE_RECENT_LEAD_LIMIT) {
-        const activeIds = new Set(snapshot.agents.filter(isBusyAgent).map((agent) => agent.id));
+        const activeIds = new Set(snapshot.agents.filter(shouldSeatAtWorkstation).map((agent) => agent.id));
         const effectiveLimit = Math.max(0, limit - reservedRecentLeadSlots(snapshot));
         return [...snapshot.agents]
-          .filter((agent) => isRecentLeadCandidate(agent) && !activeIds.has(agent.id))
-          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .filter((agent) => isFinishedLeadForRec(agent) && !activeIds.has(agent.id))
+          .sort(compareAgentsByRecencyStable)
           .slice(0, effectiveLimit);
       }
 
@@ -416,7 +651,7 @@ export function renderClientScript({
         const activeIds = new Set(snapshot.agents.filter(isBusyAgent).map((agent) => agent.id));
         return [...snapshot.agents]
           .filter((agent) => isRecentSessionCandidate(agent) && !activeIds.has(agent.id))
-          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .sort(compareAgentsByRecencyStable)
           .slice(0, limit);
       }
 
@@ -505,7 +740,7 @@ export function renderClientScript({
       }
 
       function viewSnapshot(snapshot, recentLeadLimit = SCENE_RECENT_LEAD_LIMIT) {
-        const activeAgents = snapshot.agents.filter(isBusyAgent);
+        const activeAgents = snapshot.agents.filter(shouldSeatAtWorkstation);
         const recentLeads = recentLeadAgents(snapshot, recentLeadLimit);
         return {
           ...snapshot,
@@ -559,6 +794,9 @@ export function renderClientScript({
         }
         if (agent.source === "cursor") {
           return "cursor";
+        }
+        if (agent.source === "openclaw") {
+          return "openclaw";
         }
         return "default";
       }
@@ -681,7 +919,7 @@ export function renderClientScript({
         return [...buckets.entries()]
           .map(([role, roleAgents]) => ({
             role,
-            agents: [...roleAgents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+            agents: [...roleAgents].sort(compareAgentsByRecencyStable)
           }))
           .sort((left, right) => {
             if (right.agents.length !== left.agents.length) {
@@ -721,6 +959,14 @@ export function renderClientScript({
         return String(left.id || "").localeCompare(String(right.id || ""));
       }
 
+      function compareAgentsByRecencyStable(left, right) {
+        const updatedAtDelta = String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+        if (updatedAtDelta !== 0) {
+          return updatedAtDelta;
+        }
+        return String(left.id || "").localeCompare(String(right.id || ""));
+      }
+
       function roleTone(role) {
         const normalized = String(role || "default").toLowerCase();
         switch (normalized) {
@@ -736,6 +982,8 @@ export function renderClientScript({
             return "#ffab91";
           case "cursor":
             return "#9fd6a4";
+          case "openclaw":
+            return "#7ad0b3";
           case "default":
             return "#f2ead7";
           default:
@@ -752,46 +1000,6 @@ export function renderClientScript({
         }
       }
 
-      function fixedSceneLayoutConfig(compact) {
-        return compact
-          ? {
-              deskStartRatio: 0.2,
-              deskColumnGap: 16,
-              deskRowGap: 0,
-              deskCubicleGap: 0,
-              cubiclesPerColumn: 1,
-              cubicleRows: 3,
-              deskTopY: 56,
-              podWidth: 120,
-              podHeight: 54,
-              bossLaneX: 8,
-              bossLaneWidth: 64,
-              bossOfficeGapToDesk: 8,
-              bossOfficeTopY: 68,
-              bossOfficeGapY: 8,
-              bossOfficeWidth: 56,
-              bossOfficeHeight: 34
-            }
-          : {
-              deskStartRatio: 0.2,
-              deskColumnGap: 20,
-              deskRowGap: 0,
-              deskCubicleGap: 0,
-              cubiclesPerColumn: 1,
-              cubicleRows: 3,
-              deskTopY: 66,
-              podWidth: 152,
-              podHeight: 70,
-              bossLaneX: 10,
-              bossLaneWidth: 74,
-              bossOfficeGapToDesk: 10,
-              bossOfficeTopY: 82,
-              bossOfficeGapY: 10,
-              bossOfficeWidth: 62,
-              bossOfficeHeight: 40
-            };
-      }
-
       function isBossOfficeCandidate(snapshot, agent) {
         return isLeadSession(snapshot, agent) && liveChildAgentsFor(snapshot, agent.id).length > 1;
       }
@@ -806,55 +1014,14 @@ export function renderClientScript({
         });
       }
 
-      function buildBossOfficeSlots(config, count) {
-        return Array.from({ length: count }, (_, index) => ({
-          id: \`office-\${index}\`,
-          kind: "office",
-          order: index,
-          x: config.bossLaneX,
-          y: config.bossOfficeTopY + index * (config.bossOfficeHeight + config.bossOfficeGapY),
-          width: config.bossOfficeWidth,
-          height: config.bossOfficeHeight
-        }));
-      }
-
-      function buildDeskSlots(config, roomPixelWidth, podCount, hasBossLane) {
-        const slotsPerColumn = config.cubiclesPerColumn * config.cubicleRows;
-        const columnCount = Math.max(1, Math.ceil(Math.max(1, podCount) / slotsPerColumn));
-        const deskStartX = Math.max(
-          Math.round(roomPixelWidth * config.deskStartRatio),
-          hasBossLane ? config.bossLaneX + config.bossLaneWidth + config.bossOfficeGapToDesk : 0
-        );
-        const slots = [];
-        for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
-          const columnX = deskStartX + columnIndex * (config.podWidth + config.deskColumnGap);
-          for (let cubicleIndex = 0; cubicleIndex < config.cubiclesPerColumn; cubicleIndex += 1) {
-            const cubicleBaseY = config.deskTopY
-              + cubicleIndex * (config.cubicleRows * config.podHeight + (config.cubicleRows - 1) * config.deskRowGap + config.deskCubicleGap);
-            for (let rowIndex = 0; rowIndex < config.cubicleRows; rowIndex += 1) {
-              slots.push({
-                id: \`pod-\${columnIndex}-\${cubicleIndex}-\${rowIndex}\`,
-                kind: "desk",
-                order: columnIndex * slotsPerColumn + cubicleIndex * config.cubicleRows + rowIndex,
-                columnIndex,
-                cubicleIndex,
-                rowIndex,
-                cubicleId: \`cubicle-\${columnIndex}-\${cubicleIndex}\`,
-                x: columnX,
-                y: cubicleBaseY + rowIndex * (config.podHeight + config.deskRowGap),
-                width: config.podWidth,
-                height: config.podHeight,
-                capacity: 2
-              });
-            }
-          }
-        }
-        return slots;
-      }
-
       function previousSceneSlotId(snapshot, agent) {
         const sceneState = sceneStateForAgent(snapshot, agent.id);
         return sceneState && sceneState.slotId ? String(sceneState.slotId) : null;
+      }
+
+      function previousSceneMirrored(snapshot, agent) {
+        const sceneState = sceneStateForAgent(snapshot, agent.id);
+        return sceneState && typeof sceneState.mirrored === "boolean" ? sceneState.mirrored : null;
       }
 
       function assignAgentsToOfficeSlots(snapshot, agents, slots) {
@@ -953,7 +1120,18 @@ export function renderClientScript({
           .filter((slot) => (slotAgents.get(slot.id) || []).length > 0)
           .map((slot) => ({
             slot,
-            agents: slotAgents.get(slot.id).slice(0, slot.capacity || 1)
+            agents: slotAgents.get(slot.id)
+              .slice(0, slot.capacity || 1)
+              .sort((left, right) => {
+                const leftMirrored = previousSceneMirrored(snapshot, left);
+                const rightMirrored = previousSceneMirrored(snapshot, right);
+                if (leftMirrored !== rightMirrored) {
+                  if (leftMirrored === null) return 1;
+                  if (rightMirrored === null) return -1;
+                  return Number(leftMirrored) - Number(rightMirrored);
+                }
+                return compareAgentsForDeskLayout(snapshot, left, right);
+              })
           }))
           .sort((left, right) => left.slot.order - right.slot.order);
       }
@@ -1474,9 +1652,10 @@ export function renderClientScript({
             labelIconUrl: eventIconUrlForActivityType("agentMessage"),
             title: normalizeDisplayText(snapshot.projectRoot, typedMessageEvent?.detail || agent.latestMessage),
             imageUrl: null,
-            anchor: "agent",
+            anchor: "workstation",
             isFileChange: false,
             isCommand: false,
+            isTextMessage: true,
             priority: NOTIFICATION_PRIORITY_MESSAGE,
             linesAdded: null,
             linesRemoved: null
@@ -1530,6 +1709,7 @@ export function renderClientScript({
               anchor: "agent",
               isFileChange: false,
               isCommand: false,
+              isTextMessage: false,
               priority: NOTIFICATION_PRIORITY_MESSAGE,
               linesAdded: null,
               linesRemoved: null
@@ -1543,9 +1723,10 @@ export function renderClientScript({
               labelIconUrl: eventIconUrlForActivityType("agentMessage"),
               title: notificationTitle(snapshot, agent),
               imageUrl: null,
-              anchor: "agent",
+              anchor: "workstation",
               isFileChange: false,
               isCommand: false,
+              isTextMessage: true,
               priority: NOTIFICATION_PRIORITY_MESSAGE,
               linesAdded: null,
               linesRemoved: null
@@ -1636,7 +1817,14 @@ export function renderClientScript({
         return COMMAND_NOTIFICATION_BASE_TTL_MS + count * COMMAND_NOTIFICATION_LINE_TTL_MS;
       }
 
+      function isTextMessageNotification(entry) {
+        return Boolean(entry && entry.isTextMessage === true);
+      }
+
       function notificationLifetimeMs(entry) {
+        if (isTextMessageNotification(entry)) {
+          return MESSAGE_NOTIFICATION_TTL_MS + TEXT_MESSAGE_NOTIFICATION_EXTRA_TTL_MS;
+        }
         const priority = Number.isFinite(entry && entry.priority)
           ? Number(entry.priority)
           : NOTIFICATION_PRIORITY_DEFAULT;
@@ -1650,12 +1838,18 @@ export function renderClientScript({
         return Number(entry.createdAt) + notificationLifetimeMs(entry);
       }
 
+      function toastAnimationDurationMs(entry) {
+        return isTextMessageNotification(entry)
+          ? TEXT_MESSAGE_TOAST_FLOAT_ANIMATION_MS
+          : TOAST_FLOAT_ANIMATION_MS;
+      }
+
       function toastAnimationDelay(entry, now = Date.now()) {
         const createdAt = Number(entry && entry.createdAt);
         if (!Number.isFinite(createdAt)) {
           return "0ms";
         }
-        const elapsed = Math.max(0, Math.min(TOAST_FLOAT_ANIMATION_MS, now - createdAt));
+        const elapsed = Math.max(0, Math.min(toastAnimationDurationMs(entry), now - createdAt));
         return "-" + Math.round(elapsed) + "ms";
       }
 
@@ -1887,6 +2081,7 @@ export function renderClientScript({
                 anchor: "agent",
                 isFileChange: false,
                 isCommand: false,
+                isTextMessage: false,
                 priority: NOTIFICATION_PRIORITY_MESSAGE,
                 linesAdded: null,
                 linesRemoved: null
@@ -1928,9 +2123,10 @@ export function renderClientScript({
               labelIconUrl,
               title: normalizeDisplayText(snapshot.projectRoot, event.detail || event.title),
               imageUrl: null,
-              anchor: "agent",
+              anchor: "workstation",
               isFileChange: false,
               isCommand: false,
+              isTextMessage: true,
               priority: NOTIFICATION_PRIORITY_MESSAGE,
               linesAdded: null,
               linesRemoved: null
@@ -1959,7 +2155,7 @@ export function renderClientScript({
 
       function trimRecentNotificationTimes(now) {
         recentNotificationTimes.forEach((timestamp, key) => {
-          if (!Number.isFinite(timestamp) || now - timestamp > MESSAGE_NOTIFICATION_TTL_MS) {
+          if (!Number.isFinite(timestamp) || now - timestamp > MESSAGE_NOTIFICATION_TTL_MS + TEXT_MESSAGE_NOTIFICATION_EXTRA_TTL_MS) {
             recentNotificationTimes.delete(key);
           }
         });
@@ -2101,9 +2297,7 @@ export function renderClientScript({
       }
 
       function stackableNotificationLifetimeMs(entry, lineCount) {
-        const base = notificationPriorityValue(entry) >= NOTIFICATION_PRIORITY_MESSAGE
-          ? MESSAGE_NOTIFICATION_TTL_MS
-          : NOTIFICATION_TTL_MS;
+        const base = notificationLifetimeMs(entry);
         return base + Math.max(0, lineCount - 1) * 900;
       }
 
@@ -2616,16 +2810,10 @@ export function renderClientScript({
             const stackIndex = stackByKey.get(entry.key) ?? 0;
             stackByKey.set(entry.key, stackIndex + 1);
             const rect = anchor.getBoundingClientRect();
-            const computedLeft = rect.left - wrapperRect.left + rect.width / 2;
-            const computedTop = entry.anchor === "workstation"
+            const left = rect.left - wrapperRect.left + rect.width / 2;
+            const top = entry.anchor === "workstation"
               ? rect.top - wrapperRect.top + rect.height * 0.72 - stackIndex * 20
               : rect.top - wrapperRect.top - stackIndex * (entry.isCommand ? 28 : 18);
-            if (!Number.isFinite(entry.originLeft) || !Number.isFinite(entry.originTop)) {
-              entry.originLeft = computedLeft;
-              entry.originTop = computedTop;
-            }
-            const left = entry.originLeft;
-            const top = entry.originTop;
             const line = notificationLine(entry);
             if (entry.isCommand && isSuppressedCommandToastTitle(line.title)) {
               return;
@@ -2638,7 +2826,7 @@ export function renderClientScript({
               layer.appendChild(toast);
             }
 
-            const className = \`agent-toast \${entry.kindClass}\${entry.imageUrl ? " image" : ""}\${entry.isFileChange ? " file-change" : ""}\${entry.isCommand ? " command-window" : ""}\${!entry.isCommand && Number(entry.priority) >= NOTIFICATION_PRIORITY_MESSAGE ? " message-toast" : ""}\`;
+            const className = \`agent-toast \${entry.kindClass}\${entry.imageUrl ? " image" : ""}\${entry.isFileChange ? " file-change" : ""}\${entry.isCommand ? " command-window" : ""}\${!entry.isCommand && Number(entry.priority) >= NOTIFICATION_PRIORITY_MESSAGE ? " message-toast" : ""}\${isTextMessageNotification(entry) ? " text-message-toast" : ""}\`;
             if (toast.className !== className) {
               toast.className = className;
             }
@@ -2648,6 +2836,10 @@ export function renderClientScript({
               toast.setAttribute("style", nextStyle);
             }
             if (!entry.isCommand) {
+              const nextAnimationDuration = Math.round(toastAnimationDurationMs(entry)) + "ms";
+              if (toast.style.animationDuration !== nextAnimationDuration) {
+                toast.style.animationDuration = nextAnimationDuration;
+              }
               const nextAnimationDelay = toastAnimationDelay(entry);
               if (toast.style.animationDelay !== nextAnimationDelay) {
                 toast.style.animationDelay = nextAnimationDelay;
@@ -2790,12 +2982,255 @@ export function renderClientScript({
         return sofas[index % sofas.length];
       }
 
+      function recRoomSofaLayout(compact, roomPixelWidth, baseY) {
+        const tile = sceneTileSize(compact);
+        const roomWidthTiles = Math.round(roomPixelWidth / tile);
+        const rightColumn = roomWidthTiles - 7;
+        const leftColumn = rightColumn - 3;
+        return {
+          scale: 1,
+          sofaWidth: tile * 2,
+          sofaHeight: tile,
+          sofas: [
+            { id: "sofa-left", sprite: sofaSpriteAt(1), x: leftColumn * tile, y: baseY },
+            { id: "sofa-right", sprite: sofaSpriteAt(0), x: rightColumn * tile, y: baseY }
+          ]
+        };
+      }
+
+      function primaryFurnitureDefaults(room) {
+        const rightSofaColumn = room.width - 7;
+        const leftSofaColumn = rightSofaColumn - 3;
+        return [
+          { id: "vending", sprite: pixelOffice.props.vending, column: 0, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true },
+          { id: "cooler", sprite: pixelOffice.props.cooler, column: 2, baseRow: 0, widthTiles: 1, heightTiles: 1, z: 3, furniture: true },
+          { id: "counter", sprite: pixelOffice.props.counter, column: 3, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 3, furniture: true },
+          { id: "sofa-left", sprite: sofaSpriteAt(1), column: leftSofaColumn, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 3, furniture: true },
+          { id: "sofa-right", sprite: sofaSpriteAt(0), column: rightSofaColumn, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 4, furniture: true },
+          { id: "shelf", sprite: pixelOffice.props.bookshelf, column: room.width - 2, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true }
+        ];
+      }
+
+      function tileFootprintForSprite(sprite, tileSize) {
+        return {
+          widthTiles: Math.max(1, Math.ceil((Number(sprite?.w) || tileSize) / tileSize)),
+          heightTiles: Math.max(1, Math.ceil((Number(sprite?.h) || tileSize) / tileSize))
+        };
+      }
+
+      function normalizeFurnitureItem(item, tileSize) {
+        const footprint = tileFootprintForSprite(item.sprite, tileSize);
+        return {
+          ...item,
+          widthTiles: footprint.widthTiles,
+          heightTiles: footprint.heightTiles
+        };
+      }
+
+      function rectanglesOverlap(a, b) {
+        return a.column < b.column + b.widthTiles
+          && a.column + a.widthTiles > b.column
+          && a.baseRow < b.baseRow + b.heightTiles
+          && a.baseRow + a.heightTiles > b.baseRow;
+      }
+
+      function resolveFurnitureLayout(snapshot, room, tileSize) {
+        const defaults = primaryFurnitureDefaults(room).map((item) => normalizeFurnitureItem(item, tileSize));
+        const placed = [];
+        defaults.forEach((item) => {
+          const requested = furnitureColumnOverride(snapshot.projectRoot, room.id, item.id, item.column);
+          const maxColumn = Math.max(0, room.width - item.widthTiles);
+          let column = Math.max(0, Math.min(maxColumn, requested));
+          while (placed.some((other) => rectanglesOverlap({ ...item, column }, other)) && column < maxColumn) {
+            column += 1;
+          }
+          while (placed.some((other) => rectanglesOverlap({ ...item, column }, other)) && column > 0) {
+            column -= 1;
+          }
+          const resolved = { ...item, column };
+          placed.push(resolved);
+        });
+        return placed;
+      }
+
+      function recRoomSeatSlotAt(agent, index, compact, roomPixelWidth, baseY, sofaColumns = null) {
+        const layout = sofaColumns
+          ? {
+              sofaWidth: sceneTileSize(compact) * 2,
+              sofas: [
+                { id: "sofa-left", x: sofaColumns.left * sceneTileSize(compact), y: baseY },
+                { id: "sofa-right", x: sofaColumns.right * sceneTileSize(compact), y: baseY }
+              ]
+            }
+          : recRoomSofaLayout(compact, roomPixelWidth, baseY);
+        const seatIndex = index % 4;
+        const sofa = layout.sofas[Math.floor(seatIndex / 2)];
+        const seatWithinSofa = seatIndex % 2;
+        const avatar = avatarForAgent(agent);
+        const avatarScale = compact ? 1.25 : 1.5;
+        const avatarHeight = Math.round(avatar.h * avatarScale);
+        const x = sofa.x + Math.round(layout.sofaWidth * (seatWithinSofa === 0 ? 0.12 : 0.56));
+        const y = sofa.y - Math.round(avatarHeight * 0.28);
+        return {
+          x,
+          y,
+          flip: seatWithinSofa === 1,
+          settle: true
+        };
+      }
+
       function computerSpriteForAgent(agent, mirrored) {
         return pixelOffice.props.workstation;
       }
 
+      function buildPixiSpriteDef(sprite, x, y, scale, z, options = {}) {
+        return {
+          kind: "sprite",
+          sprite: sprite.url,
+          x: Math.round(x),
+          y: Math.round(y),
+          width: Math.round(sprite.w * scale),
+          height: Math.round(sprite.h * scale),
+          flipX: options.flipX === true,
+          alpha: options.alpha ?? 1,
+          z
+        };
+      }
+
+      function buildCubicleCellVisualModel(snapshot, agent, role, x, y, boothWidth, boothHeight, compact, options = {}) {
+        const state = agent?.state || "idle";
+        const avatar = agent ? avatarForAgent(agent) : null;
+        const avatarScale = compact ? 1.25 : 1.5;
+        const avatarWidth = avatar ? avatar.w * avatarScale : 0;
+        const avatarHeight = avatar ? avatar.h * avatarScale : 0;
+        const mirrored = options.mirrored === true;
+        const chair = agent ? chairSpriteForAgent(agent) : pixelOffice.chairs[0];
+        const deskSprite = pixelOffice.props.cubiclePanelLeft;
+        const deskScale = fitSpriteToWidth(
+          deskSprite,
+          boothWidth * (options.lead ? 0.2 : 0.18),
+          compact ? 1.28 : 1.42,
+          compact ? 1.44 : 1.62
+        );
+        const computerSprite = computerSpriteForAgent(agent, mirrored);
+        const workstationScale = fitSpriteToWidth(
+          computerSprite,
+          boothWidth * (options.lead ? 0.23 : 0.21),
+          compact ? 1.32 : 1.48,
+          compact ? 1.68 : 1.96
+        );
+        const chairScale = compact ? 1.18 : 1.34;
+        const deskWidth = deskSprite.w * deskScale;
+        const deskHeight = deskSprite.h * deskScale;
+        const workstationWidth = computerSprite.w * workstationScale;
+        const workstationHeight = computerSprite.h * workstationScale;
+        const chairWidth = chair.w * chairScale;
+        const chairHeight = chair.h * chairScale;
+        const centerX = Math.round(boothWidth / 2);
+        const innerInset = compact ? 4 : 6;
+        const centerInset = options.sharedCenter ? 0 : innerInset;
+        const deskEdgeClamp = options.sharedCenter ? 0 : 2;
+        const workstationX = mirrored
+          ? centerInset
+          : Math.round(boothWidth - workstationWidth - centerInset);
+        const deskX = mirrored
+          ? Math.max(deskEdgeClamp, Math.round(workstationX + workstationWidth * 0.54 - deskWidth * 0.52))
+          : Math.max(deskEdgeClamp, Math.round(workstationX + workstationWidth * 0.48 - deskWidth * 0.5));
+        const deskY = Math.round(boothHeight - deskHeight - (compact ? 11 : 13));
+        const workstationY = Math.round(deskY - workstationHeight * (compact ? 0.2 : 0.18));
+        const chairOutset = compact ? 7 : 10;
+        const chairLift = compact ? 1 : 2;
+        const chairX = (mirrored
+          ? Math.round(workstationX + workstationWidth - chairWidth * 0.18)
+          : Math.round(workstationX - chairWidth * 0.82))
+          + (mirrored ? chairOutset : -chairOutset);
+        const chairY = Math.round(deskY + deskHeight - chairHeight * 0.74) - chairLift;
+        const minAvatarX = 2;
+        const maxAvatarX = boothWidth - avatarWidth - 2;
+        const clampAvatarX = (value) => Math.max(minAvatarX, Math.min(maxAvatarX, value));
+        const sideX = mirrored
+          ? clampAvatarX(Math.round(deskX + deskWidth + (compact ? 6 : 8)))
+          : clampAvatarX(Math.round(deskX - avatarWidth - (compact ? 6 : 8)));
+        const avatarPose = (() => {
+          if (!agent) {
+            return null;
+          }
+          const workstationFlip = mirrored;
+          const baseY = Math.round(deskY + deskHeight - avatarHeight + (compact ? 1 : 2));
+          const seatInset = chairWidth * 0.22 - (compact ? 4 : 6);
+          const seatedX = mirrored
+            ? clampAvatarX(Math.round(chairX + chairWidth - avatarWidth - seatInset))
+            : clampAvatarX(Math.round(chairX + seatInset));
+          if (state === "editing" || state === "thinking" || state === "planning" || state === "scanning" || state === "delegating") {
+            return { x: seatedX, y: Math.max(0, baseY - (compact ? 1 : 3)), flip: workstationFlip };
+          }
+          if (state === "running" || state === "validating" || state === "blocked") {
+            const workingX = mirrored
+              ? clampAvatarX(sideX + (compact ? 4 : 6))
+              : clampAvatarX(sideX - (compact ? 4 : 6));
+            return { x: workingX, y: baseY, flip: workstationFlip };
+          }
+          if (state === "idle" || state === "done") {
+            return {
+              x: Math.max(2, Math.round(centerX - avatarWidth / 2)),
+              y: Math.max(0, baseY + (compact ? 1 : 2)),
+              flip: stableHash(agent.id) % 2 === 0
+            };
+          }
+          return { x: sideX, y: baseY, flip: workstationFlip };
+        })();
+        const absoluteCellX = Math.round(options.absoluteX ?? x);
+        const absoluteCellY = Math.round(options.absoluteY ?? y);
+        const sceneTile = sceneTileSize(compact);
+        const stationBoundsX = mirrored
+          ? absoluteCellX + Math.round(deskX)
+          : absoluteCellX + Math.round(deskX + deskWidth - sceneTile * 3);
+        const stationBoundsY = absoluteCellY + Math.round(deskY + deskHeight - sceneTile * 2);
+        const anchorX = absoluteCellX + Math.round(workstationX + workstationWidth * 0.5);
+        const anchorY = absoluteCellY + Math.round(boothHeight * 0.72);
+        const visual = {
+          shell: [
+            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, { flipX: mirrored }),
+            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, { flipX: mirrored }),
+            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, { flipX: mirrored })
+          ],
+          glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
+            ? {
+                x: absoluteCellX + Math.round(workstationX + workstationWidth * 0.19),
+                y: absoluteCellY + Math.round(workstationY + workstationHeight * 0.14),
+                width: Math.max(8, Math.round(workstationWidth * 0.36)),
+                height: Math.max(5, Math.round(workstationHeight * 0.16))
+              }
+            : null,
+          avatar: avatar && avatarPose
+            ? {
+                sprite: avatar.url,
+                x: absoluteCellX + Math.round(avatarPose.x),
+                y: absoluteCellY + Math.round(avatarPose.y),
+                width: Math.round(avatarWidth),
+                height: Math.round(avatarHeight),
+                flipX: avatarPose.flip === true,
+                state,
+                appearance: agent.appearance
+              }
+            : null,
+          workstationBounds: {
+            x: stationBoundsX,
+            y: stationBoundsY,
+            width: sceneTile * 3,
+            height: sceneTile * 2,
+            tileWidth: 3,
+            tileHeight: 2
+          },
+          anchorX,
+          anchorY,
+          bubble: state === "waiting" ? "..." : state === "validating" ? "ok" : null
+        };
+        return visual;
+      }
+
       function buildLeadClusters(occupants) {
-        const ordered = [...occupants].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const ordered = [...occupants].sort(compareAgentsByRecencyStable);
         const byId = new Map(ordered.map((agent) => [agent.id, agent]));
         const buckets = new Map();
         const leads = [];
@@ -2876,12 +3311,12 @@ export function renderClientScript({
             if (agent.source === "cloud") {
               return false;
             }
-            if (agent.isCurrent) {
+            if (shouldSeatAtWorkstation(agent)) {
               return false;
             }
-            return agent.state === "idle" || agent.state === "done" || isRecentLeadCandidate(agent);
+            return agent.state === "idle" || agent.state === "done";
           })
-          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+          .sort(compareAgentsByRecencyStable);
       }
 
       function loungeMetaLabel(waitingCount, restingCount) {
@@ -3430,53 +3865,124 @@ export function renderClientScript({
       }
 
       function renderRoomEntranceDecor(roomPixelWidth, compact, options = {}) {
-        const entrance = roomEntranceLayout(roomPixelWidth, compact);
+        const floorTop = Number.isFinite(options.floorTop) ? Number(options.floorTop) : null;
+        const entrance = roomEntranceLayout(roomPixelWidth, compact, floorTop);
+        const tile = sceneTileSize(compact);
         const plantScale = compact ? 1.08 : 1.22;
-        const sprites = [
-          renderSprite(pixelOffice.props.boothDoor, entrance.centerDoorX, entrance.centerDoorY, entrance.doorScale, "office-sprite", "z-index:2;"),
-          renderSprite(pixelOffice.props.boothDoor, Math.round(roomPixelWidth / 2), entrance.centerDoorY, entrance.doorScale, "office-sprite", "z-index:2; transform:scaleX(-1); transform-origin:50% 50%;")
+        const sceneProps = [
+          {
+            id: "door-left",
+            sprite: pixelOffice.props.boothDoor,
+            x: entrance.centerDoorX,
+            y: entrance.centerDoorY,
+            scale: entrance.doorScale,
+            flipX: true,
+            z: 2
+          },
+          {
+            id: "door-right",
+            sprite: pixelOffice.props.boothDoor,
+            x: Math.round(roomPixelWidth / 2),
+            y: entrance.centerDoorY,
+            scale: entrance.doorScale,
+            flipX: false,
+            z: 2
+          }
         ];
         if (options.clock !== false) {
-          sprites.push(
-            renderSprite(pixelOffice.props.clock, Math.round(roomPixelWidth / 2 - pixelOffice.props.clock.w * entrance.clockScale / 2), compact ? 12 : 14, entrance.clockScale, "office-sprite", "z-index:3;")
-          );
+          sceneProps.push({
+            id: "clock",
+            sprite: pixelOffice.props.clock,
+            x: Math.round(
+              entrance.centerDoorX
+              + pixelOffice.props.boothDoor.w * entrance.doorScale
+              - pixelOffice.props.clock.w * entrance.clockScale / 2
+            ),
+            y: compact ? 12 : 14,
+            scale: entrance.clockScale,
+            flipX: false,
+            z: 3
+          });
         }
         if (options.plants) {
-          sprites.push(
-            renderSprite(pixelOffice.props.plant, entrance.centerDoorX - (compact ? 24 : 28), compact ? 48 : 60, plantScale, "office-sprite", "z-index:3;"),
-            renderSprite(pixelOffice.props.plant, Math.round(roomPixelWidth / 2 + pixelOffice.props.boothDoor.w * entrance.doorScale + (compact ? 6 : 8)), compact ? 48 : 60, plantScale, "office-sprite", "z-index:3;")
+          const plantHeight = pixelOffice.props.plant.h * plantScale;
+          const plantY = Number.isFinite(floorTop)
+            ? Math.round(floorTop - plantHeight)
+            : (compact ? 48 : 60);
+          sceneProps.push(
+            {
+              id: "plant-left",
+              sprite: pixelOffice.props.plant,
+              x: entrance.centerDoorX - (compact ? 24 : 28),
+              y: plantY,
+              scale: plantScale,
+              flipX: false,
+              z: 3
+            },
+            {
+              id: "plant-right",
+              sprite: pixelOffice.props.plant,
+              x: Math.round(roomPixelWidth / 2 + pixelOffice.props.boothDoor.w * entrance.doorScale + (compact ? 6 : 8) - tile),
+              y: plantY,
+              scale: plantScale,
+              flipX: false,
+              z: 3
+            }
           );
         }
+        const sprites = sceneProps.map((prop) =>
+          renderSprite(
+            prop.sprite,
+            prop.x,
+            prop.y,
+            prop.scale,
+            "office-sprite",
+            \`z-index:\${prop.z};\${prop.flipX ? " transform:scaleX(-1); transform-origin:50% 50%;" : ""}\`
+          )
+        );
         return {
           entrance,
+          sceneProps: sceneProps.map((prop) => ({
+            id: prop.id,
+            type: "sprite",
+            sprite: prop.sprite.url,
+            x: prop.x,
+            y: prop.y,
+            width: prop.sprite.w * prop.scale,
+            height: prop.sprite.h * prop.scale,
+            flipX: prop.flipX,
+            z: prop.z
+          })),
           html: sprites.join("")
         };
       }
 
-      function renderIntegratedRecArea(snapshot, primaryRoomId, waitingAgents, restingAgents, compact, roomPixelWidth) {
-        const sofaScale = compact ? 1.18 : 1.42;
+      function renderIntegratedRecArea(snapshot, primaryRoomId, waitingAgents, restingAgents, compact, roomPixelWidth, layoutConfig) {
         const shelfScale = compact ? 0.96 : 1.12;
         const coolerScale = compact ? 1.18 : 1.36;
         const vendingScale = compact ? 1.02 : 1.16;
         const counterScale = compact ? 0.88 : 1.02;
-        const baseY = compact ? 42 : 54;
-        const walkwayY = compact ? 62 : 78;
+        const baseY = layoutConfig.recAreaGridTopY;
+        const walkwayY = layoutConfig.recAreaWalkwayGridY;
         const entranceDecor = renderRoomEntranceDecor(roomPixelWidth, compact, { plants: true });
+        const sofaLayout = recRoomSofaLayout(compact, roomPixelWidth, baseY);
+        const waitingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "waiting", waitingAgents);
+        const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents);
         const facilityHtml = [
           entranceDecor.html,
           renderSprite(pixelOffice.props.vending, compact ? 10 : 14, baseY - (compact ? 2 : 4), vendingScale, "office-sprite", "z-index:3;"),
           renderSprite(pixelOffice.props.cooler, compact ? 38 : 48, baseY + (compact ? 8 : 10), coolerScale, "office-sprite", "z-index:3;"),
           renderSprite(pixelOffice.props.counter, compact ? 60 : 76, baseY + (compact ? 8 : 10), counterScale, "office-sprite", "z-index:3;"),
-          renderSprite(pixelOffice.props.sofaOrange, roomPixelWidth - (compact ? 118 : 152), baseY + (compact ? 8 : 10), sofaScale, "office-sprite", "z-index:3;"),
+          ...sofaLayout.sofas.map((sofa, index) => renderSprite(sofa.sprite, sofa.x, sofa.y, sofaLayout.scale, "office-sprite", \`z-index:\${3 + index};\`)),
           renderSprite(pixelOffice.props.bookshelf, roomPixelWidth - (compact ? 34 : 40), baseY - (compact ? 2 : 4), shelfScale, "office-sprite", "z-index:3;")
         ];
         const agentHtml = [
-          ...waitingAgents.map((agent, index) => {
-            const slot = wallsideWaitingSlotAt(index, compact, roomPixelWidth, walkwayY);
+          ...waitingAssignments.map(({ agent, slotIndex }) => {
+            const slot = wallsideWaitingSlotAt(slotIndex, compact, roomPixelWidth, walkwayY);
             return renderWallsideAvatar(snapshot, agent, slot.x, slot.y, compact, { flip: slot.flip, bubble: "...", entrance: entranceDecor.entrance, roomId: primaryRoomId, motionMode: enteringAgentKeys.has(agentKey(snapshot.projectRoot, agent)) ? "entering" : null });
           }),
-          ...restingAgents.map((agent, index) => {
-            const slot = wallsideRestingSlotAt(index, compact, roomPixelWidth, walkwayY);
+          ...restingAssignments.map(({ agent, slotIndex }) => {
+            const slot = recRoomSeatSlotAt(agent, slotIndex, compact, roomPixelWidth, baseY);
             return renderWallsideAvatar(snapshot, agent, slot.x, slot.y, compact, { flip: slot.flip, settle: slot.settle, entrance: entranceDecor.entrance, roomId: primaryRoomId, motionMode: enteringAgentKeys.has(agentKey(snapshot.projectRoot, agent)) ? "entering" : null });
           })
         ];
@@ -3493,10 +3999,13 @@ export function renderClientScript({
         const compact = options.compact === true;
         const focusMode = options.focusMode === true;
         const showOverlayLabels = options.showOverlayLabels === true;
-        const tile = compact ? 18 : 24;
+        const layoutConfig = fixedSceneLayoutConfig(compact);
+        const tile = layoutConfig.tileSize;
         const baseMaxX = Math.max(...rooms.map((room) => room.x + room.width), 24);
         const maxY = Math.max(...rooms.map((room) => room.y + room.height), 16);
-        const waitingAgents = snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud");
+        const waitingAgents = snapshot.agents
+          .filter((agent) => agent.state === "waiting" && agent.source !== "cloud")
+          .sort(compareAgentsByRecencyStable);
         const restingAgents = restingAgentsFor(snapshot, compact);
         const offDeskAgentIds = new Set([...waitingAgents, ...restingAgents].map((agent) => agent.id));
         const sceneWidth = baseMaxX * tile;
@@ -3515,9 +4024,8 @@ export function renderClientScript({
           const stageHeight = roomPixelHeight - 26;
           const entranceDecor = renderRoomEntranceDecor(roomPixelWidth, compact, { plants: isPrimaryRoom });
           const recAreaHtml = isPrimaryRoom
-            ? renderIntegratedRecArea(snapshot, room.id, waitingAgents, restingAgents, compact, roomPixelWidth)
+            ? renderIntegratedRecArea(snapshot, room.id, waitingAgents, restingAgents, compact, roomPixelWidth, layoutConfig)
             : "";
-          const layoutConfig = fixedSceneLayoutConfig(compact);
           const boothHtml = [];
           const officeAgents = sortedBossOfficeAgents(
             snapshot,
@@ -3695,7 +4203,7 @@ export function renderClientScript({
         const sceneClass = compact ? "scene-grid compact" : "scene-grid";
         const sceneMode = focusMode ? "focus" : "default";
 
-        return \`<div class="scene-shell" data-scene-shell="\${sceneMode}">\${hint}<div class="scene-fit \${compact ? "compact" : ""}" data-scene-fit data-scene-mode="\${sceneMode}" data-scene-fitted="\${focusMode ? "false" : "true"}"><div class="scene-notifications" data-scene-notifications></div><div class="\${sceneClass}" data-scene-grid style="width:\${sceneWidth}px; height:\${maxY * tile}px;">\${html}</div></div></div>\`;
+        return \`<div class="scene-shell" data-scene-shell="\${sceneMode}">\${hint}<div class="scene-fit \${compact ? "compact" : ""}" data-scene-fit data-scene-mode="\${sceneMode}" data-scene-fitted="\${focusMode ? "false" : "true"}"><div class="scene-notifications" data-scene-notifications></div><div class="\${sceneClass}" data-scene-grid data-scene-layout="grid" data-scene-tile="\${tile}" data-scene-text-scale="\${state.globalSceneSettings.textScale}" style="width:\${sceneWidth}px; height:\${maxY * tile}px; --scene-tile:\${tile}px;">\${html}</div></div></div>\`;
       }
 
       function renderTerminalSnapshot(snapshot) {
@@ -3755,11 +4263,13 @@ export function renderClientScript({
         const compact = options.compact === true;
         const title = escapeHtml(projectLabel(snapshot.projectRoot));
         const titleAttr = escapeHtml(snapshot.projectRoot);
-        const summary = \`\${counts.total} agents · \${counts.active} active · \${counts.waiting} waiting · \${counts.blocked} blocked · \${counts.cloud} cloud\`;
-        const notes = snapshot.notes.join(" | ");
+        const summary = state.view === "map"
+          ? (compact ? "Live floor" : "Current workload")
+          : \`\${counts.total} agents · \${counts.active} active · \${counts.waiting} waiting · \${counts.blocked} blocked · \${counts.cloud} cloud\`;
+        const notes = state.view === "map" ? "" : snapshot.notes.join(" | ");
         const body = state.view === "terminal"
           ? renderTerminalSnapshot(snapshot)
-          : renderRoomScene(snapshot, {
+          : renderOfficeMapShell(snapshot, {
             showHint: false,
             compact,
             liveOnly: state.activeOnly,
@@ -3784,6 +4294,1580 @@ export function renderClientScript({
             projectRoot: snapshot.projectRoot
           }
         })).join("")}</div>\`;
+      }
+
+      function officeSceneHostKey(projectRoot, compact, focusMode) {
+        return [projectRoot, compact ? "compact" : "default", focusMode ? "focus" : "standard"].join("::");
+      }
+
+      function renderOfficeMapShell(snapshot, options = {}) {
+        const compact = options.compact === true;
+        const focusMode = options.focusMode === true;
+        const shellKey = officeSceneHostKey(snapshot.projectRoot, compact, focusMode);
+        const hint = options.showHint === false || focusMode
+          ? ""
+          : (options.liveOnly
+            ? '<div class="muted">Showing live agents plus the 4 most recent lead sessions. Recent leads cool down in the rec area while live subagents stay on the floor.</div>'
+            : '<div class="muted">Room shells come from the project XML, while booths are generated live from Codex sessions and grouped by parent session and subagent role.</div>');
+        return \`<div class="scene-shell" data-scene-shell="\${focusMode ? "focus" : "default"}">\${hint}<div class="scene-fit \${compact ? "compact" : ""}" data-scene-fit data-scene-mode="\${focusMode ? "focus" : "default"}" data-scene-fitted="\${focusMode ? "false" : "true"}"><div class="scene-notifications" data-scene-notifications></div><div class="office-map-host" data-office-map-host="\${escapeHtml(shellKey)}" data-project-root="\${escapeHtml(snapshot.projectRoot)}" data-compact="\${compact ? "1" : "0"}" data-focus-mode="\${focusMode ? "1" : "0"}"><div class="office-map-canvas" data-office-map-canvas></div><div class="office-map-anchors" data-office-map-anchors></div></div></div></div>\`;
+      }
+
+      function sceneShellToken(projects, focusMode = false) {
+        return projects.map((project) => officeSceneHostKey(project.projectRoot, focusMode ? false : true, focusMode)).join("||");
+      }
+
+      function buildOfficeSceneModel(snapshot, options = {}) {
+        const sceneRooms = buildSceneRooms(snapshot.rooms.rooms);
+        const rooms = sceneRooms.visibleRooms;
+        if (rooms.length === 0) {
+          return null;
+        }
+
+        const compact = options.compact === true;
+        const layoutConfig = fixedSceneLayoutConfig(compact);
+        const tile = layoutConfig.tileSize;
+        const baseMaxX = Math.max(...rooms.map((room) => room.x + room.width), 24);
+        const maxY = Math.max(...rooms.map((room) => room.y + room.height), 16);
+        const waitingAgents = snapshot.agents
+          .filter((agent) => agent.state === "waiting" && agent.source !== "cloud")
+          .sort(compareAgentsByRecencyStable);
+        const restingAgents = restingAgentsFor(snapshot, compact);
+        const offDeskAgentIds = new Set([...waitingAgents, ...restingAgents].map((agent) => agent.id));
+        const model = {
+          projectRoot: snapshot.projectRoot,
+          compact,
+          tile,
+          width: baseMaxX * tile,
+          height: maxY * tile,
+          rooms: [],
+          tileObjects: [],
+          furniture: [],
+          workstations: [],
+          desks: [],
+          offices: [],
+          recAgents: [],
+          relationshipLines: [],
+          anchors: []
+        };
+        const agentPositions = new Map();
+
+        rooms.forEach((room) => {
+          const isPrimaryRoom = room.id === sceneRooms.primaryRoomId;
+          const roomAgentId = (agent) => sceneRooms.roomAlias.get(agent.roomId) || (agent.source === "cloud" ? "cloud" : sceneRooms.primaryRoomId);
+          const occupants = snapshot.agents.filter((agent) =>
+            roomAgentId(agent) === room.id
+            && agent.source !== "cloud"
+            && !offDeskAgentIds.has(agent.id)
+          );
+          const roomPixelWidth = room.width * tile;
+          const roomPixelHeight = room.height * tile;
+          const roomX = room.x * tile;
+          const roomY = room.y * tile;
+          const floorTop = roomY + layoutConfig.deskTopY;
+          model.rooms.push({
+            id: room.id,
+            x: roomX,
+            y: roomY,
+            width: roomPixelWidth,
+            height: roomPixelHeight,
+            wallHeight: layoutConfig.deskTopY,
+            floorTop,
+            name: room.name,
+            path: room.path || "",
+            isPrimaryRoom
+          });
+          const centerColumn = Math.floor(room.width / 2);
+          model.tileObjects.push(
+            buildSceneTileObject(room.id + "::door-left", room.id, pixelOffice.props.boothDoor, centerColumn - 2, 0, 1, 2, 2, { flipX: true, anchor: "wall" }),
+            buildSceneTileObject(room.id + "::door-right", room.id, pixelOffice.props.boothDoor, centerColumn - 1, 0, 1, 2, 2, { flipX: false, anchor: "wall" }),
+            buildSceneTileObject(room.id + "::clock", room.id, pixelOffice.props.clock, centerColumn - 2, -2, 1, 1, 3, { anchor: "wall" })
+          );
+          if (isPrimaryRoom) {
+            model.tileObjects.push(
+              buildSceneTileObject(room.id + "::plant-left", room.id, pixelOffice.props.plant, centerColumn - 3, 0, 1, 1, 3),
+              buildSceneTileObject(room.id + "::plant-right", room.id, pixelOffice.props.plant, centerColumn, 0, 1, 1, 3)
+            );
+          }
+          if (isPrimaryRoom) {
+            const furnitureLayout = resolveFurnitureLayout(snapshot, room, tile);
+            const sofaColumns = {
+              left: furnitureLayout.find((item) => item.id === "sofa-left")?.column ?? (room.width - 10),
+              right: furnitureLayout.find((item) => item.id === "sofa-right")?.column ?? (room.width - 7)
+            };
+            model.tileObjects.push(
+              ...furnitureLayout.map((item) =>
+                buildSceneTileObject(
+                  room.id + "::" + item.id,
+                  room.id,
+                  item.sprite,
+                  item.column,
+                  item.baseRow,
+                  item.widthTiles,
+                  item.heightTiles,
+                  item.z,
+                  { furniture: true, furnitureId: item.id }
+                )
+              )
+            );
+            model.furniture.push(...furnitureLayout.map((item) => ({ ...item, roomId: room.id, projectRoot: snapshot.projectRoot })));
+            room.__sofaColumns = sofaColumns;
+          }
+
+          const officeAgents = sortedBossOfficeAgents(snapshot, occupants.filter((agent) => isBossOfficeCandidate(snapshot, agent)));
+          const deskAgents = occupants.filter((agent) => !isBossOfficeCandidate(snapshot, agent));
+          const officeAssignments = assignAgentsToOfficeSlots(snapshot, officeAgents, buildBossOfficeSlots(layoutConfig, officeAgents.length));
+          const deskAssignments = assignAgentsToDeskSlots(snapshot, deskAgents, buildDeskSlots(layoutConfig, roomPixelWidth, Math.ceil(deskAgents.length / 2), officeAssignments.length > 0));
+
+          deskAssignments.forEach((entry) => {
+            const pod = {
+              id: entry.slot.id,
+              roomId: room.id,
+              x: roomX + entry.slot.x,
+              y: roomY + entry.slot.y,
+              width: entry.slot.width,
+              height: entry.slot.height,
+              role: agentRole(entry.agents[0]),
+              agents: [],
+              shell: []
+            };
+            entry.agents.forEach((agent, index) => {
+              const padX = compact ? 8 : 10;
+              const centerGap = 0;
+              const cellWidth = Math.max(compact ? 44 : 58, Math.floor((entry.slot.width - padX * 2 - centerGap) / 2));
+              const hasBothSides = Boolean(entry.agents[0] && entry.agents[1]);
+              const singleCellX = Math.round((entry.slot.width - cellWidth) / 2);
+              const cellX = hasBothSides
+                ? (index === 0 ? padX : padX + cellWidth + centerGap)
+                : singleCellX;
+              const visual = buildCubicleCellVisualModel(
+                snapshot,
+                agent,
+                pod.role,
+                cellX,
+                0,
+                cellWidth,
+                entry.slot.height,
+                compact,
+                {
+                  sharedCenter: hasBothSides,
+                  mirrored: index === 1,
+                  lead: false,
+                  slotId: entry.slot.id,
+                  absoluteX: pod.x + cellX,
+                  absoluteY: pod.y
+                }
+              );
+              pod.shell.push(...visual.shell);
+              if (visual.glow) {
+                pod.shell.push({ kind: "glow", z: 10, ...visual.glow });
+              }
+              if (visual.avatar) {
+                pod.agents.push({
+                  id: agent.id,
+                  key: agentKey(snapshot.projectRoot, agent),
+                  roomId: room.id,
+                  label: agent.label,
+                  state: agent.state,
+                  role: agentRole(agent),
+                  focusKey: focusAgentKey(snapshot, agent),
+                  focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                  appearance: agent.appearance,
+                  ...visual.avatar,
+                  bubble: visual.bubble
+                });
+              }
+              agentPositions.set(agent.id, { roomId: room.id, x: visual.anchorX, y: visual.anchorY });
+              model.workstations.push({
+                id: "workstation::" + agentKey(snapshot.projectRoot, agent),
+                roomId: room.id,
+                key: agentKey(snapshot.projectRoot, agent),
+                ...visual.workstationBounds
+              });
+              model.anchors.push(
+                {
+                  id: "agent::" + agentKey(snapshot.projectRoot, agent),
+                  type: "agent",
+                  key: agentKey(snapshot.projectRoot, agent),
+                  x: visual.anchorX,
+                  y: visual.anchorY,
+                  left: visual.avatar ? visual.avatar.x : visual.anchorX,
+                  top: visual.avatar ? visual.avatar.y : visual.anchorY,
+                  width: visual.avatar ? visual.avatar.width : tile,
+                  height: visual.avatar ? visual.avatar.height : tile,
+                  focusKey: focusAgentKey(snapshot, agent),
+                  focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                  hoverHtml: renderAgentHover(snapshot, agent)
+                },
+                { id: "workstation::" + agentKey(snapshot.projectRoot, agent), type: "workstation", key: agentKey(snapshot.projectRoot, agent), x: pod.x + Math.round(pod.width / 2), y: pod.y + Math.round(pod.height * 0.72) }
+              );
+            });
+            model.desks.push(pod);
+          });
+
+          officeAssignments.forEach((entry) => {
+            const officeX = roomX + entry.slot.x;
+            const officeY = roomY + entry.slot.y;
+            const role = agentRole(entry.agent);
+            const innerPadX = compact ? 12 : 14;
+            const cellWidth = compact ? 76 : 94;
+            const cellX = Math.max(innerPadX, entry.slot.width - cellWidth - innerPadX);
+            const visual = buildCubicleCellVisualModel(
+              snapshot,
+              entry.agent,
+              role,
+              cellX,
+              0,
+              cellWidth,
+              entry.slot.height,
+              compact,
+              {
+                mirrored: false,
+                slotId: entry.slot.id,
+                absoluteX: officeX + cellX,
+                absoluteY: officeY
+              }
+            );
+            model.offices.push({
+              id: entry.slot.id,
+              roomId: room.id,
+              x: officeX,
+              y: officeY,
+              width: entry.slot.width,
+              height: entry.slot.height,
+              role: "boss",
+              badgeLabel: liveChildAgentsFor(snapshot, entry.agent.id).length + " spawned",
+              shell: visual.shell,
+              glow: visual.glow,
+              agent: visual.avatar
+                ? {
+                    id: entry.agent.id,
+                    key: agentKey(snapshot.projectRoot, entry.agent),
+                    roomId: room.id,
+                    label: entry.agent.label,
+                    state: entry.agent.state,
+                    role,
+                    focusKey: focusAgentKey(snapshot, entry.agent),
+                    focusKeys: collectFocusedSessionKeys(snapshot, entry.agent),
+                    appearance: entry.agent.appearance,
+                    ...visual.avatar,
+                    bubble: visual.bubble
+                  }
+                : null
+            });
+            agentPositions.set(entry.agent.id, { roomId: room.id, x: visual.anchorX, y: visual.anchorY });
+            model.workstations.push({
+              id: "workstation::" + agentKey(snapshot.projectRoot, entry.agent),
+              roomId: room.id,
+              key: agentKey(snapshot.projectRoot, entry.agent),
+              ...visual.workstationBounds
+            });
+            model.anchors.push(
+              {
+                id: "agent::" + agentKey(snapshot.projectRoot, entry.agent),
+                type: "agent",
+                key: agentKey(snapshot.projectRoot, entry.agent),
+                x: visual.anchorX,
+                y: visual.anchorY,
+                left: visual.avatar ? visual.avatar.x : visual.anchorX,
+                top: visual.avatar ? visual.avatar.y : visual.anchorY,
+                width: visual.avatar ? visual.avatar.width : tile,
+                height: visual.avatar ? visual.avatar.height : tile,
+                focusKey: focusAgentKey(snapshot, entry.agent),
+                focusKeys: collectFocusedSessionKeys(snapshot, entry.agent),
+                hoverHtml: renderAgentHover(snapshot, entry.agent)
+              },
+              { id: "workstation::" + agentKey(snapshot.projectRoot, entry.agent), type: "workstation", key: agentKey(snapshot.projectRoot, entry.agent), x: visual.anchorX, y: visual.anchorY }
+            );
+          });
+
+          if (isPrimaryRoom) {
+            const waitingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "waiting", waitingAgents);
+            const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents);
+            waitingAssignments.forEach(({ agent, slotIndex }) => {
+              const slot = wallsideWaitingSlotAt(slotIndex, compact, roomPixelWidth, layoutConfig.recAreaWalkwayGridY);
+              const anchorX = roomX + slot.x + Math.round(tile * 0.4);
+              const anchorY = roomY + slot.y + Math.round(tile * 0.6);
+              model.recAgents.push({
+                id: agent.id,
+                key: agentKey(snapshot.projectRoot, agent),
+                roomId: room.id,
+                kind: "waiting",
+                label: agent.label,
+                state: agent.state,
+                role: agentRole(agent),
+                focusKey: focusAgentKey(snapshot, agent),
+                focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                appearance: agent.appearance,
+                sprite: avatarForAgent(agent).url,
+                x: roomX + slot.x,
+                y: roomY + slot.y,
+                width: Math.round(avatarForAgent(agent).w * (compact ? 1.25 : 1.5)),
+                height: Math.round(avatarForAgent(agent).h * (compact ? 1.25 : 1.5)),
+                bubble: "...",
+                flip: slot.flip
+              });
+              agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
+              model.anchors.push({
+                id: "agent::" + agentKey(snapshot.projectRoot, agent),
+                type: "agent",
+                key: agentKey(snapshot.projectRoot, agent),
+                x: anchorX,
+                y: anchorY,
+                left: roomX + slot.x,
+                top: roomY + slot.y,
+                width: Math.round(avatarForAgent(agent).w * (compact ? 1.25 : 1.5)),
+                height: Math.round(avatarForAgent(agent).h * (compact ? 1.25 : 1.5)),
+                focusKey: focusAgentKey(snapshot, agent),
+                focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                hoverHtml: renderAgentHover(snapshot, agent)
+              });
+            });
+            restingAssignments.forEach(({ agent, slotIndex }) => {
+              const slot = recRoomSeatSlotAt(agent, slotIndex, compact, roomPixelWidth, layoutConfig.recAreaGridTopY, room.__sofaColumns || null);
+              const anchorX = roomX + slot.x + Math.round(tile * 0.4);
+              const anchorY = roomY + slot.y + Math.round(tile * 0.6);
+              model.recAgents.push({
+                id: agent.id,
+                key: agentKey(snapshot.projectRoot, agent),
+                roomId: room.id,
+                kind: "resting",
+                label: agent.label,
+                state: agent.state,
+                role: agentRole(agent),
+                focusKey: focusAgentKey(snapshot, agent),
+                focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                appearance: agent.appearance,
+                sprite: avatarForAgent(agent).url,
+                x: roomX + slot.x,
+                y: roomY + slot.y,
+                width: Math.round(avatarForAgent(agent).w * (compact ? 1.25 : 1.5)),
+                height: Math.round(avatarForAgent(agent).h * (compact ? 1.25 : 1.5)),
+                bubble: null,
+                flip: slot.flip
+              });
+              agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
+              model.anchors.push({
+                id: "agent::" + agentKey(snapshot.projectRoot, agent),
+                type: "agent",
+                key: agentKey(snapshot.projectRoot, agent),
+                x: anchorX,
+                y: anchorY,
+                left: roomX + slot.x,
+                top: roomY + slot.y,
+                width: Math.round(avatarForAgent(agent).w * (compact ? 1.25 : 1.5)),
+                height: Math.round(avatarForAgent(agent).h * (compact ? 1.25 : 1.5)),
+                focusKey: focusAgentKey(snapshot, agent),
+                focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                hoverHtml: renderAgentHover(snapshot, agent)
+              });
+            });
+          }
+        });
+
+        snapshot.agents.forEach((agent) => {
+          if (!isBossOfficeCandidate(snapshot, agent)) {
+            return;
+          }
+          const bossPos = agentPositions.get(agent.id);
+          if (!bossPos) {
+            return;
+          }
+          childAgentsFor(snapshot, agent.id).forEach((child) => {
+            const childPos = agentPositions.get(child.id);
+            if (!childPos || childPos.roomId !== bossPos.roomId) {
+              return;
+            }
+            model.relationshipLines.push({
+              id: agent.id + "::" + child.id,
+              x1: bossPos.x,
+              y1: bossPos.y,
+              x2: childPos.x,
+              y2: childPos.y,
+              focusKey: focusAgentKey(snapshot, agent),
+              focusKeys: collectFocusedSessionKeys(snapshot, agent)
+            });
+          });
+        });
+
+        return model;
+      }
+
+      function destroyOfficeRenderer(renderer) {
+        if (!renderer) {
+          return;
+        }
+        try {
+          if (renderer.resizeObserver) {
+            renderer.resizeObserver.disconnect();
+          }
+          if (renderer.app && renderer.animateTick) {
+            renderer.app.ticker.remove(renderer.animateTick);
+          }
+          if (renderer.app) {
+            renderer.app.destroy(true, { children: true });
+          }
+        } catch {}
+      }
+
+      function cleanupOfficeRenderers() {
+        officeSceneRenderers.forEach((renderer, key) => {
+          if (!(renderer.host instanceof HTMLElement) || !document.body.contains(renderer.host)) {
+            destroyOfficeRenderer(renderer);
+            officeSceneRenderers.delete(key);
+          }
+        });
+      }
+
+      async function ensureOfficeRenderer(host) {
+        const key = host.dataset.officeMapHost || "";
+        const existing = officeSceneRenderers.get(key);
+        if (existing && existing.host === host) {
+          return existing;
+        }
+        if (existing) {
+          destroyOfficeRenderer(existing);
+        }
+        const canvasContainer = host.querySelector("[data-office-map-canvas]");
+        const anchorLayer = host.querySelector("[data-office-map-anchors]");
+        if (!(canvasContainer instanceof HTMLElement) || !(anchorLayer instanceof HTMLElement) || !window.PIXI) {
+          return null;
+        }
+        const renderer = {
+          key,
+          host,
+          canvasContainer,
+          anchorLayer,
+          app: new window.PIXI.Application(),
+          root: null,
+          model: null,
+          ready: null,
+          resizeObserver: null,
+          assetUrls: new Set(),
+          animatedSprites: [],
+          motionStates: new Map(),
+          agentHitNodes: new Map(),
+          animateTick: null,
+          focusables: []
+        };
+        renderer.ready = renderer.app.init({
+          backgroundAlpha: 0,
+          antialias: false,
+          autoDensity: true,
+          resolution: Math.max(1, Number(window.devicePixelRatio || 1))
+        }).then(() => {
+          if (window.PIXI.TextureStyle && window.PIXI.SCALE_MODES) {
+            window.PIXI.TextureStyle.defaultOptions.scaleMode = window.PIXI.SCALE_MODES.NEAREST;
+          }
+          if (window.PIXI.settings) {
+            window.PIXI.settings.ROUND_PIXELS = true;
+          }
+          renderer.app.renderer.roundPixels = true;
+          const canvas = renderer.app.canvas;
+          canvasContainer.innerHTML = "";
+          canvasContainer.appendChild(canvas);
+          renderer.root = new window.PIXI.Container();
+          renderer.root.sortableChildren = true;
+          renderer.app.stage.addChild(renderer.root);
+          renderer.animateTick = () => {
+            const now = performance.now();
+            const deltaMs = renderer.app?.ticker?.deltaMS || 16;
+            renderer.animatedSprites.forEach((entry) => {
+              if (!entry || !entry.sprite) {
+                return;
+              }
+              if (entry.kind === "motion") {
+                const route = Array.isArray(entry.route) ? entry.route : [];
+                const speed = Number(entry.speed) || 128;
+                let remaining = speed * (deltaMs / 1000);
+                while (remaining > 0 && entry.routeIndex < route.length) {
+                  const target = route[entry.routeIndex];
+                  const dx = target.x - entry.currentX;
+                  const dy = target.y - entry.currentY;
+                  const distance = Math.hypot(dx, dy);
+                  if (distance <= Math.max(1, remaining)) {
+                    entry.currentX = target.x;
+                    entry.currentY = target.y;
+                    if (entry.roomId) {
+                      const currentRoom = renderer.model?.rooms?.find((room) => room.id === entry.roomId) || null;
+                      entry.currentTile = officeAvatarFootTile(
+                        currentRoom,
+                        renderer.model?.tile || 16,
+                        entry.currentX,
+                        entry.currentY,
+                        entry.width,
+                        entry.height
+                      );
+                    }
+                    entry.routeIndex += 1;
+                    remaining -= distance;
+                    continue;
+                  }
+                  const ratio = remaining / distance;
+                  entry.currentX += dx * ratio;
+                  entry.currentY += dy * ratio;
+                  if (entry.roomId) {
+                    const currentRoom = renderer.model?.rooms?.find((room) => room.id === entry.roomId) || null;
+                    entry.currentTile = officeAvatarFootTile(
+                      currentRoom,
+                      renderer.model?.tile || 16,
+                      entry.currentX,
+                      entry.currentY,
+                      entry.width,
+                      entry.height
+                    );
+                  }
+                  remaining = 0;
+                  if (Math.abs(dx) >= 1) {
+                    entry.flipX = dx < 0;
+                  }
+                }
+                if (entry.routeIndex >= route.length && typeof entry.targetFlipX === "boolean") {
+                  entry.flipX = entry.targetFlipX;
+                }
+                entry.sprite.x = pixelSnap(entry.currentX);
+                entry.sprite.y = pixelSnap(entry.currentY);
+                const snappedWidth = pixelSnap(entry.width, 1);
+                if (entry.flipX) {
+                  entry.sprite.scale.x = -Math.abs(entry.sprite.scale.x || 1);
+                  entry.sprite.x = pixelSnap(entry.currentX) + snappedWidth;
+                } else {
+                  entry.sprite.scale.x = Math.abs(entry.sprite.scale.x || 1);
+                }
+                if (entry.bubbleBox && entry.bubbleText) {
+                  const bubbleX = pixelSnap(entry.currentX + Math.round(entry.width * 0.2));
+                  const bubbleY = pixelSnap(entry.currentY - 14);
+                  entry.bubbleBox.x = bubbleX;
+                  entry.bubbleBox.y = bubbleY;
+                  entry.bubbleText.x = bubbleX + Math.round((entry.bubbleBox.width - entry.bubbleText.width) / 2);
+                  entry.bubbleText.y = bubbleY + Math.round((entry.bubbleBox.height - entry.bubbleText.height) / 2) - 1;
+                }
+                syncAgentHitNodePosition(renderer, entry);
+                if (entry.exiting && entry.routeIndex >= route.length) {
+                  entry.sprite.alpha = Math.max(0, entry.sprite.alpha - 0.16);
+                  if (entry.bubbleBox) {
+                    entry.bubbleBox.alpha = entry.sprite.alpha;
+                  }
+                  if (entry.bubbleText) {
+                    entry.bubbleText.alpha = entry.sprite.alpha;
+                  }
+                }
+                return;
+              }
+              if (entry.kind === "bob") {
+                entry.sprite.y = entry.baseY + Math.round(Math.sin((now + entry.phase) / 220) * 1);
+              }
+            });
+            renderer.animatedSprites = renderer.animatedSprites.filter((entry) => !entry.exiting || entry.sprite.alpha > 0.02);
+            if (notifications.length > 0 && renderer.animatedSprites.some((entry) => entry && entry.kind === "motion")) {
+              renderNotifications();
+            }
+          };
+          renderer.app.ticker.add(renderer.animateTick);
+          renderer.resizeObserver = new ResizeObserver(() => {
+            if (renderer.model) {
+              syncOfficeRendererScene(renderer, renderer.model);
+            }
+          });
+          renderer.resizeObserver.observe(host);
+        });
+        officeSceneRenderers.set(key, renderer);
+        await renderer.ready;
+        return renderer;
+      }
+
+      function collectOfficeSceneAssetUrls(model) {
+        const urls = new Set();
+        model.tileObjects.forEach((object) => {
+          if (object && object.sprite) {
+            urls.add(object.sprite);
+          }
+        });
+        model.desks.forEach((desk) => {
+          desk.shell.forEach((item) => {
+            if (item && item.kind === "sprite" && item.sprite) {
+              urls.add(item.sprite);
+            }
+          });
+          desk.agents.forEach((agent) => {
+            if (agent && agent.sprite) {
+              urls.add(agent.sprite);
+            }
+          });
+        });
+        model.offices.forEach((office) => {
+          office.shell.forEach((item) => {
+            if (item && item.kind === "sprite" && item.sprite) {
+              urls.add(item.sprite);
+            }
+          });
+          if (office.agent && office.agent.sprite) {
+            urls.add(office.agent.sprite);
+          }
+        });
+        model.recAgents.forEach((agent) => {
+          if (agent && agent.sprite) {
+            urls.add(agent.sprite);
+          }
+        });
+        return [...urls];
+      }
+
+      async function ensureOfficeSceneAssets(model) {
+        if (!window.PIXI || !window.PIXI.Assets) {
+          return;
+        }
+        const pending = collectOfficeSceneAssetUrls(model).filter((url) => !loadedOfficeAssetUrls.has(url));
+        if (pending.length === 0) {
+          return;
+        }
+        await window.PIXI.Assets.load(pending);
+        pending.forEach((url) => loadedOfficeAssetUrls.add(url));
+      }
+
+      function roleTint(role) {
+        const tone = roleTone(role).replace("#", "");
+        return Number.parseInt(tone, 16);
+      }
+
+      function pixelSnap(value, minimum = 0) {
+        const snapped = Math.round(Number(value) || 0);
+        return minimum > 0 ? Math.max(minimum, snapped) : snapped;
+      }
+
+      function pixiTextResolution(renderer) {
+        const deviceScale = Math.max(1, Number(window.devicePixelRatio || 1));
+        const sceneScale = Math.max(1, Number(renderer?.scale || 1));
+        return Math.max(2, deviceScale * sceneScale);
+      }
+
+      function createPixiText(renderer, text, style) {
+        const label = new window.PIXI.Text({
+          text,
+          style
+        });
+        label.resolution = pixiTextResolution(renderer);
+        label.roundPixels = true;
+        return label;
+      }
+
+      function tileBoundsLabel(width, height, tileSize) {
+        const tileWidth = Math.max(1, Math.round(width / tileSize));
+        const tileHeight = Math.max(1, Math.round(height / tileSize));
+        return \`\${tileWidth}x\${tileHeight}\`;
+      }
+
+      function officeAvatarFootTile(room, tileSize, x, y, width, height) {
+        if (!room) {
+          return null;
+        }
+        const footX = x + width / 2;
+        const footY = y + height - 1;
+        const column = Math.max(0, Math.min(Math.floor(room.width / tileSize) - 1, Math.floor((footX - room.x) / tileSize)));
+        const row = Math.max(0, Math.min(Math.floor((room.height - room.wallHeight) / tileSize) - 1, Math.floor((footY - room.floorTop) / tileSize)));
+        return { column, row };
+      }
+
+      function officeAvatarPositionForTile(room, tileSize, tilePoint, width, height) {
+        return {
+          x: room.x + tilePoint.column * tileSize + Math.round((tileSize - width) / 2),
+          y: room.floorTop + (tilePoint.row + 1) * tileSize - height
+        };
+      }
+
+      function roomDoorTile(room, tileSize) {
+        return {
+          column: Math.max(0, Math.min(Math.floor(room.width / tileSize) - 1, Math.floor(room.width / tileSize / 2))),
+          row: 0
+        };
+      }
+
+      function markNavigationRect(grid, startColumn, startRow, widthTiles, heightTiles) {
+        for (let row = startRow; row < startRow + heightTiles; row += 1) {
+          if (!grid[row]) {
+            continue;
+          }
+          for (let column = startColumn; column < startColumn + widthTiles; column += 1) {
+            if (grid[row][column] === undefined) {
+              continue;
+            }
+            grid[row][column] = 1;
+          }
+        }
+      }
+
+      function buildOfficeNavigation(model) {
+        const roomById = new Map(model.rooms.map((room) => [room.id, room]));
+        const navigation = new Map();
+        model.rooms.forEach((room) => {
+          const columns = Math.max(1, Math.round(room.width / model.tile));
+          const rows = Math.max(1, Math.round((room.height - room.wallHeight) / model.tile));
+          navigation.set(room.id, {
+            room,
+            columns,
+            rows,
+            grid: Array.from({ length: rows }, () => Array.from({ length: columns }, () => 0))
+          });
+        });
+
+        model.tileObjects.forEach((object) => {
+          if (!object || object.anchor === "wall") {
+            return;
+          }
+          const nav = navigation.get(object.roomId);
+          if (!nav) {
+            return;
+          }
+          markNavigationRect(nav.grid, object.column, Math.max(0, object.baseRow), Math.max(1, object.widthTiles), Math.max(1, object.heightTiles));
+        });
+
+        model.workstations.forEach((workstation) => {
+          const nav = navigation.get(workstation.roomId);
+          const room = roomById.get(workstation.roomId);
+          if (!nav || !room) {
+            return;
+          }
+          const column = Math.max(0, Math.floor((workstation.x - room.x) / model.tile));
+          const row = Math.max(0, Math.floor((workstation.y - room.floorTop) / model.tile));
+          markNavigationRect(nav.grid, column, row, Math.max(1, workstation.tileWidth || 1), Math.max(1, workstation.tileHeight || 1));
+        });
+
+        return navigation;
+      }
+
+      function cloneNavigation(nav) {
+        if (!nav) {
+          return null;
+        }
+        return {
+          ...nav,
+          grid: nav.grid.map((row) => row.slice())
+        };
+      }
+
+      function reserveAgentTiles(model, roomById) {
+        const reservations = new Map();
+        const collect = (agent) => {
+          if (!agent || !(agent.key || agent.id)) {
+            return;
+          }
+          const room = roomById.get(agent.roomId);
+          const tilePoint = officeAvatarFootTile(room, model.tile, agent.x, agent.y, agent.width, agent.height);
+          if (!tilePoint) {
+            return;
+          }
+          reservations.set(agent.key || agent.id, {
+            roomId: agent.roomId,
+            column: tilePoint.column,
+            row: tilePoint.row
+          });
+        };
+        model.desks.forEach((desk) => desk.agents.forEach(collect));
+        model.offices.forEach((office) => {
+          if (office.agent) {
+            collect(office.agent);
+          }
+        });
+        model.recAgents.forEach(collect);
+        return reservations;
+      }
+
+      function navigationForAgent(roomNavigation, reservations, roomId, agentKey) {
+        const baseNav = roomNavigation.get(roomId);
+        const nav = cloneNavigation(baseNav);
+        if (!nav) {
+          return null;
+        }
+        reservations.forEach((entry, key) => {
+          if (!entry || key === agentKey || entry.roomId !== roomId) {
+            return;
+          }
+          if (nav.grid[entry.row]?.[entry.column] !== undefined) {
+            nav.grid[entry.row][entry.column] = 1;
+          }
+        });
+        return nav;
+      }
+
+      function nearestWalkableTile(nav, desiredTile) {
+        if (!nav || !desiredTile) {
+          return null;
+        }
+        const inBounds = (column, row) => row >= 0 && row < nav.rows && column >= 0 && column < nav.columns;
+        const walkable = (column, row) => inBounds(column, row) && nav.grid[row][column] === 0;
+        if (walkable(desiredTile.column, desiredTile.row)) {
+          return desiredTile;
+        }
+        for (let radius = 1; radius <= Math.max(nav.columns, nav.rows); radius += 1) {
+          for (let row = desiredTile.row - radius; row <= desiredTile.row + radius; row += 1) {
+            for (let column = desiredTile.column - radius; column <= desiredTile.column + radius; column += 1) {
+              if (Math.abs(column - desiredTile.column) + Math.abs(row - desiredTile.row) > radius) {
+                continue;
+              }
+              if (walkable(column, row)) {
+                return { column, row };
+              }
+            }
+          }
+        }
+        return null;
+      }
+
+      function solveEasyStarPath(nav, startTile, endTile) {
+        const EasyStarConstructor = window.EasyStar && typeof window.EasyStar.js === "function"
+          ? window.EasyStar.js
+          : null;
+        if (!EasyStarConstructor || !nav || !startTile || !endTile) {
+          return null;
+        }
+        const pathfinder = new EasyStarConstructor();
+        const grid = nav.grid.map((row) => row.slice());
+        grid[startTile.row][startTile.column] = 0;
+        grid[endTile.row][endTile.column] = 0;
+        pathfinder.setGrid(grid);
+        pathfinder.setAcceptableTiles([0]);
+        pathfinder.setIterationsPerCalculation(Math.max(1000, nav.columns * nav.rows * 4));
+        let resolved = false;
+        let result = null;
+        pathfinder.findPath(startTile.column, startTile.row, endTile.column, endTile.row, (path) => {
+          result = Array.isArray(path) ? path : null;
+          resolved = true;
+        });
+        let guard = 0;
+        while (!resolved && guard < 128) {
+          pathfinder.calculate();
+          guard += 1;
+        }
+        return result;
+      }
+
+      function buildAgentPixelRoute(nav, startTile, endTile, room, tileSize, width, height, exactTarget) {
+        if (!nav || !startTile || !endTile || !room) {
+          return exactTarget ? [exactTarget] : [];
+        }
+        const tilePath = solveEasyStarPath(nav, startTile, endTile) || [startTile, endTile];
+        const route = tilePath.map((step) =>
+          officeAvatarPositionForTile(room, tileSize, { column: step.x ?? step.column, row: step.y ?? step.row }, width, height)
+        );
+        if (exactTarget) {
+          const last = route[route.length - 1];
+          if (!last || last.x !== exactTarget.x || last.y !== exactTarget.y) {
+            route.push({ x: exactTarget.x, y: exactTarget.y });
+          }
+        }
+        return route;
+      }
+
+      function syncAgentHitNodePosition(renderer, motionState) {
+        if (!renderer || !motionState || !motionState.anchorNode) {
+          return;
+        }
+        motionState.anchorNode.style.left = Math.round(motionState.currentX * renderer.scale) + "px";
+        motionState.anchorNode.style.top = Math.round(motionState.currentY * renderer.scale) + "px";
+        motionState.anchorNode.style.width = Math.max(8, Math.round(motionState.width * renderer.scale)) + "px";
+        motionState.anchorNode.style.height = Math.max(8, Math.round(motionState.height * renderer.scale)) + "px";
+      }
+
+      function syncOfficeAnchors(renderer, model, scale) {
+        const layer = renderer.anchorLayer;
+        layer.innerHTML = "";
+        renderer.agentHitNodes = new Map();
+        model.anchors.forEach((anchor) => {
+          const node = document.createElement("div");
+          if (anchor.type === "agent") {
+            node.className = "office-map-agent-hit";
+            node.dataset.agentKey = anchor.key;
+            node.dataset.focusAgent = "true";
+            if (anchor.focusKey) {
+              node.dataset.focusKey = anchor.focusKey;
+            }
+            if (Array.isArray(anchor.focusKeys)) {
+              node.dataset.focusKeys = JSON.stringify(anchor.focusKeys);
+            }
+            node.style.left = Math.round((anchor.left ?? anchor.x) * scale) + "px";
+            node.style.top = Math.round((anchor.top ?? anchor.y) * scale) + "px";
+            node.style.width = Math.max(8, Math.round((anchor.width ?? 0) * scale)) + "px";
+            node.style.height = Math.max(8, Math.round((anchor.height ?? 0) * scale)) + "px";
+            node.innerHTML = anchor.hoverHtml || "";
+            renderer.agentHitNodes.set(anchor.key, node);
+          } else {
+            node.className = "office-map-anchor";
+            node.dataset.workstationKey = anchor.key;
+            node.style.left = Math.round(anchor.x * scale) + "px";
+            node.style.top = Math.round(anchor.y * scale) + "px";
+          }
+          layer.appendChild(node);
+        });
+        model.furniture.forEach((item) => {
+          const node = document.createElement("div");
+          node.className = "office-map-furniture-hit";
+          node.dataset.furnitureId = item.id;
+          node.dataset.roomId = item.roomId;
+          node.style.left = Math.round(item.column * model.tile * scale) + "px";
+          node.style.top = Math.round(model.rooms.find((room) => room.id === item.roomId).floorTop * scale) + "px";
+          node.style.width = Math.round(item.widthTiles * model.tile * scale) + "px";
+          node.style.height = Math.round(model.tile * scale) + "px";
+          layer.appendChild(node);
+        });
+      }
+
+      function syncOfficeRendererScene(renderer, model) {
+        if (!renderer || !renderer.root || !window.PIXI) {
+          return;
+        }
+        renderer.model = model;
+        const availableWidth = Math.max(Math.round(renderer.host.getBoundingClientRect().width || renderer.host.clientWidth || model.width), 1);
+        const scale = Math.min(Math.max(availableWidth / model.width, 0.5), 3.5);
+        const scaledWidth = Math.max(1, Math.min(availableWidth, Math.round(model.width * scale)));
+        const scaledHeight = Math.max(180, Math.round(model.height * scale));
+        const leftOffset = Math.max(0, Math.round((availableWidth - scaledWidth) / 2));
+        renderer.scale = scale;
+        renderer.leftOffset = leftOffset;
+        renderer.host.style.height = scaledHeight + "px";
+        renderer.canvasContainer.style.left = leftOffset + "px";
+        renderer.canvasContainer.style.width = scaledWidth + "px";
+        renderer.canvasContainer.style.height = scaledHeight + "px";
+        renderer.anchorLayer.style.left = leftOffset + "px";
+        renderer.anchorLayer.style.width = scaledWidth + "px";
+        renderer.anchorLayer.style.height = scaledHeight + "px";
+        renderer.app.renderer.resize(scaledWidth, scaledHeight);
+        const previousMotionStates = new Map(renderer.motionStates || []);
+        renderer.motionStates = new Map();
+        renderer.root.removeChildren();
+        renderer.root.scale.set(scale, scale);
+        renderer.animatedSprites = [];
+        renderer.focusables = [];
+
+        const PIXI = window.PIXI;
+        const roomById = new Map(model.rooms.map((room) => [room.id, room]));
+        const roomNavigation = buildOfficeNavigation(model);
+        syncOfficeAnchors(renderer, model, scale);
+        const reservedAgentTiles = reserveAgentTiles(model, roomById);
+        const background = new PIXI.Graphics()
+          .roundRect(0, 0, model.width, model.height, 14)
+          .fill({ color: 0x0b1b2b })
+          .stroke({ color: 0x2e5c7b, width: 2 });
+        background.zIndex = 0;
+        renderer.root.addChild(background);
+
+        function addSpriteNode(definition) {
+          const sprite = PIXI.Sprite.from(definition.sprite);
+          const snappedWidth = pixelSnap(definition.width, 1);
+          const snappedHeight = pixelSnap(definition.height, 1);
+          sprite.x = pixelSnap(definition.x);
+          sprite.y = pixelSnap(definition.y);
+          sprite.width = snappedWidth;
+          sprite.height = snappedHeight;
+          sprite.alpha = Number.isFinite(definition.alpha) ? definition.alpha : 1;
+          if (definition.flipX) {
+            sprite.scale.x = -Math.abs(sprite.scale.x || 1);
+            sprite.x += snappedWidth;
+          }
+          sprite.zIndex = definition.z || 5;
+          renderer.root.addChild(sprite);
+          return sprite;
+        }
+
+        function registerFocusNodes(keys, nodes) {
+          if (!Array.isArray(keys) || keys.length === 0 || !Array.isArray(nodes) || nodes.length === 0) {
+            return;
+          }
+          renderer.focusables.push({
+            keys,
+            nodes: nodes.filter(Boolean).map((node) => ({
+              node,
+              baseAlpha: Number.isFinite(node.alpha) ? node.alpha : 1
+            }))
+          });
+        }
+
+        function addAvatarNode(agent, zIndex = 12) {
+          const avatar = PIXI.Sprite.from(agent.sprite);
+          const createdNodes = [];
+          const snappedWidth = pixelSnap(agent.width, 1);
+          const snappedHeight = pixelSnap(agent.height, 1);
+          avatar.x = pixelSnap(agent.x);
+          avatar.y = pixelSnap(agent.y);
+          avatar.width = snappedWidth;
+          avatar.height = snappedHeight;
+          if (agent.flipX) {
+            avatar.scale.x = -Math.abs(avatar.scale.x || 1);
+            avatar.x += snappedWidth;
+          }
+          avatar.zIndex = zIndex;
+          renderer.root.addChild(avatar);
+          createdNodes.push(avatar);
+          let bubbleBox = null;
+          let bubbleText = null;
+          if (agent.bubble) {
+            const bubbleX = pixelSnap(agent.x + Math.round(agent.width * 0.2));
+            const bubbleY = pixelSnap(agent.y - 14);
+            const bubbleWidth = Math.max(18, pixelSnap(agent.width * 0.8, 18));
+            bubbleBox = new PIXI.Graphics()
+              .roundRect(0, 0, bubbleWidth, 12, 3)
+              .fill({ color: agent.state === "waiting" ? 0xe9f5eb : 0xf4efdf, alpha: 0.92 })
+              .stroke({ color: 0x1f2e29, width: 2, alpha: 0.8 });
+            bubbleBox.x = bubbleX;
+            bubbleBox.y = bubbleY;
+            bubbleBox.zIndex = zIndex + 1;
+            renderer.root.addChild(bubbleBox);
+            createdNodes.push(bubbleBox);
+            bubbleText = createPixiText(renderer, agent.bubble, {
+              fill: 0x1f2e29,
+              fontFamily: "IBM Plex Mono",
+              fontSize: Math.max(8, Math.round(8 * state.globalSceneSettings.textScale)),
+              fontWeight: "700"
+            });
+            bubbleText.x = bubbleX + Math.round((bubbleWidth - bubbleText.width) / 2);
+            bubbleText.y = bubbleY + Math.round((12 - bubbleText.height) / 2) - 1;
+            bubbleText.zIndex = zIndex + 2;
+            renderer.root.addChild(bubbleText);
+            createdNodes.push(bubbleText);
+          }
+          return {
+            nodes: createdNodes,
+            avatar,
+            bubbleBox,
+            bubbleText
+          };
+        }
+
+        function registerAgentMotion(agent, avatarVisual, roomNavigation, reservations, previousMotionState = null, options = {}) {
+          if (!agent || !avatarVisual || !avatarVisual.avatar) {
+            return avatarVisual.nodes;
+          }
+          const room = roomById.get(agent.roomId);
+          const agentKey = agent.key || agent.id;
+          const nav = navigationForAgent(roomNavigation, reservations, agent.roomId, agentKey);
+          const targetTile = officeAvatarFootTile(room, model.tile, agent.x, agent.y, agent.width, agent.height);
+          const enteringFromDoor = !previousMotionState && enteringAgentKeys.has(agent.key || agent.id);
+          const previousState = previousMotionState && previousMotionState.roomId === agent.roomId
+            ? previousMotionState
+            : null;
+          const sameTarget = Boolean(
+            previousState
+            && previousState.roomId === agent.roomId
+            && previousState.targetX === agent.x
+            && previousState.targetY === agent.y
+            && previousState.exiting !== true
+          );
+          if (sameTarget) {
+            previousState.sprite = avatarVisual.avatar;
+            previousState.bubbleBox = avatarVisual.bubbleBox;
+            previousState.bubbleText = avatarVisual.bubbleText;
+            previousState.anchorNode = renderer.agentHitNodes.get(agentKey) || null;
+            previousState.width = agent.width;
+            previousState.height = agent.height;
+            previousState.state = agent.state || "idle";
+            previousState.spriteUrl = agent.sprite;
+            previousState.targetFlipX = agent.flipX === true;
+            renderer.motionStates.set(agentKey, previousState);
+            if (["editing", "running", "validating", "scanning", "thinking", "planning", "delegating"].includes(agent.state) && previousState.routeIndex >= (previousState.route?.length || 0)) {
+              renderer.animatedSprites.push({
+                kind: "bob",
+                sprite: avatarVisual.avatar,
+                baseY: pixelSnap(previousState.currentY),
+                phase: stableHash(agent.id || agent.label || "") % 1000
+              });
+            } else {
+              renderer.animatedSprites.push(previousState);
+            }
+            syncAgentHitNodePosition(renderer, previousState);
+            return avatarVisual.nodes;
+          }
+          const startTile = previousState
+            ? nearestWalkableTile(nav, officeAvatarFootTile(room, model.tile, previousState.currentX, previousState.currentY, previousState.width, previousState.height))
+            : enteringFromDoor
+              ? nearestWalkableTile(nav, roomDoorTile(room, model.tile))
+              : targetTile;
+          const route = startTile && targetTile
+            ? buildAgentPixelRoute(
+              nav,
+              startTile,
+              targetTile,
+              room,
+              model.tile,
+              agent.width,
+              agent.height,
+              { x: agent.x, y: agent.y }
+            )
+            : [{ x: agent.x, y: agent.y }];
+          const motionState = {
+            kind: "motion",
+            key: agentKey,
+            roomId: agent.roomId,
+            sprite: avatarVisual.avatar,
+            spriteUrl: agent.sprite,
+            bubbleBox: avatarVisual.bubbleBox,
+            bubbleText: avatarVisual.bubbleText,
+            width: agent.width,
+            height: agent.height,
+            currentX: previousState
+              ? previousState.currentX
+              : (route[0]?.x ?? agent.x),
+            currentY: previousState
+              ? previousState.currentY
+              : (route[0]?.y ?? agent.y),
+            currentTile: startTile || targetTile,
+            targetX: agent.x,
+            targetY: agent.y,
+            route,
+            routeIndex: previousState ? 0 : 1,
+            speed: options.speed || 198,
+            flipX: previousState ? previousState.flipX : agent.flipX === true,
+            targetFlipX: agent.flipX === true,
+            anchorNode: renderer.agentHitNodes.get(agentKey) || null,
+            exiting: options.exiting === true,
+            state: agent.state || "idle"
+          };
+          if (["editing", "running", "validating", "scanning", "thinking", "planning", "delegating"].includes(agent.state) && route.length <= 1) {
+            motionState.currentX = agent.x;
+            motionState.currentY = agent.y;
+            motionState.route = [{ x: agent.x, y: agent.y }];
+            motionState.routeIndex = 1;
+            renderer.motionStates.set(motionState.key, motionState);
+            renderer.animatedSprites.push({
+              kind: "bob",
+              sprite: avatarVisual.avatar,
+              baseY: pixelSnap(agent.y),
+              phase: stableHash(agent.id || agent.label || "") % 1000
+            });
+            syncAgentHitNodePosition(renderer, motionState);
+            return avatarVisual.nodes;
+          }
+          if (route.length <= 1 && !motionState.exiting) {
+            motionState.currentX = agent.x;
+            motionState.currentY = agent.y;
+            motionState.route = [{ x: agent.x, y: agent.y }];
+            motionState.routeIndex = 1;
+            renderer.motionStates.set(motionState.key, motionState);
+            syncAgentHitNodePosition(renderer, motionState);
+            return avatarVisual.nodes;
+          }
+          renderer.motionStates.set(motionState.key, motionState);
+          renderer.animatedSprites.push(motionState);
+          syncAgentHitNodePosition(renderer, motionState);
+          return avatarVisual.nodes;
+        }
+
+        function addDebugBounds(x, y, width, height, color, label) {
+          const outline = new PIXI.Graphics()
+            .rect(pixelSnap(x), pixelSnap(y), pixelSnap(width, 1), pixelSnap(height, 1))
+            .stroke({ color, width: 1, alpha: 0.95 });
+          outline.zIndex = 98;
+          renderer.root.addChild(outline);
+          if (!label) {
+            return;
+          }
+          const labelWidth = Math.max(24, label.length * 5 + 6);
+          const labelBg = new PIXI.Graphics()
+            .roundRect(pixelSnap(x), pixelSnap(y) - 10, labelWidth, 10, 2)
+            .fill({ color: 0x061019, alpha: 0.86 })
+            .stroke({ color, width: 1, alpha: 0.95 });
+          labelBg.zIndex = 99;
+          renderer.root.addChild(labelBg);
+          const labelText = createPixiText(renderer, label, {
+            fill: color,
+            fontFamily: "IBM Plex Mono",
+            fontSize: 7,
+            fontWeight: "700"
+          });
+          labelText.x = pixelSnap(x) + 3;
+          labelText.y = pixelSnap(y) - 9;
+          labelText.zIndex = 100;
+          renderer.root.addChild(labelText);
+        }
+
+        model.rooms.forEach((room) => {
+          const roomBox = new PIXI.Graphics()
+            .roundRect(room.x, room.y, room.width, room.height, 10)
+            .fill({ color: room.isPrimary ? 0x1f7fcf : 0x256fa8, alpha: 0.95 })
+            .stroke({ color: 0x365a76, width: 3 });
+          roomBox.zIndex = 1;
+          renderer.root.addChild(roomBox);
+
+          const wallBand = new PIXI.Graphics()
+            .rect(room.x, room.y, room.width, room.wallHeight)
+            .fill({ color: 0xdceefe, alpha: 0.92 });
+          wallBand.zIndex = 2;
+          renderer.root.addChild(wallBand);
+
+          const mural = new PIXI.Graphics()
+            .rect(room.x + 8, room.y + 8, room.width - 16, Math.max(16, room.wallHeight - 16))
+            .fill({ color: 0x9dd6ff, alpha: 0.32 });
+          mural.zIndex = 2;
+          renderer.root.addChild(mural);
+
+          const floorTop = room.floorTop;
+          for (let y = floorTop; y < room.y + room.height; y += 48) {
+            const band = new PIXI.Graphics()
+              .rect(room.x, y, room.width, 22)
+              .fill({ color: 0x48a7ee, alpha: 0.96 });
+            band.zIndex = 1.5;
+            renderer.root.addChild(band);
+            const seam = new PIXI.Graphics()
+              .rect(room.x, Math.min(y + 22, room.y + room.height - 2), room.width, 2)
+              .fill({ color: 0x7eeaff, alpha: 0.86 });
+            seam.zIndex = 1.6;
+            renderer.root.addChild(seam);
+            const shadowBand = new PIXI.Graphics()
+              .rect(room.x, Math.min(y + 24, room.y + room.height - 22), room.width, 22)
+              .fill({ color: 0x2f8fdf, alpha: 0.94 });
+            shadowBand.zIndex = 1.55;
+            renderer.root.addChild(shadowBand);
+          }
+
+          if (state.globalSceneSettings.debugTiles) {
+            for (let x = room.x; x <= room.x + room.width; x += model.tile) {
+              const vertical = new PIXI.Graphics()
+                .moveTo(x, floorTop)
+                .lineTo(x, room.y + room.height)
+                .stroke({ color: 0xffffff, width: 1, alpha: 0.18 });
+              vertical.zIndex = 96;
+              renderer.root.addChild(vertical);
+            }
+            for (let y = floorTop; y <= room.y + room.height; y += model.tile) {
+              const horizontal = new PIXI.Graphics()
+                .moveTo(room.x, y)
+                .lineTo(room.x + room.width, y)
+                .stroke({ color: 0xffffff, width: 1, alpha: 0.18 });
+              horizontal.zIndex = 96;
+              renderer.root.addChild(horizontal);
+            }
+          }
+
+        });
+
+        model.relationshipLines.forEach((line) => {
+          const path = new PIXI.Graphics()
+            .moveTo(line.x1, line.y1)
+            .lineTo(line.x2, line.y2)
+            .stroke({ color: 0xffcf4d, width: 2, alpha: 0.48 });
+          path.zIndex = 4;
+          renderer.root.addChild(path);
+          registerFocusNodes(line.focusKeys, [path]);
+        });
+
+        model.tileObjects.forEach((object) => {
+          const prop = compileTileObject(model, roomById, object);
+          if (!prop) {
+            return;
+          }
+          addSpriteNode(prop);
+          if (state.globalSceneSettings.debugTiles) {
+            addDebugBounds(
+              prop.x,
+              prop.y,
+              prop.width,
+              prop.height,
+              0xffd64d,
+              Number.isFinite(prop.tileWidth) && Number.isFinite(prop.tileHeight)
+                ? \`\${prop.tileWidth}x\${prop.tileHeight}\`
+                : tileBoundsLabel(prop.width, prop.height, model.tile)
+            );
+          }
+        });
+
+        model.workstations.forEach((workstation) => {
+          if (!state.globalSceneSettings.debugTiles) {
+            return;
+          }
+          addDebugBounds(
+            workstation.x,
+            workstation.y,
+            workstation.width,
+            workstation.height,
+            0x4dd8ff,
+            \`\${workstation.tileWidth}x\${workstation.tileHeight}\`
+          );
+        });
+
+        const currentAgentKeys = new Set();
+
+        model.desks.forEach((desk) => {
+          const deskNodes = [];
+          desk.shell.forEach((item) => {
+            if (item.kind === "sprite") {
+              deskNodes.push(addSpriteNode(item));
+              return;
+            }
+            if (item.kind === "glow") {
+              const glow = new PIXI.Graphics()
+                .roundRect(item.x, item.y, item.width, item.height, 3)
+                .fill({ color: 0x4bd69f, alpha: 0.24 });
+              glow.zIndex = item.z || 10;
+              renderer.root.addChild(glow);
+              deskNodes.push(glow);
+            }
+          });
+
+          const deskFocusKeys = [];
+          desk.agents.forEach((agent) => {
+            deskFocusKeys.push(...(agent.focusKeys || []));
+            currentAgentKeys.add(agent.key || agent.id);
+            deskNodes.push(
+              ...registerAgentMotion(
+                agent,
+                addAvatarNode(agent, 12),
+                roomNavigation,
+                reservedAgentTiles,
+                previousMotionStates.get(agent.key || agent.id) || null
+              )
+            );
+          });
+          registerFocusNodes([...new Set(deskFocusKeys)], deskNodes);
+        });
+
+        model.offices.forEach((office) => {
+          const officeNodes = [];
+          if (state.globalSceneSettings.debugTiles) {
+            addDebugBounds(office.x, office.y, office.width, office.height, 0xff8d4d, tileBoundsLabel(office.width, office.height, model.tile));
+          }
+          const strip = new PIXI.Graphics()
+            .rect(office.x, office.y, office.width, office.height)
+            .fill({ color: 0x33594e, alpha: 0.52 });
+          strip.zIndex = 5;
+          renderer.root.addChild(strip);
+          officeNodes.push(strip);
+
+          const booth = new PIXI.Graphics()
+            .roundRect(office.x, office.y, office.width, office.height, 8)
+            .fill({ color: 0x243730, alpha: 0.18 })
+            .stroke({ color: 0xffcf4d, width: 1.5, alpha: 0.4 });
+          booth.zIndex = 7;
+          renderer.root.addChild(booth);
+          officeNodes.push(booth);
+
+          office.shell.forEach((item) => {
+            if (item.kind === "sprite") {
+              officeNodes.push(addSpriteNode(item));
+              return;
+            }
+            if (item.kind === "glow") {
+              const glow = new PIXI.Graphics()
+                .roundRect(item.x, item.y, item.width, item.height, 3)
+                .fill({ color: 0x4bd69f, alpha: 0.24 });
+              glow.zIndex = item.z || 10;
+              renderer.root.addChild(glow);
+              officeNodes.push(glow);
+            }
+          });
+
+          if (office.badgeLabel) {
+            const badgeBg = new PIXI.Graphics()
+              .roundRect(office.x + 4, office.y + 4, Math.max(32, office.badgeLabel.length * 4 + 6), 10, 2)
+              .fill({ color: 0x0c1210, alpha: 0.62 })
+              .stroke({ color: 0xffffff, width: 1, alpha: 0.14 });
+            badgeBg.zIndex = 11;
+            renderer.root.addChild(badgeBg);
+            const badgeText = createPixiText(renderer, office.badgeLabel, {
+              fill: 0xf6eed9,
+              fontFamily: "IBM Plex Mono",
+              fontSize: Math.max(7, Math.round(7 * state.globalSceneSettings.textScale))
+            });
+            badgeText.x = office.x + 7;
+            badgeText.y = office.y + 5;
+            badgeText.zIndex = 12;
+            renderer.root.addChild(badgeText);
+            officeNodes.push(badgeBg, badgeText);
+          }
+
+          if (office.agent) {
+            currentAgentKeys.add(office.agent.key || office.agent.id);
+            officeNodes.push(
+              ...registerAgentMotion(
+                office.agent,
+                addAvatarNode(office.agent, 12),
+                roomNavigation,
+                reservedAgentTiles,
+                previousMotionStates.get(office.agent.key || office.agent.id) || null
+              )
+            );
+            registerFocusNodes(office.agent.focusKeys, officeNodes);
+          }
+        });
+
+        model.recAgents.forEach((agent) => {
+          currentAgentKeys.add(agent.key || agent.id);
+          const recNodes = registerAgentMotion(
+            agent,
+            addAvatarNode(agent, 12),
+            roomNavigation,
+            reservedAgentTiles,
+            previousMotionStates.get(agent.key || agent.id) || null
+          );
+          if (state.globalSceneSettings.debugTiles) {
+            addDebugBounds(agent.x, agent.y, agent.width, agent.height, 0x9eff6a, tileBoundsLabel(agent.width, agent.height, model.tile));
+          }
+          registerFocusNodes(agent.focusKeys, recNodes);
+        });
+
+        previousMotionStates.forEach((motionState, key) => {
+          if (!motionState || currentAgentKeys.has(key) || motionState.exiting) {
+            return;
+          }
+          const room = roomById.get(motionState.roomId);
+          const nav = navigationForAgent(roomNavigation, reservedAgentTiles, motionState.roomId, key);
+          if (!room || !nav) {
+            return;
+          }
+          const exitTile = nearestWalkableTile(nav, roomDoorTile(room, model.tile));
+          const startTile = nearestWalkableTile(nav, motionState.currentTile || officeAvatarFootTile(room, model.tile, motionState.currentX, motionState.currentY, motionState.width, motionState.height));
+          const targetPoint = exitTile
+            ? officeAvatarPositionForTile(room, model.tile, exitTile, motionState.width, motionState.height)
+            : { x: motionState.currentX, y: motionState.currentY };
+          const ghostAgent = {
+            id: motionState.key,
+            key,
+            roomId: motionState.roomId,
+            sprite: motionState.spriteUrl,
+            width: motionState.width,
+            height: motionState.height,
+            x: motionState.currentX,
+            y: motionState.currentY,
+            flipX: motionState.flipX,
+            state: motionState.state || "idle",
+            bubble: null
+          };
+          const ghostVisual = addAvatarNode(ghostAgent, 12);
+          const ghostRoute = startTile && exitTile
+            ? buildAgentPixelRoute(nav, startTile, exitTile, room, model.tile, motionState.width, motionState.height, targetPoint)
+            : [targetPoint];
+          const ghostMotion = {
+            kind: "motion",
+            key,
+            roomId: motionState.roomId,
+            sprite: ghostVisual.avatar,
+            bubbleBox: null,
+            bubbleText: null,
+            width: motionState.width,
+            height: motionState.height,
+            currentX: motionState.currentX,
+            currentY: motionState.currentY,
+            currentTile: startTile,
+            route: ghostRoute,
+            routeIndex: 0,
+            speed: 216,
+            flipX: motionState.flipX,
+            anchorNode: null,
+            exiting: true,
+            spriteUrl: motionState.spriteUrl,
+            state: motionState.state || "idle"
+          };
+          renderer.motionStates.set(key, ghostMotion);
+          renderer.animatedSprites.push(ghostMotion);
+        });
+
+        applyOfficeRendererFocus(renderer);
+      }
+
+      async function syncOfficeMapScenes(projects) {
+        cleanupOfficeRenderers();
+        const hostNodes = Array.from(document.querySelectorAll("[data-office-map-host]"));
+        for (const host of hostNodes) {
+          if (!(host instanceof HTMLElement)) {
+            continue;
+          }
+          const projectRoot = host.dataset.projectRoot || "";
+          const snapshot = projects.find((project) => project.projectRoot === projectRoot);
+          if (!snapshot) {
+            continue;
+          }
+          const compact = host.dataset.compact === "1";
+          const focusMode = host.dataset.focusMode === "1";
+          const renderer = await ensureOfficeRenderer(host);
+          if (!renderer) {
+            continue;
+          }
+          const model = buildOfficeSceneModel(snapshot, {
+            compact,
+            focusMode,
+            liveOnly: state.activeOnly
+          });
+          if (!model) {
+            continue;
+          }
+          await ensureOfficeSceneAssets(model);
+          syncOfficeRendererScene(renderer, model);
+        }
+      }
+
+      function focusKeysIntersect(keys, focusedKeys) {
+        return Array.isArray(keys) && keys.some((key) => focusedKeys.has(String(key)));
+      }
+
+      function applyOfficeRendererFocus(renderer) {
+        if (!renderer || !Array.isArray(renderer.focusables)) {
+          return;
+        }
+        const focusedKeys = new Set(state.focusedSessionKeys);
+        const hasFocus = focusedKeys.size > 0;
+        renderer.focusables.forEach((entry) => {
+          const match = !hasFocus || focusKeysIntersect(entry.keys, focusedKeys);
+          entry.nodes.forEach((nodeEntry) => {
+            if (!nodeEntry || !nodeEntry.node) {
+              return;
+            }
+            nodeEntry.node.alpha = match ? nodeEntry.baseAlpha : Math.max(0.18, nodeEntry.baseAlpha * 0.45);
+          });
+        });
+      }
+
+      function applyOfficeRendererFocusAll() {
+        officeSceneRenderers.forEach((renderer) => applyOfficeRendererFocus(renderer));
+      }
+
+      function rendererForHost(host) {
+        if (!(host instanceof HTMLElement)) {
+          return null;
+        }
+        return officeSceneRenderers.get(host.dataset.officeMapHost || "") || null;
+      }
+
+      function canPlaceFurniture(model, movingItem, nextColumn) {
+        const room = model.rooms.find((entry) => entry.id === movingItem.roomId);
+        if (!room) {
+          return false;
+        }
+        const roomWidthTiles = Math.round(room.width / model.tile);
+        if (nextColumn < 0 || nextColumn + movingItem.widthTiles > roomWidthTiles) {
+          return false;
+        }
+        return !model.furniture.some((item) =>
+          item.id !== movingItem.id
+          && item.roomId === movingItem.roomId
+          && rectanglesOverlap({ ...movingItem, column: nextColumn }, item)
+        );
+      }
+
+      function handleFurnitureDragMove(event) {
+        if (!furnitureDragState) {
+          return;
+        }
+        const renderer = furnitureDragState.renderer;
+        if (!renderer || !renderer.model) {
+          return;
+        }
+        const pointerX = event.clientX - furnitureDragState.hostRect.left - (renderer.leftOffset || 0);
+        const nextColumn = Math.round(pointerX / (renderer.scale * renderer.model.tile) - furnitureDragState.pointerOffsetTiles);
+        if (!Number.isFinite(nextColumn) || nextColumn === furnitureDragState.currentColumn) {
+          return;
+        }
+        if (!canPlaceFurniture(renderer.model, furnitureDragState.item, nextColumn)) {
+          return;
+        }
+        furnitureDragState.currentColumn = nextColumn;
+        setFurnitureColumnOverride(furnitureDragState.projectRoot, furnitureDragState.item.roomId, furnitureDragState.item.id, nextColumn);
+        render();
+      }
+
+      function stopFurnitureDrag() {
+        if (!furnitureDragState) {
+          return;
+        }
+        window.removeEventListener("pointermove", handleFurnitureDragMove);
+        window.removeEventListener("pointerup", stopFurnitureDrag);
+        window.removeEventListener("pointercancel", stopFurnitureDrag);
+        furnitureDragState = null;
       }
 
       function renderFleetTerminal(fleet) {
@@ -3892,6 +5976,7 @@ export function renderClientScript({
           }
           element.classList.toggle("is-focused", hasFocus && focusedKeys.has(element.dataset.focusBossKey || ""));
         });
+        applyOfficeRendererFocusAll();
       }
 
       function setSessionFocusFromElement(element) {
@@ -4157,9 +6242,11 @@ export function renderClientScript({
         const counts = fleetCounts({ projects: sessionProjects });
         const nextSceneToken = state.view === "map"
           ? (snapshot
+            ? \`project-shell::\${snapshot.projectRoot}::\${state.workspaceFullscreen ? "focus" : "default"}\`
+            : \`fleet-shell::\${displayedProjects.map((project) => project.projectRoot).join("||")}\`)
+          : (snapshot
             ? \`project::\${sceneSnapshotToken(snapshot)}\`
-            : \`fleet::\${displayedProjects.map(sceneSnapshotToken).join("||")}\`)
-          : null;
+            : \`fleet::\${displayedProjects.map(sceneSnapshotToken).join("||")}\`);
 
         setTextIfChanged(stamp, \`Updated \${fleet.generatedAt}\`);
         setTextIfChanged(projectCount, \`\${fleet.projects.length} tracked · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live · \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`);
@@ -4170,6 +6257,9 @@ export function renderClientScript({
         syncWorkspaceFullscreenUi();
         syncFleetBackdrop();
         syncSkyParallax();
+        if (state.view !== "map") {
+          cleanupOfficeRenderers();
+        }
 
         setHtmlIfChanged(heroSummary, renderHeroSummary(counts));
 
@@ -4198,12 +6288,15 @@ export function renderClientScript({
             if (centerChanged) {
               fitScenes();
             }
-            if (centerChanged && sceneStateDraft) {
+            if (sceneStateDraft) {
               renderedAgentSceneState = sceneStateDraft;
             }
             sceneStateDraft = null;
             syncSessionFocusFromDom();
             syncWorkstationEffects();
+            if (state.view === "map") {
+              void syncOfficeMapScenes(displayedProjects);
+            }
             renderNotifications();
             return;
           }
@@ -4240,12 +6333,15 @@ export function renderClientScript({
           if (centerChanged) {
             fitScenes();
           }
-          if (centerChanged && sceneStateDraft) {
+          if (sceneStateDraft) {
             renderedAgentSceneState = sceneStateDraft;
           }
           sceneStateDraft = null;
           syncSessionFocusFromDom();
           syncWorkstationEffects();
+          if (state.view === "map") {
+            void syncOfficeMapScenes(snapshot ? [snapshot] : displayedProjects);
+          }
           renderNotifications();
         } catch (error) {
           console.error("render failed", error);
@@ -4285,7 +6381,7 @@ export function renderClientScript({
       }
 
       document.body.addEventListener("click", async (event) => {
-        const target = event.target instanceof HTMLElement ? event.target.closest("[data-action], [data-view], #preview-toasts-button, #workspace-focus-button") : null;
+        const target = event.target instanceof HTMLElement ? event.target.closest("[data-action], [data-view], #workspace-focus-button") : null;
         if (!(target instanceof HTMLElement)) return;
 
         if (target.dataset.view) {
@@ -4294,18 +6390,24 @@ export function renderClientScript({
         }
 
         const action = target.dataset.action;
+        if (action === "toggle-settings") {
+          setSettingsOpen(!state.settingsOpen);
+          return;
+        }
+
+        if (action === "close-settings") {
+          setSettingsOpen(false);
+          return;
+        }
+
         if (action === "select-project" && target.dataset.projectRoot) {
+          setSettingsOpen(false);
           setSelection(target.dataset.projectRoot);
           return;
         }
 
         if (action === "toggle-workspace-focus") {
           toggleWorkspaceFullscreen();
-          return;
-        }
-
-        if (target === previewToastsButton) {
-          runToastPreview();
           return;
         }
 
@@ -4362,6 +6464,18 @@ export function renderClientScript({
         }
       });
 
+      document.addEventListener("pointerdown", (event) => {
+        if (!state.settingsOpen) {
+          return;
+        }
+        const withinSettings = event.target instanceof HTMLElement
+          ? event.target.closest(".settings-shell")
+          : null;
+        if (!withinSettings) {
+          setSettingsOpen(false);
+        }
+      });
+
       document.body.addEventListener("focusout", (event) => {
         const focusTarget = event.target instanceof HTMLElement
           ? event.target.closest(".session-card[data-focus-keys], [data-focus-agent][data-focus-keys]")
@@ -4379,16 +6493,55 @@ export function renderClientScript({
         setSessionFocusFromElement(null);
       });
 
-      refreshButton.addEventListener("click", async () => {
-        ingestFleet(await postJson("/api/refresh"));
+      document.body.addEventListener("pointerdown", (event) => {
+        const target = event.target instanceof HTMLElement ? event.target.closest(".office-map-furniture-hit") : null;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const host = target.closest("[data-office-map-host]");
+        const renderer = rendererForHost(host);
+        if (!renderer || !renderer.model) {
+          return;
+        }
+        const item = renderer.model.furniture.find((entry) => entry.id === target.dataset.furnitureId && entry.roomId === target.dataset.roomId);
+        if (!item) {
+          return;
+        }
+        const rect = target.getBoundingClientRect();
+        const pointerOffsetTiles = ((event.clientX - rect.left) / (renderer.scale * renderer.model.tile));
+        furnitureDragState = {
+          renderer,
+          projectRoot: renderer.model.projectRoot,
+          item,
+          currentColumn: item.column,
+          pointerOffsetTiles,
+          hostRect: renderer.host.getBoundingClientRect()
+        };
+        window.addEventListener("pointermove", handleFurnitureDragMove);
+        window.addEventListener("pointerup", stopFurnitureDrag);
+        window.addEventListener("pointercancel", stopFurnitureDrag);
+        event.preventDefault();
       });
-      scaffoldButton.addEventListener("click", async () => {
-        const snapshot = currentSnapshot();
-        const projectRoot = snapshot ? snapshot.projectRoot : configuredProjects[0]?.root;
-        if (!projectRoot) return;
-        await postJson("/api/rooms/scaffold", { projectRoot });
-        ingestFleet(await postJson("/api/refresh"));
-      });
+
+      if (textScaleInput instanceof HTMLInputElement) {
+        textScaleInput.addEventListener("input", () => {
+          syncTextScalePreview(textScaleInput.value);
+        });
+        textScaleInput.addEventListener("change", () => {
+          commitTextScale(textScaleInput.value);
+        });
+      }
+      if (debugTilesButton instanceof HTMLButtonElement) {
+        debugTilesButton.addEventListener("click", () => {
+          state.globalSceneSettings = {
+            ...state.globalSceneSettings,
+            debugTiles: !state.globalSceneSettings.debugTiles
+          };
+          applyGlobalSceneSettings();
+          saveGlobalSceneSettings();
+          render();
+        });
+      }
 
       if (!screenshotMode) {
         window.addEventListener("online", () => setConnection("reconnecting"));
@@ -4400,6 +6553,11 @@ export function renderClientScript({
           return;
         }
         if (isTypingTarget(event.target)) {
+          return;
+        }
+        if (event.key === "Escape" && state.settingsOpen) {
+          event.preventDefault();
+          setSettingsOpen(false);
           return;
         }
         if (event.key === "Escape" && state.workspaceFullscreen) {

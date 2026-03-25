@@ -30,17 +30,20 @@ A good iteration improves at least one of these:
 3. Increase event-level transparency so visible state is traceable to real Codex signals.
 4. Make the workstation prefab visually coherent and consistent.
 5. Preserve enough structure in the scene that busy workspaces still scan quickly.
+6. Move the browser map toward a retained 2D scene renderer instead of HTML subtree replacement.
 
 ## Known weak spots
 
 - Codex desktop session visibility may still be incomplete depending on app-server exposure.
 - Claude support still falls back to transcript inference when no project-local hook sidecars are configured.
+- OpenClaw support is currently workspace-path exact-match only, so broader OpenClaw workspaces do not yet project into per-repo office floors.
 - Cursor support currently covers official background agents only; it does not yet discover local Cursor sessions or Cursor-only workspaces by itself.
 - PixelOffice workstation composition still needs refinement and stricter prefab rules.
 - Most Codex event types now reach the snapshot as explicit events, but many of them still share the same notification/motion treatment.
 - Room empty states are still visually heavier than ideal.
 - Live movement is still simpler than the intended office-life simulation.
 - Map and terminal browser views still share some presentation assumptions that should diverge further.
+- The office map still renders through HTML markup; the grid/settings model is in place, but the Pixi migration is not done yet.
 
 ## Acceptance checks for future changes
 
@@ -58,10 +61,18 @@ A good iteration improves at least one of these:
 - verify active agents are visibly placed at workstations, not floating below them
 - verify a single active agent does not spawn an empty mirrored workstation
 - verify waiting/resting agents use the Rec Room instead of staying at desks
+- verify desk layout remains grid-derived and stable across live updates instead of repacking on ordinary state changes
+- verify a newly active agent takes a free desk instead of stealing an already-occupied stable seat from another live agent
+- verify resting/rec agents do not reshuffle seats on ordinary live updates
+- verify visual-only updates such as debug overlays do not trigger desk/recside movement
+- verify rec-strip furniture starts on the first floor-grid row and does not exceed 2 tiles of depth from the top band
+- verify global text scale changes hover/toast/map text without changing room geometry or desk assignment
 - verify approval, input-wait, file-change, command-run, and turn lifecycle states have clear visible notification paths
 - verify the browser session panel exposes the durable approval/input "needs you" queue
 - verify Claude-derived sessions are visibly marked as inferred in hover/session detail
 - verify Claude hook-backed sessions are visibly marked as typed rather than inferred when `.codex-agents/claude-hooks/<session-id>.jsonl` exists
+- verify OpenClaw gateway sessions appear only for projects whose normalized root matches the configured OpenClaw agent workspace
+- verify OpenClaw sessions preserve parent-child structure through the shared `parentThreadId` hierarchy
 - verify Cursor background agents appear only for repos whose normalized `remote.origin.url` matches the selected project
 - verify Cursor API-backed sessions are visibly marked as typed rather than inferred in hover/session detail
 
@@ -71,13 +82,18 @@ A good iteration improves at least one of these:
 - make started/completed/interrupted/failed turn phases visually distinct beyond shared toast styling
 - add direct approval/input action affordances from the browser queue back into Codex
 - decide whether Cursor local CLI/history is strong enough for an official local-session adapter
+- decide whether OpenClaw needs broader workspace containment rules beyond exact workspace-root equality
 - tighten the workstation prefab using only the intended PixelOffice station slices
 - improve side-facing avatar placement and interaction poses
 - add stronger state-specific animation for blocked, waiting, and validating work
 - refine empty-room presentation
 - improve SSE-driven movement so entry/exit paths feel intentional instead of abrupt
+- harden seat ownership and rec-seat stability so ordinary polling never creates a visible shuffle party
 - verify live toast styling remains readable when browser zoom is reduced
 - keep command-window aggregation readable when several commands arrive quickly for the same agent
+- move the office floor to a retained Pixi scene with stable entity ids, z-order, and incremental updates instead of `innerHTML` scene replacement
+- keep user-facing scene controls minimal and global, starting with text scale, while prefab sizing and spacing remain internal until furniture editing exists
+- finish translating the previous office look into the tile system so the retained scene feels like the established PixelOffice floor instead of temporary placeholder geometry
 
 ## Not the goal
 

@@ -8,9 +8,11 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_CURSOR_API_BASE_URL = "https://api.cursor.com";
 const DEFAULT_CURSOR_AGENT_LIMIT = 24;
+const CURSOR_API_PAGE_SIZE = 100;
 
 interface RawCursorListResponse {
   agents?: RawCursorAgent[];
+  nextCursor?: string | null;
 }
 
 interface RawCursorAgent {
@@ -23,6 +25,7 @@ interface RawCursorAgent {
   source?: {
     repository?: string;
     ref?: string;
+    prUrl?: string | null;
   };
   target?: {
     url?: string;
@@ -80,11 +83,42 @@ export function normalizeRepositoryUrl(input: string | null | undefined): string
     const protocol = url.protocol.toLowerCase();
     const normalizedProtocol =
       protocol === "ssh:" || protocol === "git:" ? "https:" : protocol;
-    const pathname = url.pathname.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
+    const pathname = normalizedRepositoryPathname(url.pathname);
     return `${normalizedProtocol}//${url.hostname.toLowerCase()}/${pathname}`.toLowerCase();
   } catch {
     return trimmed.replace(/\.git$/i, "").replace(/[\\/]+$/, "").toLowerCase();
   }
+}
+
+function normalizedRepositoryPathname(pathname: string): string {
+  const trimmed = pathname.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  const segments = trimmed.split("/").filter((segment) => segment.length > 0);
+  const githubPullIndex = segments.findIndex((segment) => segment === "pull" || segment === "pulls");
+  if (githubPullIndex === 2) {
+    return segments.slice(0, 2).join("/");
+  }
+
+  const bitbucketPullIndex = segments.findIndex((segment) => segment === "pull-requests");
+  if (bitbucketPullIndex === 2) {
+    return segments.slice(0, 2).join("/");
+  }
+
+  const gitlabMergeRequestIndex = segments.findIndex((segment) => segment === "merge_requests");
+  if (gitlabMergeRequestIndex >= 2) {
+    const repositorySegments =
+      segments[gitlabMergeRequestIndex - 1] === "-"
+        ? segments.slice(0, gitlabMergeRequestIndex - 1)
+        : segments.slice(0, gitlabMergeRequestIndex);
+    if (repositorySegments.length >= 2) {
+      return repositorySegments.join("/");
+    }
+  }
+
+  return trimmed;
 }
 
 export function cursorStatusToActivityState(status: string | null | undefined): ActivityState {
@@ -139,33 +173,105 @@ async function gitRemoteOriginUrl(projectRoot: string): Promise<string | null> {
   }
 }
 
+function cursorAuthHeader(apiKey: string, scheme: "basic" | "bearer"): string {
+  if (scheme === "basic") {
+    const token = Buffer.from(`${apiKey}:`, "utf8").toString("base64");
+    return `Basic ${token}`;
+  }
+  return `Bearer ${apiKey}`;
+}
+
+async function fetchCursorListPage(
+  apiKey: string,
+  cursor: string | null,
+  pageSize: number
+): Promise<RawCursorListResponse> {
+  const url = new URL("/v0/agents", cursorApiBaseUrl());
+  url.searchParams.set("limit", String(pageSize));
+  if (cursor) {
+    url.searchParams.set("cursor", cursor);
+  }
+
+  let firstFailure: Error | null = null;
+  for (const scheme of ["basic", "bearer"] as const) {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        Authorization: cursorAuthHeader(apiKey, scheme)
+      }
+    });
+
+    if (response.ok) {
+      return await response.json() as RawCursorListResponse;
+    }
+
+    const body = await response.text().catch(() => "");
+    const detail = body.trim();
+    const error = new Error(
+      detail.length > 0
+        ? `Cursor API ${response.status}: ${detail}`
+        : `Cursor API ${response.status}: ${response.statusText}`
+    );
+    if (firstFailure === null) {
+      firstFailure = error;
+    }
+
+    if (scheme === "basic" && (response.status === 401 || response.status === 403)) {
+      continue;
+    }
+    throw error;
+  }
+
+  throw firstFailure ?? new Error("Cursor API request failed");
+}
+
 async function listCursorBackgroundAgents(limit = cursorAgentLimit()): Promise<RawCursorAgent[]> {
   const apiKey = cursorApiKey();
   if (!apiKey) {
     return [];
   }
 
-  const url = new URL("/v0/agents", cursorApiBaseUrl());
-  url.searchParams.set("limit", String(limit));
+  const agents: RawCursorAgent[] = [];
+  let cursor: string | null = null;
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`
+  while (agents.length < limit) {
+    const pageSize = Math.min(CURSOR_API_PAGE_SIZE, limit - agents.length);
+    const parsed = await fetchCursorListPage(apiKey, cursor, pageSize);
+    const pageAgents = Array.isArray(parsed.agents) ? parsed.agents : [];
+    agents.push(...pageAgents);
+
+    const nextCursor = typeof parsed.nextCursor === "string" && parsed.nextCursor.trim().length > 0
+      ? parsed.nextCursor.trim()
+      : null;
+    if (!nextCursor || pageAgents.length === 0) {
+      break;
     }
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    const detail = body.trim();
-    throw new Error(
-      detail.length > 0
-        ? `Cursor API ${response.status}: ${detail}`
-        : `Cursor API ${response.status}: ${response.statusText}`
-    );
+    cursor = nextCursor;
   }
 
-  const parsed = await response.json() as RawCursorListResponse;
-  return Array.isArray(parsed.agents) ? parsed.agents : [];
+  return agents;
+}
+
+function cursorAgentRepositories(agent: Pick<RawCursorAgent, "source" | "target">): string[] {
+  const candidates = [
+    agent.source?.repository,
+    agent.source?.prUrl,
+    agent.target?.prUrl
+  ]
+    .map((value) => normalizeRepositoryUrl(value))
+    .filter((value): value is string => value !== null);
+  return [...new Set(candidates)];
+}
+
+export function cursorAgentMatchesRepository(
+  agent: Pick<RawCursorAgent, "source" | "target">,
+  repositoryUrl: string | null | undefined
+): boolean {
+  const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
+  if (normalizedRepository === null) {
+    return false;
+  }
+  return cursorAgentRepositories(agent).includes(normalizedRepository);
 }
 
 export async function loadCursorAgents(projectRoot: string, limit = cursorAgentLimit()): Promise<DashboardAgent[]> {
@@ -180,10 +286,7 @@ export async function loadCursorAgents(projectRoot: string, limit = cursorAgentL
   }
 
   const listedAgents = await listCursorBackgroundAgents(limit);
-  const matchingAgents = listedAgents.filter((agent) => {
-    const candidate = normalizeRepositoryUrl(agent.source?.repository);
-    return candidate !== null && candidate === repositoryUrl;
-  });
+  const matchingAgents = listedAgents.filter((agent) => cursorAgentMatchesRepository(agent, repositoryUrl));
 
   const agents: DashboardAgent[] = [];
   for (const agent of matchingAgents) {

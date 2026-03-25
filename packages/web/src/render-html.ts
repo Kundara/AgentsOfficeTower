@@ -1,6 +1,7 @@
 import { renderClientScript } from "./client-script";
 import { CLIENT_STYLES } from "./client-styles";
 import { PIXEL_OFFICE_EVENT_ICON_URLS, PIXEL_OFFICE_MANIFEST, PIXEL_OFFICE_THREAD_ITEM_ICON_URLS } from "./pixel-office";
+import { DEFAULT_GLOBAL_SCENE_SETTINGS, INTERNAL_SCENE_SETTINGS } from "./scene-config";
 import type { ServerOptions } from "./server-types";
 
 export function renderHtml(options: ServerOptions): string {
@@ -51,9 +52,40 @@ export function renderHtml(options: ServerOptions): string {
               <button id="map-view-button" data-view="map">Map</button>
               <button id="terminal-view-button" data-view="terminal">Terminal</button>
             </div>
-            <button id="refresh-button">Refresh</button>
-            <button id="preview-toasts-button">Preview Toasts</button>
-            <button id="scaffold-button">Scaffold Rooms XML</button>
+            <div class="settings-shell">
+              <button
+                id="settings-button"
+                class="toggle-button"
+                type="button"
+                data-action="toggle-settings"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="settings-popup"
+              >
+                Settings
+              </button>
+              <div id="settings-popup" class="settings-popup" role="dialog" aria-modal="false" aria-labelledby="settings-title" hidden>
+                <div class="settings-popup-header">
+                  <strong id="settings-title">Scene Settings</strong>
+                  <button id="settings-close-button" type="button" data-action="close-settings">Close</button>
+                </div>
+                <div class="settings-popup-body">
+                  <label class="text-scale-control" for="text-scale-input">
+                    <span class="muted">Text size</span>
+                    <input
+                      id="text-scale-input"
+                      type="range"
+                      min="${INTERNAL_SCENE_SETTINGS.minTextScale}"
+                      max="${INTERNAL_SCENE_SETTINGS.maxTextScale}"
+                      step="0.05"
+                      value="${DEFAULT_GLOBAL_SCENE_SETTINGS.textScale}"
+                    />
+                    <output id="text-scale-output">${DEFAULT_GLOBAL_SCENE_SETTINGS.textScale.toFixed(2)}x</output>
+                  </label>
+                  <button id="debug-tiles-button" class="toggle-button settings-toggle" type="button" aria-pressed="false">Debug Tiles</button>
+                </div>
+              </div>
+            </div>
             <div id="connection-pill" class="status-pill state-connecting">Connecting</div>
           </div>
         </div>
@@ -91,6 +123,8 @@ export function renderHtml(options: ServerOptions): string {
       </section>
     </div>
 
+    <script src="/vendor/pixi.min.js"></script>
+    <script src="/vendor/easystar.min.js"></script>
     <script>${renderClientScript({
       projectsJson,
       pixelOfficeJson,

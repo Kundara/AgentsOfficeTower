@@ -14,6 +14,7 @@ export const CLIENT_STYLES = `
         --accent-2: #f5b74f;
         --danger: #f06d5e;
         --tile: 24px;
+        --ui-text-scale: 1;
         --tower-scroll-y: 0px;
       }
 
@@ -24,6 +25,7 @@ export const CLIENT_STYLES = `
         min-height: 100vh;
         position: relative;
         color: var(--text);
+        font-size: calc(14px * var(--ui-text-scale));
         font-family: "IBM Plex Mono", "Cascadia Code", monospace;
         background:
           radial-gradient(circle at 20% 0%, rgba(75, 214, 159, 0.16), transparent 24%),
@@ -176,6 +178,79 @@ export const CLIENT_STYLES = `
         flex-wrap: wrap;
         align-items: center;
         justify-content: flex-end;
+      }
+
+      .settings-shell {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+      }
+
+      .settings-popup {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        z-index: 24;
+        width: min(320px, calc(100vw - 24px));
+        display: grid;
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--border-bright);
+        background:
+          linear-gradient(180deg, rgba(18, 28, 24, 0.98) 0%, rgba(12, 19, 17, 0.98) 100%);
+        box-shadow: 0 18px 40px rgba(0,0,0,0.32);
+      }
+
+      .settings-popup[hidden] {
+        display: none;
+      }
+
+      .settings-popup-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .settings-popup-body {
+        display: grid;
+        gap: 10px;
+      }
+
+      .text-scale-control {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border: 1px solid var(--border);
+        background: var(--panel-strong);
+        white-space: nowrap;
+      }
+
+      .text-scale-control input {
+        accent-color: var(--accent);
+      }
+
+      .text-scale-control output {
+        min-width: 3.8em;
+        text-align: right;
+        color: var(--text);
+      }
+
+      .settings-popup .text-scale-control {
+        width: 100%;
+        justify-content: space-between;
+        flex-wrap: wrap;
+      }
+
+      .settings-popup .text-scale-control input {
+        flex: 1 1 132px;
+        min-width: 132px;
+      }
+
+      .settings-toggle {
+        width: 100%;
+        text-align: left;
       }
 
       .view-toggle {
@@ -563,7 +638,102 @@ export const CLIENT_STYLES = `
         display: flex;
         align-items: flex-start;
         justify-content: center;
-        overflow: hidden;
+        overflow: visible;
+      }
+
+      .office-map-host {
+        position: relative;
+        width: 100%;
+        min-height: 520px;
+        overflow: visible;
+      }
+
+      .office-map-canvas {
+        position: absolute;
+        top: 0;
+      }
+
+      .office-map-canvas canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        image-rendering: pixelated;
+      }
+
+      .office-map-anchors {
+        position: absolute;
+        top: 0;
+        pointer-events: none;
+        overflow: visible;
+        z-index: 250;
+      }
+
+      .office-map-anchor {
+        position: absolute;
+        width: 2px;
+        height: 2px;
+        pointer-events: none;
+      }
+
+      .office-map-agent-hit {
+        position: absolute;
+        pointer-events: auto;
+        background: transparent;
+        z-index: 260;
+      }
+
+      .office-map-agent-hit:hover,
+      .office-map-agent-hit:focus-within {
+        z-index: 280;
+      }
+
+      .office-map-furniture-hit {
+        position: absolute;
+        pointer-events: auto;
+        background: transparent;
+        cursor: grab;
+      }
+
+      .office-map-furniture-hit:active {
+        cursor: grabbing;
+      }
+
+      .office-map-agent-hit .agent-hover {
+        left: 50%;
+        bottom: calc(100% + 2px);
+        width: min(340px, calc(100vw - 24px));
+        min-width: 260px;
+        max-width: 340px;
+        padding: 8px 10px;
+        font-size: calc(15px * var(--ui-text-scale));
+        line-height: 1.35;
+        z-index: 300;
+      }
+
+      .office-map-agent-hit .agent-hover-title {
+        font-size: calc(16px * var(--ui-text-scale));
+        margin-bottom: 4px;
+      }
+
+      .office-map-agent-hit .agent-hover-title strong {
+        font-size: calc(17px * var(--ui-text-scale));
+        line-height: 1.1;
+      }
+
+      .office-map-agent-hit .agent-hover-summary {
+        font-size: calc(13px * var(--ui-text-scale));
+        line-height: 1.35;
+      }
+
+      .office-map-agent-hit .agent-hover-meta {
+        margin-top: 5px;
+        font-size: calc(12px * var(--ui-text-scale));
+      }
+
+      .office-map-agent-hit:hover .agent-hover,
+      .office-map-agent-hit:focus-within .agent-hover {
+        opacity: 1;
+        transform: translate(-50%, 0);
       }
 
       .scene-notifications {
@@ -579,6 +749,7 @@ export const CLIENT_STYLES = `
         display: inline-flex;
         align-items: baseline;
         gap: 5px;
+        font-size: calc(12px * var(--ui-text-scale));
         max-width: 260px;
         padding: 2px 8px;
         border: 1px solid rgba(255,255,255,0.12);
@@ -660,6 +831,10 @@ export const CLIENT_STYLES = `
         color: #1d2c26;
         box-shadow: 1px 1px 0 rgba(13, 24, 20, 0.24);
         max-width: 208px;
+      }
+
+      .agent-toast.text-message-toast {
+        animation-duration: 4300ms;
       }
 
       .agent-toast.message-toast .agent-toast-title,
@@ -901,7 +1076,7 @@ export const CLIENT_STYLES = `
           linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
           linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px),
           linear-gradient(180deg, #102235, #0b1b2b 62%, #071522);
-        background-size: var(--tile) var(--tile);
+        background-size: var(--scene-tile, var(--tile)) var(--scene-tile, var(--tile));
         transform-origin: top left;
         will-change: transform;
       }
@@ -1378,6 +1553,7 @@ export const CLIENT_STYLES = `
         left: 50%;
         bottom: calc(100% + 4px);
         z-index: 9;
+        font-size: calc(12px * var(--ui-text-scale));
         width: min(196px, calc(100vw - 20px));
         min-width: 128px;
         max-width: 196px;
@@ -1727,6 +1903,7 @@ export const CLIENT_STYLES = `
       .tower-floor-body {
         position: relative;
         padding: 12px 16px 18px;
+        overflow: visible;
         background:
           linear-gradient(180deg, rgba(15, 40, 51, 0.84), rgba(8, 23, 31, 0.92));
       }
@@ -1901,6 +2078,16 @@ export const CLIENT_STYLES = `
       @media (max-width: 640px) {
         .page {
           padding: 12px;
+        }
+
+        .settings-shell {
+          width: 100%;
+        }
+
+        .settings-popup {
+          left: 0;
+          right: auto;
+          width: 100%;
         }
 
         .tower-floor-strip {

@@ -5,6 +5,7 @@ import { withAppServerClient } from "./app-server";
 import { loadClaudeAgents } from "./claude";
 import { listCloudTasks } from "./cloud";
 import { loadCursorAgents } from "./cursor";
+import { loadOpenClawAgents } from "./openclaw";
 import { loadFreshPresenceAgents } from "./presence";
 import { findRoomForPaths, loadRoomConfig } from "./room-config";
 import { isCurrentWorkloadAgent } from "./workload";
@@ -999,6 +1000,19 @@ export async function buildDashboardSnapshotFromState(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     notes.push(`Cursor background agents unavailable: ${message}`);
+  }
+
+  try {
+    const openClawAgents = await loadOpenClawAgents(projectRoot);
+    for (const openClawAgent of openClawAgents) {
+      agents.push({
+        ...openClawAgent,
+        roomId: findRoomForPaths(roomConfig, projectRoot, openClawAgent.paths)
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    notes.push(`OpenClaw gateway agents unavailable: ${message}`);
   }
 
   for (const agent of agents) {

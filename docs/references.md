@@ -24,23 +24,32 @@
 - [Automate workflows with hooks](https://code.claude.com/docs/en/automate-workflows-with-hooks)
   Quickstart examples for wiring command hooks and project-local hook scripts.
 
+## OpenClaw
+
+- [OpenClaw repository](https://github.com/openclaw/openclaw)
+  Primary upstream implementation and README for the Gateway, session model, and workspace configuration.
+- [OpenClaw ACP bridge](https://github.com/openclaw/openclaw/blob/main/docs.acp.md)
+  Clear explanation of Gateway-backed session routing, session keys such as `agent:main:main`, and the relationship between ACP sessions and Gateway sessions.
+
 ## Cursor
 
 - [Cursor Background Agents](https://docs.cursor.com/en/background-agents)
   Product-level overview for remote background agents, follow-ups, takeover, and supported model constraints.
-- [Cursor Background Agent API Overview](https://docs.cursor.com/background-agent/api/overview)
-  Official API entrypoint for listing agents, reading status, conversations, and webhook integration.
-- [Cursor List Agents](https://docs.cursor.com/background-agent/api/list-agents)
+- [Cursor Cloud Agents](https://cursor.com/docs/cloud-agent)
+  Current product overview for remote cloud agents, follow-ups, takeover, and supported model constraints.
+- [Cursor Cloud Agents API](https://cursor.com/docs/cloud-agent/api/endpoints)
+  Current API entrypoint for listing agents, reading status, conversations, webhooks, repositories, and model metadata.
+- [Cursor List Agents](https://cursor.com/docs/cloud-agent/api/endpoints)
   Primary endpoint for agent id, repo/ref, status, branch, summary, and target URLs.
-- [Cursor Agent Conversation](https://docs.cursor.com/background-agent/api/agent-conversation)
+- [Cursor Agent Conversation](https://cursor.com/docs/cloud-agent/api/endpoints)
   Official conversation-history endpoint for a single background agent.
-- [Cursor Webhooks](https://docs.cursor.com/background-agent/api/webhooks)
+- [Cursor Webhooks](https://cursor.com/docs/cloud-agent/api/webhooks)
   Status-change webhook contract and signing headers.
-- [Cursor List Models](https://docs.cursor.com/background-agent/api/list-models)
+- [Cursor List Models](https://cursor.com/docs/cloud-agent/api/endpoints)
   Supported model identifiers for background-agent creation.
-- [Cursor CLI](https://docs.cursor.com/cli/using)
+- [Cursor CLI](https://cursor.com/docs/cli/using)
   Official local CLI surface for listing and resuming prior Cursor Agent conversations.
-- [Cursor API Keys](https://docs.cursor.com/advanced/api-keys)
+- [Cursor API Keys](https://cursor.com/docs/advanced/api-keys)
   BYOK model and account-level API-key behavior.
 
 ## Visual / asset references

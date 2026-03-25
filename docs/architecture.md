@@ -14,7 +14,7 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](/mnt/f/AI/C
 
    Official docs describe `thread/start`, `thread/list`, `thread/read`, and a live notification stream for `turn/*`, `item/*`, approvals, command execution, and file changes. That makes it the best local integration surface for CLI, IDE, and app-originated threads.
 
-   In this codebase, that still means we need a runnable Codex executable. We prefer `codex` on `PATH`, allow `CODEX_CLI_PATH` overrides, and on macOS can fall back to the Codex app bundle binary. A desktop app install by itself is not automatically enough on every platform, and Windows+WSL setups also need a shared `CODEX_HOME` if the observer is expected to see Windows app sessions.
+   In this codebase, that still means we need a runnable Codex executable. We prefer `codex` on `PATH`, allow `CODEX_CLI_PATH` overrides, fall back to the macOS app bundle binary when present, and on Windows can extract the Store app's packaged `codex.exe` into a local cache and run that copy. When both WSL CLI and Windows app runtimes exist, `PATH` still decides unless the override is set.
 
    Source: [App Server](https://developers.openai.com/codex/app-server)
 
@@ -28,19 +28,23 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](/mnt/f/AI/C
 
    `~/.claude/projects/*.jsonl` is a usable secondary source for project discovery and recent Claude activity. It is not equivalent to Codex app-server: the data is transcript-like and requires inference. That makes it suitable as a best-effort adapter layer, not as the primary truth source.
 
-4. Cursor background agents
+4. OpenClaw gateway sessions
 
-   Cursor exposes an official background-agent API with account-level agent status, target URLs, conversation history, webhooks, and model listing. The current adapter matches those agents back onto the selected project through normalized git remote URLs, so it is official and typed, but still weaker than Codex local app-server visibility.
+   OpenClaw exposes an official Gateway control plane with agent-scoped sessions, session hierarchy, system presence, and agent workspace config. The current adapter treats that as a typed secondary source for session and workspace visibility, then maps configured agent workspaces back onto discovered office projects.
 
-5. Per-project room config
+5. Cursor cloud agents
+
+   Cursor exposes an official cloud-agent API with account-level agent status, target URLs, conversation history, webhooks, and model listing. The current adapter matches those agents back onto the selected project through normalized git remote URLs plus PR-backed repository URLs, so it is official and typed, but still weaker than Codex local app-server visibility.
+
+6. Per-project room config
 
    Each project can define its own spatial hierarchy in `.codex-agents/rooms.xml`. Rooms map to directory prefixes so the same session can move between rooms as its working files change.
 
-6. Per-project appearance roster
+7. Per-project appearance roster
 
    New sessions get a deterministic random appearance. Overrides are stored in `.codex-agents/agents.json`, which locks their look until changed.
 
-7. Codex subagent roles
+8. Codex subagent roles
 
    Codex ships with built-in subagents such as `default`, `worker`, and `explorer`, and custom agents can define `nickname_candidates` for more readable spawned names. The visual layer groups booths by the underlying role, while still showing the friendlier label when available.
 
@@ -114,6 +118,12 @@ Sources:
   - workstation-anchored file-change notifications for current agents, showing filename-first copy and available `+/-` line deltas
   - shared fleet-only sky backdrop with parallax pixel-cloud layers behind the tower, while individual rooms no longer paint their own cloud mural
 - hover/session detail surfaces for longer text instead of large scene overlays
+- browser map layout now derives from a tile-grid settings model instead of renderer-local pixel literals
+- internal scene settings define prefab geometry and spacing such as tile size, boss-booth size, desk-pod span, top-band depth, cubicle-group spacing, column spacing, and rec-strip depth
+- the scene tile is now a fixed `16px` unit in both normal and compact map modes so grid placement aligns with native PixelOffice asset sizing
+- global browser settings currently expose only text scale; it applies to hover/toast/map text but does not change room or prefab geometry
+- the retained browser map path now uses a persistent Pixi scene host plus HTML anchor overlays for toast positioning, so map updates can mutate scene entities without replacing the scene shell
+- routed avatar movement in the Pixi scene now uses a lightweight grid pathfinder against room occupancy instead of direct straight-line scene tweens
 
 ### Web package composition
 
@@ -231,6 +241,7 @@ The active office view currently favors an open station language over enclosed c
 
 - mirrored two-seat workstation pods define the primary desk language
 - workstation slots are pinned to a fixed floor grid instead of being repacked when new agents appear
+- workstation slot ownership should be sticky across incremental scene updates; a scene rerender or non-positional refresh must not discard prior slot memory
 - desk columns start around one-fifth of the room width, leaving room for a compact lead lane on the left when needed
 - each workstation column now uses a single visible cubicle stack with 3 tightly stacked workstation rows so active desks stay inside a standard room height
 - role grouping prefers to keep the same agent types inside the same visible workstation stack before spilling into a new column
@@ -246,11 +257,16 @@ The active office view currently favors an open station language over enclosed c
 - chairs and seated reach points sit slightly outward from the desk so the monitor relationship reads cleanly
 - workstation computers currently use the single complete desk cut, avoiding the broken narrow pseudo-monitor asset
 - waiting and resting agents move to an integrated wall-side rec strip instead of a detached room
+- rec-room seating should be keyed by stable agent identity and furniture-relative sofa slots, not recomputed purely from per-render sort order
 - the browser view no longer exposes a current/history toggle; it always shows current agents plus 4 recent lead sessions
 - rec facilities sit on the same raised upper floor band as the wall-side walkway, not in a floating inset
 - the rec strip combines vending, counter, doors, clock, plants, sofa, and shelf props inside the same scene
 - long task titles stay in hover cards and the session panel instead of being drawn over the map
 - the floor is restored to the blue office-strip language from the reference art, including an upper wall-side walkway for rec facilities
+- layout constants are now expressed as internal tile-grid settings instead of only pixel literals, so boss booths, desk columns, rec-strip depth, and inter-cubicle spacing all derive from a single floor grid
+- global viewer settings are separate from internal scene settings; the first user-facing control is text scale, clamped from `0.75x` to `2.00x`, while prefab sizing and spacing stay internal
+- the current browser renderer still emits HTML, but the scene data now carries explicit grid metadata so a Pixi-based retained renderer can replace the DOM scene incrementally instead of rebuilding by `innerHTML`
+- browser placement rules are intentionally a little stickier than raw workload freshness, because a live local thread should not visually bounce desk -> rec -> desk during short polling gaps
 
 ## Secondary Claude support
 
@@ -266,15 +282,28 @@ This is useful because it broadens observability across the machine, but it shou
 
 ## Secondary Cursor support
 
-Cursor support currently uses the official background-agent API instead of local transcript scraping:
+Cursor support currently uses the official cloud-agent API instead of local transcript scraping:
 
-- the adapter calls Cursor's account-level background-agent API when `CURSOR_API_KEY` is configured
-- agents are matched to the selected project by normalized git `remote.origin.url`
+- the adapter calls Cursor's account-level cloud-agent API when `CURSOR_API_KEY` is configured
+- agents are matched to the selected project by normalized git `remote.origin.url`, `source.repository`, or PR-backed repository URLs when Cursor reports `source.prUrl` or `target.prUrl`
 - Cursor agents are rendered in the same room and session model with `confidence = typed`
 - the current integration surfaces typed status, summary, branch, repo, and target URL data
 - Cursor does not currently provide Codex-style local live thread subscriptions here, so the integration is closer to a richer cloud-task feed than to local Codex app-server visibility
 
 This makes Cursor a useful third official source without pretending that it offers Codex-grade local observability.
+
+## Secondary OpenClaw support
+
+OpenClaw support uses the official Gateway session model instead of trying to reinterpret OpenClaw as a task board:
+
+- the adapter connects to the OpenClaw Gateway when `OPENCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` is configured
+- it reads typed session rows from `sessions.list` and typed workspace config from `config.get`
+- it maps OpenClaw agent workspaces onto office projects by normalized workspace path equality
+- parent and child OpenClaw sessions are carried through `parentThreadId` and depth so delegated session trees stay visible
+- the current integration is read-only and surfaces session/workspace presence, not OpenClaw action controls
+
+This keeps OpenClaw aligned with its real abstraction boundary, which is sessions inside configured agent workspaces rather than project tasks.
+
 
 ## Asset pipeline
 

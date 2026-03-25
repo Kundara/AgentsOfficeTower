@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, release } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { promisify } from "node:util";
@@ -17,6 +17,7 @@ export function buildCodexCommandCandidates(input: {
   platform: NodeJS.Platform;
   codexCliPath?: string | null;
   macAppBundlePaths?: string[];
+  windowsAppPath?: string | null;
 }): CodexCommandCandidate[] {
   const candidates: CodexCommandCandidate[] = [];
   const seen = new Set<string>();
@@ -42,7 +43,31 @@ export function buildCodexCommandCandidates(input: {
     }
   }
 
+  pushCandidate(input.windowsAppPath, "Codex Windows app bundle");
+
   return candidates;
+}
+
+export function isWslLikeEnvironment(): boolean {
+  if (platform !== "linux") {
+    return false;
+  }
+
+  const osRelease = release().toLowerCase();
+  return Boolean(process.env.WSL_DISTRO_NAME)
+    || osRelease.includes("microsoft")
+    || osRelease.includes("wsl");
+}
+
+export function windowsPathToWslPath(windowsPath: string): string {
+  const trimmed = windowsPath.trim();
+  const driveMatch = /^([A-Za-z]):\\(.*)$/.exec(trimmed);
+  if (!driveMatch) {
+    return trimmed.replace(/\\/g, "/");
+  }
+
+  const [, drive, tail] = driveMatch;
+  return `/mnt/${drive.toLowerCase()}/${tail.replace(/\\/g, "/")}`;
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {
@@ -56,6 +81,7 @@ async function isExecutable(filePath: string): Promise<boolean> {
 
 export async function listCodexCommandCandidates(): Promise<CodexCommandCandidate[]> {
   const macAppBundlePaths: string[] = [];
+  let windowsAppPath: string | null = null;
 
   if (platform === "darwin") {
     const bundleCandidates = [
@@ -70,11 +96,41 @@ export async function listCodexCommandCandidates(): Promise<CodexCommandCandidat
     }
   }
 
+  if (platform === "win32" || isWslLikeEnvironment()) {
+    windowsAppPath = await resolveWindowsAppCodexPath().catch(() => null);
+  }
+
   return buildCodexCommandCandidates({
     platform,
     codexCliPath: process.env.CODEX_CLI_PATH,
-    macAppBundlePaths
+    macAppBundlePaths,
+    windowsAppPath
   });
+}
+
+async function resolveWindowsAppCodexPath(): Promise<string | null> {
+  const script = [
+    "$pkg = Get-AppxPackage OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1",
+    "if (-not $pkg) { return }",
+    "$src = Join-Path $pkg.InstallLocation 'app\\resources'",
+    "$cacheRoot = Join-Path $env:LOCALAPPDATA ('CodexAgentsOffice\\cache\\windows-store\\' + $pkg.Version)",
+    "$dst = Join-Path $cacheRoot 'resources'",
+    "$exe = Join-Path $dst 'codex.exe'",
+    "if (-not (Test-Path $exe)) {",
+    "  New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null",
+    "  if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }",
+    "  Copy-Item $src $dst -Recurse",
+    "}",
+    "[Console]::Out.WriteLine($exe)"
+  ].join("; ");
+
+  const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script]);
+  const windowsPath = stdout.trim();
+  if (!windowsPath) {
+    return null;
+  }
+
+  return isWslLikeEnvironment() ? windowsPathToWslPath(windowsPath) : windowsPath;
 }
 
 function formatSpawnError(error: unknown): string {
@@ -92,7 +148,10 @@ function codexResolutionHint(): string {
     return "Install Codex CLI, set CODEX_CLI_PATH, or install the Codex app in /Applications.";
   }
   if (platform === "win32") {
-    return "Install Codex CLI or set CODEX_CLI_PATH to a runnable Codex executable.";
+    return "Install Codex CLI, install the Codex Windows app, or set CODEX_CLI_PATH to a runnable Codex executable.";
+  }
+  if (isWslLikeEnvironment()) {
+    return "Install Codex CLI, install the Codex Windows app, or set CODEX_CLI_PATH to a runnable Codex executable.";
   }
   return "Install Codex CLI or set CODEX_CLI_PATH to a runnable Codex executable.";
 }

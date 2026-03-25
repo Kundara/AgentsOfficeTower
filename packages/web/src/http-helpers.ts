@@ -25,6 +25,9 @@ function contentTypeForPath(filePath: string): string {
       return "application/json; charset=utf-8";
     case ".html":
       return "text/html; charset=utf-8";
+    case ".js":
+    case ".mjs":
+      return "text/javascript; charset=utf-8";
     case ".ase":
     case ".aseprite":
       return "application/octet-stream";
@@ -45,6 +48,27 @@ export async function sendStaticAsset(
     return;
   }
 
+  try {
+    const body = await readFile(filePath);
+    response.writeHead(200, {
+      "content-type": contentTypeForPath(filePath),
+      "cache-control": "public, max-age=3600"
+    });
+    if (method === "HEAD") {
+      response.end();
+      return;
+    }
+    response.end(body);
+  } catch {
+    notFound(response);
+  }
+}
+
+export async function sendAbsoluteFileAsset(
+  response: ServerResponse,
+  filePath: string,
+  method: string
+): Promise<void> {
   try {
     const body = await readFile(filePath);
     response.writeHead(200, {

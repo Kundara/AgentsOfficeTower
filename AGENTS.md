@@ -26,6 +26,8 @@ The project goal is not generic chat replay. It is live workload visibility:
   CLI entrypoints for watch, snapshot, room scaffolding, Aseprite inspection, and web hosting.
 - `packages/vscode`
   VS Code activity-bar integration.
+- `CHANGELOG.md`
+  Versioned record of notable additions, fixes, and behavior changes.
 - `docs/architecture.md`
   High-level system design and current rendering model.
 - `docs/integration-hooks.md`
@@ -57,6 +59,8 @@ The project goal is not generic chat replay. It is live workload visibility:
   Workstations may reveal on entry, but exits should disappear cleanly without a lingering blink.
 - PixelOffice art should be assembled from the asset sheet intentionally.
   Do not use the example scene PNG as a runtime collage substitute.
+- Keep `CHANGELOG.md` current for notable additions, fixes, compatibility changes, and behavior shifts.
+  Do not treat formatting-only churn, local IDE noise, or generated artifacts as changelog-worthy unless shipped behavior changed.
 
 ## Commands
 
@@ -154,8 +158,17 @@ node packages/web/dist/server.js --port 4181
 
 When architecture or behavior changes materially, update:
 
+- `CHANGELOG.md`
 - `README.md`
 - `docs/architecture.md`
 - `docs/integration-hooks.md` if hook usage or representation changed
 - `docs/self-development.md` if priorities changed
 - `docs/references.md` if a new external source shaped the implementation
+
+## Changelog expectations
+
+- Keep entries under the current root `package.json` version until the user explicitly asks for a version bump.
+- Do not bump versions autonomously.
+- Seed changelog entries from the real Git change set, not guessed summaries.
+- Prefer `Added`, `Changed`, `Fixed`, `Removed`, and `Docs` headings as needed, and skip empty sections.
+- Focus on shipped behavior, compatibility, product surface changes, and meaningful documentation changes.
