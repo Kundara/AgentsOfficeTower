@@ -2027,6 +2027,7 @@ export function renderClientScript({
         const workstationHeight = computerSprite.h * workstationScale;
         const chairWidth = chair.w * chairScale;
         const chairHeight = chair.h * chairScale;
+        const sceneTile = sceneTileSize(compact);
         const centerX = Math.round(boothWidth / 2);
         const innerInset = compact ? 4 : 6;
         const centerInset = options.sharedCenter ? 0 : innerInset;
@@ -2037,7 +2038,7 @@ export function renderClientScript({
         const deskX = mirrored
           ? Math.max(deskEdgeClamp, Math.round(workstationX + workstationWidth * 0.54 - deskWidth * 0.52))
           : Math.max(deskEdgeClamp, Math.round(workstationX + workstationWidth * 0.48 - deskWidth * 0.5));
-        const deskY = Math.round(boothHeight - deskHeight - (compact ? 11 : 13));
+        const deskY = Math.round(boothHeight - deskHeight - (compact ? 11 : 13) + sceneTile);
         const workstationY = Math.round(deskY - workstationHeight * (compact ? 0.2 : 0.18));
         const chairOutset = compact ? 7 : 10;
         const chairLift = compact ? 1 : 2;
@@ -2082,7 +2083,6 @@ export function renderClientScript({
         })();
         const absoluteCellX = Math.round(options.absoluteX ?? x);
         const absoluteCellY = Math.round(options.absoluteY ?? y);
-        const sceneTile = sceneTileSize(compact);
         const stationBoundsX = mirrored
           ? absoluteCellX + Math.round(deskX)
           : absoluteCellX + Math.round(deskX + deskWidth - sceneTile * 3);
@@ -2091,9 +2091,9 @@ export function renderClientScript({
         const anchorY = absoluteCellY + Math.round(boothHeight * 0.72);
         const visual = {
           shell: [
-            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, { flipX: mirrored }),
-            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, { flipX: mirrored }),
-            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, { flipX: mirrored })
+            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, { flipX: mirrored, enteringReveal: options.enteringReveal === true }),
+            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, { flipX: mirrored, enteringReveal: options.enteringReveal === true }),
+            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, { flipX: mirrored, enteringReveal: options.enteringReveal === true })
           ],
           glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
             ? {
@@ -2293,6 +2293,7 @@ export function renderClientScript({
         const workstationHeight = computerSprite.h * workstationScale;
         const chairWidth = chair.w * chairScale;
         const chairHeight = chair.h * chairScale;
+        const sceneTile = sceneTileSize(compact);
         const centerX = Math.round(boothWidth / 2);
         const innerInset = compact ? 4 : 6;
         const centerInset = options.sharedCenter ? 0 : innerInset;
@@ -2303,7 +2304,7 @@ export function renderClientScript({
         const deskX = mirrored
           ? Math.max(deskEdgeClamp, Math.round(workstationX + workstationWidth * 0.54 - deskWidth * 0.52))
           : Math.max(deskEdgeClamp, Math.round(workstationX + workstationWidth * 0.48 - deskWidth * 0.5));
-        const deskY = Math.round(boothHeight - deskHeight - (compact ? 11 : 13));
+        const deskY = Math.round(boothHeight - deskHeight - (compact ? 11 : 13) + sceneTile);
         const workstationY = Math.round(deskY - workstationHeight * (compact ? 0.2 : 0.18));
         const chairOutset = compact ? 7 : 10;
         const chairLift = compact ? 1 : 2;
@@ -3348,6 +3349,7 @@ export function renderClientScript({
                   mirrored: index === 1,
                   lead: false,
                   slotId: entry.slot.id,
+                  enteringReveal: enteringAgentKeys.has(agentKey(snapshot.projectRoot, agent)),
                   absoluteX: pod.x + cellX,
                   absoluteY: pod.y
                 }
@@ -3418,6 +3420,7 @@ export function renderClientScript({
               {
                 mirrored: false,
                 slotId: entry.slot.id,
+                enteringReveal: enteringAgentKeys.has(agentKey(snapshot.projectRoot, entry.agent)),
                 absoluteX: officeX + cellX,
                 absoluteY: officeY
               }
@@ -3748,11 +3751,44 @@ export function renderClientScript({
                 }
                 return;
               }
+              if (entry.kind === "blink") {
+                const duration = Number(entry.durationMs) || 140;
+                const elapsed = now - Number(entry.startedAt || now);
+                const phase = elapsed <= 0
+                  ? 0
+                  : elapsed >= duration
+                    ? 4
+                    : Math.min(4, Math.floor((elapsed / duration) * 5));
+                const visible = phase === 1 || phase === 3 || phase >= 4;
+                (entry.nodes || []).forEach((node) => {
+                  if (!node) {
+                    return;
+                  }
+                  node.visible = visible;
+                });
+                return;
+              }
               if (entry.kind === "bob") {
                 entry.sprite.y = entry.baseY + Math.round(Math.sin((now + entry.phase) / 220) * 1);
               }
             });
-            renderer.animatedSprites = renderer.animatedSprites.filter((entry) => !entry.exiting || entry.sprite.alpha > 0.02);
+            renderer.animatedSprites = renderer.animatedSprites.filter((entry) => {
+              if (!entry) {
+                return false;
+              }
+              if (entry.kind === "blink") {
+                const done = now - Number(entry.startedAt || now) >= Number(entry.durationMs || 140);
+                if (done) {
+                  (entry.nodes || []).forEach((node) => {
+                    if (node) {
+                      node.visible = true;
+                    }
+                  });
+                }
+                return !done;
+              }
+              return !entry.exiting || entry.sprite.alpha > 0.02;
+            });
             if (notifications.length > 0 && renderer.animatedSprites.some((entry) => entry && entry.kind === "motion")) {
               renderNotifications();
             }
@@ -4158,6 +4194,9 @@ export function renderClientScript({
             sprite.x += snappedWidth;
           }
           sprite.zIndex = definition.z || 5;
+          if (!screenshotMode && definition.enteringReveal === true) {
+            sprite.visible = false;
+          }
           renderer.root.addChild(sprite);
           return sprite;
         }
@@ -4480,9 +4519,14 @@ export function renderClientScript({
 
         model.desks.forEach((desk) => {
           const deskNodes = [];
+          const enteringRevealNodes = [];
           desk.shell.forEach((item) => {
             if (item.kind === "sprite") {
-              deskNodes.push(addSpriteNode(item));
+              const node = addSpriteNode(item);
+              deskNodes.push(node);
+              if (!screenshotMode && item.enteringReveal === true) {
+                enteringRevealNodes.push(node);
+              }
               return;
             }
             if (item.kind === "glow") {
@@ -4490,10 +4534,22 @@ export function renderClientScript({
                 .roundRect(item.x, item.y, item.width, item.height, 3)
                 .fill({ color: 0x4bd69f, alpha: 0.24 });
               glow.zIndex = item.z || 10;
+              if (!screenshotMode && item.enteringReveal === true) {
+                glow.visible = false;
+                enteringRevealNodes.push(glow);
+              }
               renderer.root.addChild(glow);
               deskNodes.push(glow);
             }
           });
+          if (enteringRevealNodes.length > 0) {
+            renderer.animatedSprites.push({
+              kind: "blink",
+              nodes: enteringRevealNodes,
+              startedAt: performance.now(),
+              durationMs: 140
+            });
+          }
 
           const deskFocusKeys = [];
           desk.agents.forEach((agent) => {
@@ -4514,6 +4570,7 @@ export function renderClientScript({
 
         model.offices.forEach((office) => {
           const officeNodes = [];
+          const enteringRevealNodes = [];
           if (state.globalSceneSettings.debugTiles) {
             addDebugBounds(office.x, office.y, office.width, office.height, 0xff8d4d, tileBoundsLabel(office.width, office.height, model.tile));
           }
@@ -4534,7 +4591,11 @@ export function renderClientScript({
 
           office.shell.forEach((item) => {
             if (item.kind === "sprite") {
-              officeNodes.push(addSpriteNode(item));
+              const node = addSpriteNode(item);
+              officeNodes.push(node);
+              if (!screenshotMode && item.enteringReveal === true) {
+                enteringRevealNodes.push(node);
+              }
               return;
             }
             if (item.kind === "glow") {
@@ -4542,10 +4603,22 @@ export function renderClientScript({
                 .roundRect(item.x, item.y, item.width, item.height, 3)
                 .fill({ color: 0x4bd69f, alpha: 0.24 });
               glow.zIndex = item.z || 10;
+              if (!screenshotMode && item.enteringReveal === true) {
+                glow.visible = false;
+                enteringRevealNodes.push(glow);
+              }
               renderer.root.addChild(glow);
               officeNodes.push(glow);
             }
           });
+          if (enteringRevealNodes.length > 0) {
+            renderer.animatedSprites.push({
+              kind: "blink",
+              nodes: enteringRevealNodes,
+              startedAt: performance.now(),
+              durationMs: 140
+            });
+          }
 
           if (office.badgeLabel) {
             const badgeBg = new PIXI.Graphics()

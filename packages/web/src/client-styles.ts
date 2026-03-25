@@ -1228,7 +1228,7 @@ export const CLIENT_STYLES = `
       }
 
       .cubicle-cell.entering .desk-shell {
-        animation: workstation-spawn 180ms steps(1, end) both;
+        animation: workstation-spawn 110ms steps(1, end) both;
       }
 
       .cubicle-cell.departing .desk-shell {
@@ -2004,10 +2004,10 @@ export const CLIENT_STYLES = `
 
       @keyframes workstation-spawn {
         0% { opacity: 0; }
-        16% { opacity: 1; }
-        32% { opacity: 0; }
-        48% { opacity: 1; }
-        64% { opacity: 0; }
+        20% { opacity: 1; }
+        40% { opacity: 0; }
+        60% { opacity: 1; }
+        80% { opacity: 0; }
         100% { opacity: 1; }
       }
 
