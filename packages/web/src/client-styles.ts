@@ -780,7 +780,6 @@ export const CLIENT_STYLES = `
         box-shadow:
           0 6px 14px rgba(0,0,0,0.26),
           inset 0 0 0 1px rgba(255,255,255,0.04);
-        animation: none;
         transform: translate(-50%, calc(-100% - 5px));
       }
 
@@ -907,6 +906,22 @@ export const CLIENT_STYLES = `
         overflow: hidden;
         text-overflow: ellipsis;
         max-width: 194px;
+      }
+
+      .agent-toast-line.with-stats {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        max-width: 208px;
+      }
+
+      .agent-toast-line-text {
+        min-width: 0;
+        flex: 1 1 auto;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .agent-toast-window-bar {
@@ -1040,11 +1055,11 @@ export const CLIENT_STYLES = `
       @keyframes agent-toast-float {
         0% {
           opacity: 0;
-          transform: translate(-50%, calc(-78% - 1px)) scale(0.94);
+          transform: translate(-50%, calc(-100% - 6px)) scale(0.94);
         }
         12% {
           opacity: 1;
-          transform: translate(-50%, calc(-100% - 10px)) scale(1);
+          transform: translate(-50%, calc(-112% - 12px)) scale(1);
         }
         78% {
           opacity: 1;

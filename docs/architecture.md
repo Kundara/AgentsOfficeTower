@@ -115,7 +115,7 @@ Sources:
   - PixelOffice art served from `/assets/pixel-office/...`
   - auto-generated room activity based on the currently mapped agent set
   - repeated workstation rows for repeated Codex agent roles
-  - workstation-anchored file-change notifications for current agents, showing filename-first copy and available `+/-` line deltas
+  - agent-anchored file-change notifications for current agents, showing filename-first copy and available `+/-` line deltas
   - shared fleet-only sky backdrop with parallax pixel-cloud layers behind the tower, while individual rooms no longer paint their own cloud mural
 - hover/session detail surfaces for longer text instead of large scene overlays
 - browser map layout now derives from a tile-grid settings model instead of renderer-local pixel literals
@@ -142,7 +142,9 @@ The web package now separates transport, lifecycle, and rendering concerns inste
 - `packages/web/src/render-html.ts`
   Builds the HTML shell and injects the browser assets.
 - `packages/web/src/client-script.ts`
-  Holds the browser-side office/terminal renderer and live update client.
+  Holds the browser-side office/terminal renderer, scene state wiring, and live update client.
+- `packages/web/src/toast-script.ts`
+  Holds browser-side toast queueing, stacking, timing, preview, and DOM rendering so notification behavior does not stay embedded in the main renderer script.
 - `packages/web/src/client-styles.ts`
   Holds the browser CSS.
 - `packages/web/src/http-helpers.ts`
@@ -215,7 +217,9 @@ Current mapping:
 - read-only shell inspection actions
   short summary toasts such as `Read workload.ts` or `Exploring 2 files`, instead of replaying the full shell command string
 - `fileChange`
-  workstation-anchored create / edit / delete / move toasts, with filename-first copy, optional `+/-` line deltas, and image preview when possible
+  agent-anchored create / edit / delete / move toasts, with filename-first copy, optional `+/-` line deltas, and image preview when possible
+- shared toast stack model
+  command and file-change toasts now use the same stacking and lifetime path, while preserving their distinct visual shells
 - `turn/*`
   turn started / finished / interrupted / failed status transitions
 - `webSearch`

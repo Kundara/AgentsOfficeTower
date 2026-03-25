@@ -22,6 +22,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Updated the main docs to describe the new grid-first renderer direction, minimal viewer controls, and the Windows Codex runtime fallback path.
 - Moved scene controls into a toggleable settings popup in the web header, removing the manual refresh and rooms scaffold actions from the main toolbar and hiding the toast preview trigger.
 - Changed the scene text-size slider to apply on release instead of during drag so the settings popup stays stable while adjusting scale.
+- Extracted browser toast queueing, stacking, preview, and DOM rendering from the main client script into a dedicated `toast-script` module.
 
 ### Fixed
 
@@ -29,3 +30,6 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed Codex runtime discovery on Windows and Windows+WSL environments where the CLI is absent but the Codex desktop app is installed.
 - Improved Cursor agent loading compatibility by tolerating auth scheme differences and multi-page API responses.
 - Extended text message toast lifetime by 1 second without changing other toast types.
+- Fixed stacked toast behavior so file-change toasts append new rows into the active toast body and both file-change and command toasts restart their upward float when new stacked content extends their lifetime.
+- Fixed text-message toasts so they spawn from the same agent-head anchor as other agent toasts instead of starting from workstation height.
+- Removed the generic `OK` speech bubble from idle and validating avatars so the office scene does not imply a separate approval or success state that is not otherwise modeled.
