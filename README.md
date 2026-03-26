@@ -32,6 +32,7 @@ Browser office view, terminal snapshot, and VS Code panel for current Codex, Cla
 | Codex app-server | V | V | V | V | V |
 | Claude Agent SDK + hooks | V | basic | V | basic | X |
 | Claude local transcripts only | V | inferred | X | X | X |
+| Cursor local workspace state | V | inferred | X | X | X |
 | Cursor cloud agents | V | cloud | X | basic | V |
 | OpenClaw gateway | V | basic | X | basic | X |
 
@@ -57,7 +58,8 @@ That bootstraps the workspace if needed, rebuilds, and starts the web server on 
 - Codex CLI or Codex app for the strongest local visibility
 - Claude local sessions for passive Claude visibility
 - Claude hooks or Agent SDK bridge for stronger typed Claude visibility
-- `CURSOR_API_KEY` for Cursor cloud-agent visibility
+- an installed Cursor app for inferred local Cursor visibility from workspace storage and logs
+- `CURSOR_API_KEY` or a saved Cursor API key in the web Settings popup for Cursor cloud-agent visibility
 - OpenClaw gateway access for OpenClaw visibility
 
 ### Run the web view
@@ -68,6 +70,8 @@ npm start
 
 Open [http://127.0.0.1:4181](http://127.0.0.1:4181).
 
+Local Cursor workspace sessions are inferred automatically when Cursor has opened the repo on this machine. For Cursor background-agent visibility, open `Settings` in the web header and save a Cursor API key once. The server stores that key in a machine-local app settings file outside the repo, and a process-level `CURSOR_API_KEY` still overrides the saved value when both are present.
+
 Fleet mode is the default. For a focused single-project run:
 
 ```bash
@@ -76,11 +80,12 @@ npm start -- /abs/project/path --port 4181
 
 To join a shared PartyKit room from the browser, open `Settings` and fill in:
 
+- `Sharing`: toggle shared-room sync on or off without clearing the saved room credentials
 - `Host`: your PartyKit deployment host such as `your-app.partykit.dev`
 - `Room`: a shared room name such as `team/project-name`
 - `Nickname`: an optional 12-character label shown on your remote agents
 
-The browser publishes all tracked workspace activity into that room and only renders remote workspace activity whose workspace name also exists locally.
+That room is the shared space. Anyone who enters the same `Host` and `Room` joins the same live sync channel. If saved credentials exist, sharing defaults to on until you toggle it off. The browser publishes all tracked workspace activity into that room and only renders remote workspace activity whose workspace name also exists locally.
 
 Quick PartyKit hosting path:
 

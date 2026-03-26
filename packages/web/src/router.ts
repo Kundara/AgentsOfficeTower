@@ -133,6 +133,32 @@ async function handleMultiplayerStatusRoute(context: RequestContext): Promise<bo
   return true;
 }
 
+async function handleIntegrationSettingsRoute(context: RequestContext): Promise<boolean> {
+  if (context.url.pathname !== "/api/settings/integrations") {
+    return false;
+  }
+
+  if (matchesMethod(context, "GET")) {
+    sendJson(context.response, 200, context.service.getIntegrationSettings());
+    return true;
+  }
+
+  if (matchesMethod(context, "POST")) {
+    const payload = await readJsonBody(context.request);
+    const rawCursorApiKey = payload.cursorApiKey;
+    if (rawCursorApiKey !== null && typeof rawCursorApiKey !== "string" && typeof rawCursorApiKey !== "undefined") {
+      sendJson(context.response, 400, { error: "cursorApiKey must be a string or null" });
+      return true;
+    }
+
+    const cursorApiKey = typeof rawCursorApiKey === "string" ? rawCursorApiKey : null;
+    sendJson(context.response, 200, await context.service.setCursorApiKey(cursorApiKey));
+    return true;
+  }
+
+  return false;
+}
+
 async function handleProjectFileRoute(context: RequestContext): Promise<boolean> {
   if (!matchesMethod(context, "GET", "HEAD") || context.url.pathname !== "/api/project-file") {
     return false;
@@ -207,6 +233,7 @@ const ROUTES: RouteHandler[] = [
   handleFleetRoute,
   handleServerMetaRoute,
   handleMultiplayerStatusRoute,
+  handleIntegrationSettingsRoute,
   handleProjectFileRoute,
   handleEventsRoute,
   handleAppearanceRoute,

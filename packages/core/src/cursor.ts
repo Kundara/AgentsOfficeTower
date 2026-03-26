@@ -1,14 +1,92 @@
 import { execFile } from "node:child_process";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
 import { ensureAgentAppearance } from "./appearance";
-import type { ActivityState, DashboardAgent } from "./types";
+import { getStoredCursorApiKeySync } from "./app-settings";
+import { canonicalizeProjectPath, projectLabelFromRoot, sameProjectPath } from "./project-paths";
+import type { ActivityState, AgentActivityEvent, DashboardAgent, DashboardEvent } from "./types";
 
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_CURSOR_API_BASE_URL = "https://api.cursor.com";
 const DEFAULT_CURSOR_AGENT_LIMIT = 24;
 const CURSOR_API_PAGE_SIZE = 100;
+const DEFAULT_CURSOR_LOCAL_SESSION_LIMIT = 12;
+const CURSOR_LOCAL_ACTIVE_WINDOW_MS = 2 * 60 * 1000;
+const CURSOR_LOCAL_DONE_WINDOW_MS = 15 * 60 * 1000;
+const CURSOR_LOCAL_EVENT_WINDOW_MS = 2 * 60 * 1000;
+
+interface CursorWorkspaceEntry {
+  id: string;
+  root: string;
+  label: string;
+  stateFilePath: string;
+  backupFilePath: string;
+  updatedAtMs: number;
+}
+
+interface CursorComposerSummary {
+  composerId: string;
+  name?: string;
+  subtitle?: string;
+  createdAt?: number;
+  lastUpdatedAt?: number;
+  unifiedMode?: string;
+  filesChangedCount?: number;
+  totalLinesAdded?: number;
+  totalLinesRemoved?: number;
+  hasBlockingPendingActions?: boolean;
+  isArchived?: boolean;
+  createdOnBranch?: string;
+  activeBranch?: {
+    branchName?: string;
+    lastInteractionAt?: number;
+  };
+  branches?: Array<{
+    branchName?: string;
+    lastInteractionAt?: number;
+  }>;
+}
+
+interface CursorComposerData {
+  allComposers?: CursorComposerSummary[];
+  selectedComposerIds?: string[];
+  lastFocusedComposerIds?: string[];
+}
+
+interface CursorGenerationEntry {
+  unixMs?: number;
+  generationUUID?: string;
+  type?: string;
+  textDescription?: string;
+}
+
+interface CursorPromptEntry {
+  text?: string;
+  commandType?: number;
+}
+
+interface CursorBackgroundComposerData {
+  cachedSelectedGitState?: {
+    ref?: string;
+    continueRef?: string;
+  };
+}
+
+interface CursorLocalWorkspaceState {
+  composerData: CursorComposerData | null;
+  prompts: CursorPromptEntry[];
+  generations: CursorGenerationEntry[];
+  backgroundComposer: CursorBackgroundComposerData | null;
+}
+
+interface CursorAgentLoopState {
+  active: boolean;
+  updatedAtMs: number | null;
+}
 
 interface RawCursorListResponse {
   agents?: RawCursorAgent[];
@@ -36,13 +114,794 @@ interface RawCursorAgent {
   model?: string;
 }
 
+function cursorLocalSessionLimit(): number {
+  const raw = Number.parseInt(process.env.CURSOR_LOCAL_SESSION_LIMIT ?? "", 10);
+  if (!Number.isFinite(raw)) {
+    return DEFAULT_CURSOR_LOCAL_SESSION_LIMIT;
+  }
+  return Math.max(1, Math.min(50, raw));
+}
+
 function cursorApiKey(): string | null {
   const value = process.env.CURSOR_API_KEY;
-  if (typeof value !== "string") {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return getStoredCursorApiKeySync();
+}
+
+export function cursorApiKeyConfigured(): boolean {
+  return cursorApiKey() !== null;
+}
+
+function pathExists(path: string): Promise<boolean> {
+  return stat(path).then(() => true).catch(() => false);
+}
+
+function decodeCursorWorkspaceFolderUri(input: string | null | undefined): string | null {
+  if (typeof input !== "string" || input.trim().length === 0) {
     return null;
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+
+  const trimmed = input.trim();
+  const windowsUriMatch = trimmed.match(/^file:\/\/\/([a-zA-Z]):\/(.*)$/);
+  if (windowsUriMatch) {
+    return canonicalizeProjectPath(`${windowsUriMatch[1]}:/${decodeURIComponent(windowsUriMatch[2])}`);
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const decodedPath = decodeURIComponent(url.pathname);
+    const windowsPathMatch = decodedPath.match(/^\/([a-zA-Z]):\/(.*)$/);
+    if (windowsPathMatch) {
+      return canonicalizeProjectPath(`${windowsPathMatch[1]}:/${windowsPathMatch[2]}`);
+    }
+    return canonicalizeProjectPath(decodedPath);
+  } catch {
+    return canonicalizeProjectPath(decodeURIComponent(trimmed));
+  }
+}
+
+async function cursorUserDataDir(): Promise<string | null> {
+  const candidates = new Set<string>();
+
+  const explicit = canonicalizeProjectPath(process.env.CURSOR_USER_DATA_DIR);
+  if (explicit) {
+    candidates.add(explicit);
+  }
+
+  const appData = canonicalizeProjectPath(process.env.APPDATA);
+  if (appData) {
+    candidates.add(join(appData, "Cursor"));
+  }
+
+  if (await pathExists("/mnt/c/Users")) {
+    try {
+      const users = await readdir("/mnt/c/Users", { withFileTypes: true });
+      for (const entry of users) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        candidates.add(`/mnt/c/Users/${entry.name}/AppData/Roaming/Cursor`);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (candidate && await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function cursorWorkspaceStorageDir(): Promise<string | null> {
+  const explicit = canonicalizeProjectPath(process.env.CURSOR_WORKSPACE_STORAGE_DIR);
+  if (explicit && await pathExists(explicit)) {
+    return explicit;
+  }
+
+  const userDataDir = await cursorUserDataDir();
+  if (!userDataDir) {
+    return null;
+  }
+
+  const workspaceStorage = join(userDataDir, "User", "workspaceStorage");
+  return await pathExists(workspaceStorage) ? workspaceStorage : null;
+}
+
+async function cursorLogsDir(): Promise<string | null> {
+  const explicit = canonicalizeProjectPath(process.env.CURSOR_LOGS_DIR);
+  if (explicit && await pathExists(explicit)) {
+    return explicit;
+  }
+
+  const userDataDir = await cursorUserDataDir();
+  if (!userDataDir) {
+    return null;
+  }
+
+  const logsDir = join(userDataDir, "logs");
+  return await pathExists(logsDir) ? logsDir : null;
+}
+
+async function loadCursorWorkspaceEntries(limit = 50): Promise<CursorWorkspaceEntry[]> {
+  const workspaceStorage = await cursorWorkspaceStorageDir();
+  if (!workspaceStorage) {
+    return [];
+  }
+
+  const entries = await readdir(workspaceStorage, { withFileTypes: true }).catch(() => []);
+  const workspaces: CursorWorkspaceEntry[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const storageDir = join(workspaceStorage, entry.name);
+    const workspaceJsonPath = join(storageDir, "workspace.json");
+    const stateFilePath = join(storageDir, "state.vscdb");
+    const backupFilePath = join(storageDir, "state.vscdb.backup");
+    if (!await pathExists(workspaceJsonPath) || !await pathExists(stateFilePath)) {
+      continue;
+    }
+
+    try {
+      const rawWorkspace = JSON.parse(await readFile(workspaceJsonPath, "utf8")) as { folder?: string };
+      const root = decodeCursorWorkspaceFolderUri(rawWorkspace.folder);
+      if (!root) {
+        continue;
+      }
+
+      const stateStats = await stat(stateFilePath).catch(() => null);
+      const backupStats = await stat(backupFilePath).catch(() => null);
+      const workspaceStats = await stat(workspaceJsonPath).catch(() => null);
+      const updatedAtMs = Math.max(
+        stateStats?.mtimeMs ?? 0,
+        backupStats?.mtimeMs ?? 0,
+        workspaceStats?.mtimeMs ?? 0
+      );
+
+      workspaces.push({
+        id: entry.name,
+        root,
+        label: projectLabelFromRoot(root),
+        stateFilePath,
+        backupFilePath,
+        updatedAtMs
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return workspaces
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs)
+    .slice(0, limit);
+}
+
+function cursorComposerTimestamp(composer: CursorComposerSummary): number {
+  return Math.max(
+    composer.lastUpdatedAt ?? 0,
+    composer.createdAt ?? 0,
+    composer.activeBranch?.lastInteractionAt ?? 0,
+    ...(Array.isArray(composer.branches)
+      ? composer.branches.map((branch) => branch.lastInteractionAt ?? 0)
+      : [0])
+  );
+}
+
+function extractBalancedJsonSegment(text: string, startIndex: number): string | null {
+  const opening = text[startIndex];
+  const closing = opening === "[" ? "]" : opening === "{" ? "}" : null;
+  if (!closing) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaping = true;
+        continue;
+      }
+      if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === opening) {
+      depth += 1;
+      continue;
+    }
+    if (char === closing) {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractAsciiStrings(raw: Buffer, minimumLength = 4): string[] {
+  const strings: string[] = [];
+  let current = "";
+  for (const byte of raw.values()) {
+    if (byte >= 32 && byte <= 126) {
+      current += String.fromCharCode(byte);
+      continue;
+    }
+    if (current.length >= minimumLength) {
+      strings.push(current);
+    }
+    current = "";
+  }
+  if (current.length >= minimumLength) {
+    strings.push(current);
+  }
+  return strings;
+}
+
+function extractEmbeddedJsonTextCandidates<T>(text: string, key: string, opening: "{" | "["): Array<{ value: T; raw: string }> {
+  const candidates: Array<{ value: T; raw: string }> = [];
+  let fromIndex = 0;
+  while (fromIndex < text.length) {
+    const keyIndex = text.indexOf(key, fromIndex);
+    if (keyIndex < 0) {
+      break;
+    }
+    let jsonStart = keyIndex + key.length;
+    const maxLookahead = Math.min(text.length, jsonStart + 12);
+    while (jsonStart < maxLookahead && text[jsonStart] !== opening) {
+      jsonStart += 1;
+    }
+    fromIndex = keyIndex + key.length;
+    if (text[jsonStart] !== opening) {
+      continue;
+    }
+    const parsed = extractBalancedJsonSegment(text, jsonStart);
+    if (!parsed) {
+      continue;
+    }
+    try {
+      candidates.push({
+        value: JSON.parse(parsed) as T,
+        raw: parsed
+      });
+    } catch {
+      continue;
+    }
+  }
+  return candidates;
+}
+
+function extractEmbeddedJsonCandidates<T>(raw: Buffer, key: string, opening: "{" | "["): Array<{ value: T; raw: string }> {
+  const candidates = extractAsciiStrings(raw)
+    .flatMap((text) => extractEmbeddedJsonTextCandidates<T>(text, key, opening));
+  if (candidates.length > 0) {
+    return candidates;
+  }
+
+  const rawCandidates: Array<{ value: T; raw: string }> = [];
+  const keyBytes = Buffer.from(key, "utf8");
+  const openingCode = opening.charCodeAt(0);
+  const closingCode = (opening === "[" ? "]" : "}").charCodeAt(0);
+  let fromIndex = 0;
+
+  while (fromIndex < raw.length) {
+    const keyIndex = raw.indexOf(keyBytes, fromIndex);
+    if (keyIndex < 0) {
+      break;
+    }
+
+    let jsonStart = keyIndex + keyBytes.length;
+    const maxLookahead = Math.min(raw.length, jsonStart + 64);
+    while (jsonStart < maxLookahead && raw[jsonStart] !== openingCode) {
+      jsonStart += 1;
+    }
+    fromIndex = keyIndex + keyBytes.length;
+    if (raw[jsonStart] !== openingCode) {
+      continue;
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaping = false;
+    let parsed = "";
+    let completed = false;
+    for (let index = jsonStart; index < raw.length; index += 1) {
+      const byte = raw[index];
+      if (byte < 32 || byte > 126) {
+        continue;
+      }
+      const char = String.fromCharCode(byte);
+      parsed += char;
+
+      if (inString) {
+        if (escaping) {
+          escaping = false;
+          continue;
+        }
+        if (char === "\\") {
+          escaping = true;
+          continue;
+        }
+        if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+      if (byte === openingCode) {
+        depth += 1;
+        continue;
+      }
+      if (byte === closingCode) {
+        depth -= 1;
+        if (depth === 0) {
+          completed = true;
+          break;
+        }
+      }
+    }
+
+    if (!completed || parsed.length === 0) {
+      continue;
+    }
+
+    try {
+      rawCandidates.push({
+        value: JSON.parse(parsed) as T,
+        raw: parsed
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return rawCandidates;
+}
+
+function pickBestCandidate<T>(
+  candidates: Array<{ value: T; raw: string }>,
+  score: (value: T) => number
+): T | null {
+  return candidates
+    .sort((left, right) => {
+      const scoreDelta = score(right.value) - score(left.value);
+      if (scoreDelta !== 0) {
+        return scoreDelta;
+      }
+      return right.raw.length - left.raw.length;
+    })[0]?.value ?? null;
+}
+
+function parseCursorLocalWorkspaceState(raw: Buffer): CursorLocalWorkspaceState {
+  const composerData = pickBestCandidate<CursorComposerData>(
+    extractEmbeddedJsonCandidates(raw, "composer.composerData", "{"),
+    (value) => Math.max(...(Array.isArray(value.allComposers) ? value.allComposers.map((composer) => cursorComposerTimestamp(composer)) : [0]))
+  );
+  const prompts = pickBestCandidate<CursorPromptEntry[]>(
+    extractEmbeddedJsonCandidates(raw, "aiService.prompts", "["),
+    (value) => Array.isArray(value) ? value.length : 0
+  ) ?? [];
+  const generations = pickBestCandidate<CursorGenerationEntry[]>(
+    extractEmbeddedJsonCandidates(raw, "aiService.generations", "["),
+    (value) => Math.max(...(Array.isArray(value) ? value.map((entry) => entry.unixMs ?? 0) : [0]))
+  ) ?? [];
+  const backgroundComposer = pickBestCandidate<CursorBackgroundComposerData>(
+    extractEmbeddedJsonCandidates(raw, "workbench.backgroundComposer.workspacePersistentData", "{"),
+    (value) => `${value.cachedSelectedGitState?.ref ?? ""}${value.cachedSelectedGitState?.continueRef ?? ""}`.length
+  );
+
+  return {
+    composerData,
+    prompts,
+    generations,
+    backgroundComposer
+  };
+}
+
+function parseCursorJsonValue<T>(input: unknown): T | null {
+  if (typeof input !== "string" || input.trim().length === 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(input) as T;
+  } catch {
+    return null;
+  }
+}
+
+function loadCursorLocalWorkspaceStateFromSqlite(filePath: string): CursorLocalWorkspaceState | null {
+  let database: DatabaseSync | null = null;
+  try {
+    database = new DatabaseSync(filePath, { readOnly: true });
+    const readValue = (key: string): string | null => {
+      const row = database
+        ?.prepare("select value from ItemTable where key = ?")
+        .get(key) as { value?: unknown } | undefined;
+      return typeof row?.value === "string" ? row.value : null;
+    };
+
+    const composerData = parseCursorJsonValue<CursorComposerData>(readValue("composer.composerData"));
+    const prompts = parseCursorJsonValue<CursorPromptEntry[]>(readValue("aiService.prompts")) ?? [];
+    const generations = parseCursorJsonValue<CursorGenerationEntry[]>(readValue("aiService.generations")) ?? [];
+    const backgroundComposer = parseCursorJsonValue<CursorBackgroundComposerData>(
+      readValue("workbench.backgroundComposer.workspacePersistentData")
+    );
+
+    if (!composerData && prompts.length === 0 && generations.length === 0 && !backgroundComposer) {
+      return null;
+    }
+
+    return {
+      composerData,
+      prompts,
+      generations,
+      backgroundComposer
+    };
+  } catch {
+    return null;
+  } finally {
+    database?.close();
+  }
+}
+
+async function loadCursorLocalWorkspaceState(workspace: CursorWorkspaceEntry): Promise<CursorLocalWorkspaceState | null> {
+  for (const filePath of [workspace.stateFilePath, workspace.backupFilePath]) {
+    if (!await pathExists(filePath)) {
+      continue;
+    }
+    try {
+      const fromSqlite = loadCursorLocalWorkspaceStateFromSqlite(filePath);
+      if (fromSqlite?.composerData || fromSqlite?.prompts.length || fromSqlite?.generations.length) {
+        return fromSqlite;
+      }
+
+      const raw = await readFile(filePath);
+      const parsed = parseCursorLocalWorkspaceState(raw);
+      if (parsed.composerData || parsed.prompts.length > 0 || parsed.generations.length > 0) {
+        return parsed;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function orderedCursorComposers(composerData: CursorComposerData | null): CursorComposerSummary[] {
+  if (!composerData || !Array.isArray(composerData.allComposers)) {
+    return [];
+  }
+
+  const activeComposers = composerData.allComposers.filter((composer) => composer && composer.isArchived !== true);
+  const byId = new Map(activeComposers.map((composer) => [composer.composerId, composer]));
+  const orderedIds = [
+    ...(Array.isArray(composerData.selectedComposerIds) ? composerData.selectedComposerIds : []),
+    ...(Array.isArray(composerData.lastFocusedComposerIds) ? composerData.lastFocusedComposerIds : []),
+    ...activeComposers
+      .slice()
+      .sort((left, right) => cursorComposerTimestamp(right) - cursorComposerTimestamp(left))
+      .map((composer) => composer.composerId)
+  ];
+
+  const ordered: CursorComposerSummary[] = [];
+  const seen = new Set<string>();
+  for (const composerId of orderedIds) {
+    if (typeof composerId !== "string" || seen.has(composerId)) {
+      continue;
+    }
+    const composer = byId.get(composerId);
+    if (!composer) {
+      continue;
+    }
+    seen.add(composerId);
+    ordered.push(composer);
+  }
+
+  return ordered;
+}
+
+async function cursorAgentLoopState(): Promise<CursorAgentLoopState> {
+  const logsDir = await cursorLogsDir();
+  if (!logsDir) {
+    return { active: false, updatedAtMs: null };
+  }
+
+  const directories = await readdir(logsDir, { withFileTypes: true }).catch(() => []);
+  const recentDirs = directories
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+    .slice(-5)
+    .reverse();
+
+  let lastEvent: { active: boolean; updatedAtMs: number } | null = null;
+  const pattern = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}).*?\[PowerMainService\] (Started|Stopping) wakelock .*reason="agent-loop"/;
+
+  for (const dirName of recentDirs) {
+    const filePath = join(logsDir, dirName, "main.log");
+    if (!await pathExists(filePath)) {
+      continue;
+    }
+    const raw = await readFile(filePath, "utf8").catch(() => "");
+    for (const line of raw.split(/\r?\n/)) {
+      const match = line.match(pattern);
+      if (!match) {
+        continue;
+      }
+      const updatedAtMs = Date.parse(match[1].replace(" ", "T") + "Z");
+      if (!Number.isFinite(updatedAtMs)) {
+        continue;
+      }
+      lastEvent = {
+        active: match[2] === "Started",
+        updatedAtMs
+      };
+    }
+    if (lastEvent) {
+      break;
+    }
+  }
+
+  return lastEvent ?? { active: false, updatedAtMs: null };
+}
+
+function cursorLocalPromptDetail(prompt: string | null, fallback: string): string {
+  if (prompt && prompt.trim().length > 0) {
+    const normalized = prompt.replace(/\s+/g, " ").trim();
+    return normalized.length <= 88 ? normalized : `${normalized.slice(0, 87)}…`;
+  }
+  return fallback;
+}
+
+function cursorLocalLabel(composer: CursorComposerSummary, prompt: string | null): string {
+  const name = typeof composer.name === "string" ? composer.name.trim() : "";
+  if (name.length > 0) {
+    return name;
+  }
+  const subtitle = typeof composer.subtitle === "string" ? composer.subtitle.trim() : "";
+  if (subtitle.length > 0) {
+    return cursorLocalPromptDetail(subtitle, "Cursor local");
+  }
+  if (prompt) {
+    return cursorLocalPromptDetail(prompt, "Cursor local");
+  }
+  return `Cursor ${composer.composerId.slice(0, 4)}`;
+}
+
+function cursorLocalDetail(composer: CursorComposerSummary, prompt: string | null, state: ActivityState): string {
+  const subtitle = typeof composer.subtitle === "string" ? composer.subtitle.trim() : "";
+  const changedFiles = composer.filesChangedCount ?? 0;
+  const added = composer.totalLinesAdded ?? 0;
+  const removed = composer.totalLinesRemoved ?? 0;
+  if (state === "editing" && changedFiles > 0) {
+    return `${changedFiles} file${changedFiles === 1 ? "" : "s"} changed · +${added} -${removed}`;
+  }
+  if (subtitle.length > 0) {
+    return cursorLocalPromptDetail(subtitle, "Cursor local");
+  }
+  if (prompt) {
+    return cursorLocalPromptDetail(prompt, "Cursor local");
+  }
+  return state === "idle" ? "Idle" : "Cursor local";
+}
+
+function cursorLocalActivityState(input: {
+  composer: CursorComposerSummary;
+  isPrimaryComposer: boolean;
+  latestGenerationMs: number;
+  agentLoop: CursorAgentLoopState;
+  now: number;
+}): { state: ActivityState; isOngoing: boolean } {
+  const composerUpdatedAt = cursorComposerTimestamp(input.composer);
+  const referenceUpdatedAt = Math.max(composerUpdatedAt, input.latestGenerationMs, input.agentLoop.updatedAtMs ?? 0);
+  const ageMs = input.now - referenceUpdatedAt;
+  const changedFiles = input.composer.filesChangedCount ?? 0;
+  const changedLines = (input.composer.totalLinesAdded ?? 0) + (input.composer.totalLinesRemoved ?? 0);
+
+  if (input.composer.hasBlockingPendingActions) {
+    return { state: "blocked", isOngoing: true };
+  }
+
+  if (input.isPrimaryComposer && (input.agentLoop.active || ageMs <= CURSOR_LOCAL_ACTIVE_WINDOW_MS)) {
+    if (changedFiles > 0 || changedLines > 0) {
+      return { state: "editing", isOngoing: true };
+    }
+    return { state: "thinking", isOngoing: true };
+  }
+
+  if (changedFiles > 0 || changedLines > 0) {
+    if (ageMs <= CURSOR_LOCAL_DONE_WINDOW_MS) {
+      return { state: "done", isOngoing: false };
+    }
+    return { state: "idle", isOngoing: false };
+  }
+
+  if (ageMs <= CURSOR_LOCAL_DONE_WINDOW_MS) {
+    return { state: "done", isOngoing: false };
+  }
+
+  return { state: "idle", isOngoing: false };
+}
+
+function cursorLocalPromptEvent(
+  projectRoot: string,
+  composerId: string,
+  prompt: string | null,
+  createdAtMs: number
+): DashboardEvent | null {
+  if (!prompt || !Number.isFinite(createdAtMs) || Date.now() - createdAtMs > CURSOR_LOCAL_EVENT_WINDOW_MS) {
+    return null;
+  }
+
+  return {
+    id: `${projectRoot}::cursor-local::${composerId}::${createdAtMs}`,
+    source: "cursor",
+    confidence: "inferred",
+    threadId: composerId,
+    createdAt: new Date(createdAtMs).toISOString(),
+    method: "cursor/local/prompt",
+    kind: "message",
+    phase: "updated",
+    title: "Cursor prompt",
+    detail: cursorLocalPromptDetail(prompt, "Cursor local prompt"),
+    path: projectRoot,
+    action: "said",
+    isImage: false
+  };
+}
+
+export async function loadCursorLocalProjectSnapshotData(projectRoot: string, limit = cursorLocalSessionLimit()): Promise<{
+  agents: DashboardAgent[];
+  events: DashboardEvent[];
+}> {
+  const canonicalRoot = canonicalizeProjectPath(projectRoot);
+  if (!canonicalRoot) {
+    return { agents: [], events: [] };
+  }
+
+  const workspaces = await loadCursorWorkspaceEntries(Math.max(limit, 50));
+  const workspace = workspaces.find((entry) => sameProjectPath(entry.root, canonicalRoot));
+  if (!workspace) {
+    return { agents: [], events: [] };
+  }
+
+  const workspaceState = await loadCursorLocalWorkspaceState(workspace);
+  if (!workspaceState?.composerData) {
+    return { agents: [], events: [] };
+  }
+
+  const composers = orderedCursorComposers(workspaceState.composerData).slice(0, limit);
+  if (composers.length === 0) {
+    return { agents: [], events: [] };
+  }
+
+  const latestGeneration = workspaceState.generations
+    .filter((entry) => Number.isFinite(entry.unixMs))
+    .sort((left, right) => (right.unixMs ?? 0) - (left.unixMs ?? 0))[0] ?? null;
+  const latestPrompt = workspaceState.prompts
+    .map((entry) => typeof entry.text === "string" ? entry.text.trim() : "")
+    .filter((entry) => entry.length > 0)
+    .slice(-1)[0] ?? null;
+  const latestPromptText = typeof latestGeneration?.textDescription === "string" && latestGeneration.textDescription.trim().length > 0
+    ? latestGeneration.textDescription.trim()
+    : latestPrompt;
+  const latestGenerationMs = latestGeneration?.unixMs ?? 0;
+  const agentLoop = await cursorAgentLoopState();
+  const now = Date.now();
+
+  const agents: DashboardAgent[] = [];
+  const events: DashboardEvent[] = [];
+  const originUrl = await gitRemoteOriginUrl(canonicalRoot);
+
+  for (const [index, composer] of composers.entries()) {
+    const isPrimaryComposer = index === 0;
+    const { state, isOngoing } = cursorLocalActivityState({
+      composer,
+      isPrimaryComposer,
+      latestGenerationMs,
+      agentLoop,
+      now
+    });
+    const updatedAtMs = Math.max(cursorComposerTimestamp(composer), latestGenerationMs, workspace.updatedAtMs);
+    const updatedAt = new Date(updatedAtMs || now).toISOString();
+    const activityPrompt = isPrimaryComposer ? latestPromptText : null;
+    const activityEvent: AgentActivityEvent | null = activityPrompt
+      ? {
+        type: "userMessage",
+        action: "said",
+        path: canonicalRoot,
+        title: cursorLocalPromptDetail(activityPrompt, "Cursor local prompt"),
+        isImage: false
+      }
+      : null;
+    const appearance = await ensureAgentAppearance(canonicalRoot, `cursor-local:${composer.composerId}`);
+
+    agents.push({
+      id: `cursor-local:${composer.composerId}`,
+      label: cursorLocalLabel(composer, activityPrompt),
+      source: "cursor",
+      sourceKind: `cursor:local:${composer.unifiedMode ?? "agent"}`,
+      parentThreadId: null,
+      depth: 0,
+      isCurrent: false,
+      isOngoing,
+      statusText: composer.unifiedMode ?? "local",
+      role: "cursor",
+      nickname: null,
+      isSubagent: false,
+      state,
+      detail: cursorLocalDetail(composer, activityPrompt, state),
+      cwd: canonicalRoot,
+      roomId: null,
+      appearance,
+      updatedAt,
+      stoppedAt: isOngoing ? null : updatedAt,
+      paths: [canonicalRoot],
+      activityEvent,
+      latestMessage: typeof composer.subtitle === "string" && composer.subtitle.trim().length > 0
+        ? composer.subtitle.trim()
+        : null,
+      threadId: composer.composerId,
+      taskId: null,
+      resumeCommand: null,
+      url: null,
+      git: {
+        sha: null,
+        branch: composer.activeBranch?.branchName
+          ?? composer.createdOnBranch
+          ?? workspaceState.backgroundComposer?.cachedSelectedGitState?.ref
+          ?? workspaceState.backgroundComposer?.cachedSelectedGitState?.continueRef
+          ?? null,
+        originUrl
+      },
+      provenance: "cursor",
+      confidence: "inferred",
+      needsUser: null,
+      liveSubscription: "readOnly",
+      network: null
+    });
+
+    if (isPrimaryComposer) {
+      const promptEvent = cursorLocalPromptEvent(canonicalRoot, composer.composerId, activityPrompt, latestGenerationMs);
+      if (promptEvent) {
+        events.push(promptEvent);
+      }
+    }
+  }
+
+  return {
+    agents: agents.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    events
+  };
 }
 
 function cursorApiBaseUrl(): string {
@@ -171,6 +1030,19 @@ async function gitRemoteOriginUrl(projectRoot: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+export async function describeCursorAgentAvailability(projectRoot: string): Promise<string | null> {
+  if (!cursorApiKeyConfigured()) {
+    return "Cursor background agents disabled: CURSOR_API_KEY is not configured for this process.";
+  }
+
+  const repositoryUrl = await gitRemoteOriginUrl(projectRoot);
+  if (!repositoryUrl) {
+    return "Cursor background agents unavailable for this project: git remote.origin.url is missing.";
+  }
+
+  return null;
 }
 
 function cursorAuthHeader(apiKey: string, scheme: "basic" | "bearer"): string {

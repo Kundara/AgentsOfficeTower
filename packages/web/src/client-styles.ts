@@ -248,6 +248,12 @@ export const CLIENT_STYLES = `
         line-height: 1.4;
       }
 
+      .settings-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
       .text-scale-control {
         display: inline-flex;
         align-items: center;
@@ -1669,6 +1675,15 @@ export const CLIENT_STYLES = `
         line-height: 1;
         color: rgba(244, 239, 223, 0.62);
         overflow-wrap: anywhere;
+      }
+
+      .agent-hover-separator {
+        color: rgba(244, 239, 223, 0.38);
+      }
+
+      .agent-hover-peer {
+        color: #ff38d1;
+        font-weight: 700;
       }
 
       .room-empty {

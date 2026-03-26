@@ -9,9 +9,12 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added a server-backed Cursor API key field in the web Settings popup, persisting a machine-local key outside the repo so Cursor background-agent visibility can be enabled once without relaunch-time env wiring.
+- Added inferred local Cursor session support by reading Cursor workspace storage and recent logs, so repos opened in the local Cursor app now surface read-only local Cursor activity alongside cloud agents.
 - Added a neutral multiplayer status interface in the web server so a secured sync transport can plug in later without another contract change.
 - Added browser-side PartyKit shared-room settings with persisted `host`, `room`, and short `nickname` inputs, publishing all tracked workspace activity into the room and labeling remote agents with that nickname when available.
 - Added a bundled PartyKit relay package in `packages/party` plus root `party:dev` and `party:deploy` scripts so the shared-room transport can be hosted from this repo.
+- Added a persisted shared-room on/off toggle so users can stop syncing without clearing the saved PartyKit host and room.
 - Added this changelog and a repo-level maintenance policy for tracking notable additions, fixes, and behavior changes.
 - Added a grid-first scene layout foundation in the web renderer with explicit tile-based scene configuration and scene grid helpers aligned to the `16px` PixelOffice unit.
 - Added persisted browser scene settings and local furniture layout overrides, including a user-facing text-scale control for the office view.
@@ -22,6 +25,8 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed Cursor API key resolution so saved app settings now backfill `CURSOR_API_KEY` for Cursor background-agent loading across snapshot and watch flows, while the process environment still takes precedence.
+- Changed Cursor documentation and settings copy to distinguish automatic local Cursor visibility from optional API-key-backed Cursor cloud/background agents.
 - Expanded the shared snapshot shape with git-backed project identity metadata and generic remote-agent provenance so a future secured multiplayer sync path can reuse the existing model.
 - Reworked the office renderer around internal scene settings, grid-based placement, and reusable scene render state instead of looser ad hoc layout math.
 - Expanded Cursor integration to treat agents as cloud work, support paginated agent fetches, and normalize repository identity across direct repo URLs and PR or merge-request URLs.
@@ -37,9 +42,11 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Docs
 
 - Added a short PartyKit hosting walkthrough to the README and references so shared-room setup includes the current official create, deploy, and generated-host flow.
+- Expanded the README shared-room section with the rebuild steps for a missing `/vendor/partysocket/index.js` browser import and clarified that connection is room-based via shared `Host` and `Room` values.
 
 ### Fixed
 
+- Fixed the silent empty-state path for Cursor integration so snapshots now explain when the current process is missing `CURSOR_API_KEY` or when a project has no `git remote.origin.url`.
 - Fixed Claude agent labels so synthetic/system transcript model placeholders like `<synthetic>` no longer appear in the office UI.
 - Fixed Cursor project matching when the API only exposes GitHub pull request, GitLab merge request, or similar PR-backed repository URLs.
 - Fixed Codex runtime discovery on Windows and Windows+WSL environments where the CLI is absent but the Codex desktop app is installed.

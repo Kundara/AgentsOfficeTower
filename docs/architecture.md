@@ -294,15 +294,25 @@ This is useful because it broadens observability across the machine, but it shou
 
 ## Secondary Cursor support
 
-Cursor support currently uses the official cloud-agent API instead of local transcript scraping:
+Cursor support now has two paths:
 
-- the adapter calls Cursor's account-level cloud-agent API when `CURSOR_API_KEY` is configured
-- agents are matched to the selected project by normalized git `remote.origin.url`, `source.repository`, or PR-backed repository URLs when Cursor reports `source.prUrl` or `target.prUrl`
-- Cursor agents are rendered in the same room and session model with `confidence = typed`
-- the current integration surfaces typed status, summary, branch, repo, and target URL data
-- Cursor does not currently provide Codex-style local live thread subscriptions here, so the integration is closer to a richer cloud-task feed than to local Codex app-server visibility
+- a local inferred adapter that reads Cursor workspace storage and recent logs for repos opened in the local Cursor app
+- the official cloud-agent API when `CURSOR_API_KEY` is configured or a saved app-level Cursor API key exists
 
-This makes Cursor a useful third official source without pretending that it offers Codex-grade local observability.
+The local inferred adapter:
+
+- discovers recent Cursor workspaces from `User/workspaceStorage/*/workspace.json`
+- parses `state.vscdb` / `state.vscdb.backup` directly to recover composer, prompt, generation, and background-composer state even when SQLite page boundaries fragment the stored JSON
+- infers current local Cursor work by matching the stored workspace root back onto the selected project
+- renders those local sessions with `source = cursor` and `confidence = inferred`
+
+The cloud typed adapter:
+
+- matches agents to the selected project by normalized git `remote.origin.url`, `source.repository`, or PR-backed repository URLs when Cursor reports `source.prUrl` or `target.prUrl`
+- renders Cursor cloud agents in the same room and session model with `confidence = typed`
+- surfaces typed status, summary, branch, repo, and target URL data
+
+Cursor still does not provide Codex-style local live thread subscriptions here, so local Cursor visibility remains inferred and read-only rather than app-server-grade typed state.
 
 ## Secondary OpenClaw support
 

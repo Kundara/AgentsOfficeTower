@@ -9,7 +9,6 @@ import { parseArgs } from "./server-options";
 export async function startWebServer(argv: string[] = process.argv.slice(2)): Promise<void> {
   const options = parseArgs(argv);
   const service = new FleetLiveService(options.projects, options.explicitProjects);
-  await service.start();
   const meta = buildServerMeta(options, options.projects, service.getMultiplayerStatus());
 
   const server = createServer((request, response) => {
@@ -33,6 +32,10 @@ export async function startWebServer(argv: string[] = process.argv.slice(2)): Pr
   console.log(
     `Agents Office Tower web listening on http://${options.host}:${options.port} pid=${meta.pid} build=${meta.buildAt} mode=${mode} scope=${scope}`
   );
+
+  void service.start().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+  });
 
   const shutdown = () => {
     void service.stop().finally(() => {

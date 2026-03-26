@@ -3,16 +3,18 @@ import type { ServerResponse } from "node:http";
 import {
   canonicalizeProjectPath,
   cycleAgentAppearance,
+  describeCursorIntegrationSettings,
   discoverProjects,
   listCloudTasks,
   ProjectLiveMonitor,
-  scaffoldRoomsFile
+  scaffoldRoomsFile,
+  setStoredCursorApiKey
 } from "@codex-agents-office/core";
 import type { CloudTask } from "@codex-agents-office/core";
 
 import { buildFleetResponse } from "./server-metadata";
 import { buildProjectDescriptors } from "./server-options";
-import type { FleetResponse, MultiplayerStatus, ProjectDescriptor } from "./server-types";
+import type { FleetResponse, IntegrationSettingsResponse, MultiplayerStatus, ProjectDescriptor } from "./server-types";
 
 export class FleetLiveService {
   private static readonly PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
@@ -98,6 +100,19 @@ export class FleetLiveService {
     await this.monitors.get(projectRoot)?.refreshNow();
     await this.publish();
     return filePath;
+  }
+
+  getIntegrationSettings(): IntegrationSettingsResponse {
+    return {
+      cursor: describeCursorIntegrationSettings()
+    };
+  }
+
+  async setCursorApiKey(apiKey: string | null): Promise<IntegrationSettingsResponse> {
+    await setStoredCursorApiKey(apiKey);
+    await Promise.all(Array.from(this.monitors.values()).map((monitor) => monitor.refreshNow()));
+    await this.publish();
+    return this.getIntegrationSettings();
   }
 
   registerSse(response: ServerResponse): void {

@@ -28,6 +28,16 @@ export function renderClientScript({
       const furnitureLayoutStorageKey = "codex-agents-office:furniture-layout";
       const multiplayerSettingsStorageKey = "codex-agents-office:multiplayer-settings";
       const multiplayerPeerIdStorageKey = "codex-agents-office:multiplayer-peer-id";
+      const multiplayerDeviceIdStorageKey = "codex-agents-office:multiplayer-device-id";
+      const defaultIntegrationSettings = () => ({
+        cursor: {
+          configured: false,
+          source: "none",
+          maskedKey: null,
+          storedConfigured: false,
+          storedMaskedKey: null
+        }
+      });
       const clampSceneTextScale = (value) => {
         if (!Number.isFinite(value)) {
           return defaultGlobalSceneSettings.textScale;
@@ -57,6 +67,9 @@ export function renderClientScript({
         focusedSessionKeys: [],
         globalSceneSettings: loadGlobalSceneSettings(),
         furnitureLayoutOverrides: loadFurnitureLayoutOverrides(),
+        integrationSettings: defaultIntegrationSettings(),
+        integrationSettingsPending: false,
+        integrationSettingsError: null,
         multiplayerSettings: loadMultiplayerSettings(),
         multiplayerStatus: {
           state: "disabled",
@@ -400,6 +413,11 @@ export function renderClientScript({
       const debugTilesButton = document.getElementById("debug-tiles-button");
       const textScaleInput = document.getElementById("text-scale-input");
       const textScaleOutput = document.getElementById("text-scale-output");
+      const cursorApiKeyInput = document.getElementById("cursor-api-key-input");
+      const cursorApiKeySaveButton = document.getElementById("cursor-api-key-save-button");
+      const cursorApiKeyClearButton = document.getElementById("cursor-api-key-clear-button");
+      const cursorApiKeyStatus = document.getElementById("cursor-api-key-status");
+      const multiplayerEnabledButton = document.getElementById("multiplayer-enabled-button");
       const multiplayerHostInput = document.getElementById("multiplayer-host-input");
       const multiplayerRoomInput = document.getElementById("multiplayer-room-input");
       const multiplayerNicknameInput = document.getElementById("multiplayer-nickname-input");
@@ -417,7 +435,9 @@ export function renderClientScript({
       const roomsPath = document.getElementById("rooms-path");
       applyGlobalSceneSettings();
       syncSettingsPopup();
+      syncCursorIntegrationUi();
       syncMultiplayerSettingsUi();
+      void refreshIntegrationSettings();
       multiplayerPruneTimer = setInterval(pruneMultiplayerPeers, 5000);
 
       function syncSettingsPopup() {
@@ -433,6 +453,129 @@ export function renderClientScript({
       function setSettingsOpen(nextOpen) {
         state.settingsOpen = Boolean(nextOpen);
         syncSettingsPopup();
+      }
+
+      function cursorIntegrationStatusText() {
+        if (typeof state.integrationSettingsError === "string" && state.integrationSettingsError.length > 0) {
+          return state.integrationSettingsError;
+        }
+
+        const cursor = state.integrationSettings && state.integrationSettings.cursor
+          ? state.integrationSettings.cursor
+          : defaultIntegrationSettings().cursor;
+
+        if (state.integrationSettingsPending) {
+          return "Saving Cursor API key on this machine...";
+        }
+
+        if (cursor.source === "env") {
+          const storedSuffix = cursor.storedConfigured && cursor.storedMaskedKey
+            ? " A saved key is also present and can be cleared here."
+            : "";
+          return "Cursor API key is coming from CURSOR_API_KEY in the server process" + (cursor.maskedKey ? " (" + cursor.maskedKey + ")." : ".") + storedSuffix;
+        }
+
+        if (cursor.source === "stored") {
+          return "Saved on this machine for Agents Office" + (cursor.maskedKey ? " (" + cursor.maskedKey + ")." : ".");
+        }
+
+        return "No local Cursor API key is saved. Local Cursor sessions may still appear automatically; save a key only to include official Cursor background agents for matching repos.";
+      }
+
+      function syncCursorIntegrationUi() {
+        const cursor = state.integrationSettings && state.integrationSettings.cursor
+          ? state.integrationSettings.cursor
+          : defaultIntegrationSettings().cursor;
+        const busy = state.integrationSettingsPending === true;
+
+        if (cursorApiKeyInput instanceof HTMLInputElement) {
+          cursorApiKeyInput.disabled = busy;
+          if (cursorApiKeyInput.value.length === 0) {
+            cursorApiKeyInput.placeholder = cursor.source === "stored"
+              ? "Saved on this machine"
+              : cursor.source === "env"
+                ? "Provided by CURSOR_API_KEY"
+                : "cursor_...";
+          }
+        }
+
+        if (cursorApiKeySaveButton instanceof HTMLButtonElement) {
+          cursorApiKeySaveButton.disabled = busy;
+          cursorApiKeySaveButton.textContent = busy ? "Saving..." : "Save Key";
+        }
+
+        if (cursorApiKeyClearButton instanceof HTMLButtonElement) {
+          cursorApiKeyClearButton.disabled = busy || cursor.storedConfigured !== true;
+        }
+
+        setTextIfChanged(cursorApiKeyStatus, cursorIntegrationStatusText());
+      }
+
+      async function refreshIntegrationSettings() {
+        try {
+          const response = await fetch("/api/settings/integrations");
+          if (!response.ok) {
+            throw new Error(await response.text());
+          }
+          state.integrationSettings = await response.json();
+          state.integrationSettingsError = null;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          state.integrationSettings = defaultIntegrationSettings();
+          state.integrationSettingsError = "Cursor settings unavailable: " + message;
+        } finally {
+          state.integrationSettingsPending = false;
+          syncCursorIntegrationUi();
+        }
+      }
+
+      async function saveCursorApiKey() {
+        if (!(cursorApiKeyInput instanceof HTMLInputElement)) {
+          return;
+        }
+
+        const cursorApiKey = cursorApiKeyInput.value.trim();
+        if (!cursorApiKey) {
+          state.integrationSettingsError = "Enter a Cursor API key before saving.";
+          syncCursorIntegrationUi();
+          return;
+        }
+
+        state.integrationSettingsPending = true;
+        state.integrationSettingsError = null;
+        syncCursorIntegrationUi();
+
+        try {
+          state.integrationSettings = await postJson("/api/settings/integrations", { cursorApiKey });
+          state.integrationSettingsError = null;
+          cursorApiKeyInput.value = "";
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          state.integrationSettingsError = "Failed to save Cursor API key: " + message;
+        } finally {
+          state.integrationSettingsPending = false;
+          syncCursorIntegrationUi();
+        }
+      }
+
+      async function clearCursorApiKey() {
+        state.integrationSettingsPending = true;
+        state.integrationSettingsError = null;
+        syncCursorIntegrationUi();
+
+        try {
+          state.integrationSettings = await postJson("/api/settings/integrations", { cursorApiKey: null });
+          state.integrationSettingsError = null;
+          if (cursorApiKeyInput instanceof HTMLInputElement) {
+            cursorApiKeyInput.value = "";
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          state.integrationSettingsError = "Failed to clear saved Cursor API key: " + message;
+        } finally {
+          state.integrationSettingsPending = false;
+          syncCursorIntegrationUi();
+        }
       }
 
       function syncFleetBackdrop() {
@@ -1378,7 +1521,7 @@ export function renderClientScript({
           return "";
         }
         const location = agent.network.peerHost ? \` @ \${agent.network.peerHost}\` : "";
-        return \`Shared \${agent.network.peerLabel}\${location}\`;
+        return \`\${agent.network.peerLabel}\${location}\`;
       }
 
       function agentHoverSourceLabel(agent, summarySource) {
@@ -1828,20 +1971,23 @@ export function renderClientScript({
         const lead = parentLabelFor(snapshot, agent);
         const summary = agentHoverSummary(snapshot, agent);
         const hoverTitle = agent.nickname || agent.label;
-        const meta = [
-          titleCaseWords(agentKindLabel(snapshot, agent)),
-          agentHoverSourceLabel(agent, summary.source),
-          agentNetworkLabel(agent),
-          lead ? \`with \${lead}\` : "",
-          formatUpdatedAt(agent.updatedAt)
-        ].filter(Boolean).join(" · ");
         const className = options.className || "agent-hover";
         const styleAttr = options.style ? \` style="\${escapeHtml(options.style)}"\` : "";
         const summaryClass = summary.source === "user"
           ? "agent-hover-summary agent-hover-summary-user"
           : "agent-hover-summary";
+        const metaParts = [
+          \`<span>\${escapeHtml(titleCaseWords(agentKindLabel(snapshot, agent)))}</span>\`,
+          \`<span>\${escapeHtml(agentHoverSourceLabel(agent, summary.source))}</span>\`,
+          agent.network
+            ? \`<span class="agent-hover-peer">\${escapeHtml(agent.network.peerLabel)}</span>\${agent.network.peerHost ? \`<span>\${escapeHtml(" @ " + agent.network.peerHost)}</span>\` : ""}\`
+            : "",
+          lead ? \`<span>\${escapeHtml("with " + lead)}</span>\` : "",
+          \`<span>\${escapeHtml(formatUpdatedAt(agent.updatedAt))}</span>\`
+        ].filter(Boolean);
+        const meta = metaParts.join('<span class="agent-hover-separator"> · </span>');
 
-        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(hoverTitle)}</strong></div><div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div><div class="agent-hover-meta">\${escapeHtml(meta)}</div></div>\`;
+        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(hoverTitle)}</strong></div><div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div><div class="agent-hover-meta">\${meta}</div></div>\`;
       }
 
       function flattenRooms(rooms) {
@@ -4669,6 +4815,24 @@ export function renderClientScript({
           render();
         });
       }
+      if (cursorApiKeyInput instanceof HTMLInputElement) {
+        cursorApiKeyInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void saveCursorApiKey();
+          }
+        });
+      }
+      if (cursorApiKeySaveButton instanceof HTMLButtonElement) {
+        cursorApiKeySaveButton.addEventListener("click", () => {
+          void saveCursorApiKey();
+        });
+      }
+      if (cursorApiKeyClearButton instanceof HTMLButtonElement) {
+        cursorApiKeyClearButton.addEventListener("click", () => {
+          void clearCursorApiKey();
+        });
+      }
       const commitMultiplayerInputs = () => {
         commitMultiplayerSettings({
           host: multiplayerHostInput instanceof HTMLInputElement ? multiplayerHostInput.value : "",
@@ -4704,6 +4868,14 @@ export function renderClientScript({
             event.preventDefault();
             commitMultiplayerInputs();
           }
+        });
+      }
+      if (multiplayerEnabledButton instanceof HTMLButtonElement) {
+        multiplayerEnabledButton.addEventListener("click", () => {
+          commitMultiplayerSettings({
+            ...state.multiplayerSettings,
+            enabled: !state.multiplayerSettings.enabled
+          });
         });
       }
       void refreshMultiplayerConnection();

@@ -1,4 +1,5 @@
 import type { DashboardSnapshot } from "@codex-agents-office/core";
+import type { CursorIntegrationSettings } from "@codex-agents-office/core";
 
 export interface ProjectDescriptor {
   root: string;
@@ -23,6 +24,10 @@ export interface ServerOptions {
   port: number;
   projects: ProjectDescriptor[];
   explicitProjects: boolean;
+}
+
+export interface IntegrationSettingsResponse {
+  cursor: CursorIntegrationSettings;
 }
 
 export interface ServerMeta {

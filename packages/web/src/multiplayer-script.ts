@@ -1,5 +1,6 @@
 export const MULTIPLAYER_SCRIPT = `
       const multiplayerPeerId = loadMultiplayerPeerId();
+      const multiplayerDeviceId = loadMultiplayerDeviceId();
       const multiplayerPeers = new Map();
       let multiplayerSocket = null;
       let multiplayerModulePromise = null;
@@ -17,20 +18,31 @@ export const MULTIPLAYER_SCRIPT = `
         return sanitizeMultiplayerField(value).slice(0, MULTIPLAYER_NICKNAME_MAX_LENGTH);
       }
 
+      function hasMultiplayerCredentials(settings) {
+        return Boolean(
+          sanitizeMultiplayerField(settings && settings.host)
+          && sanitizeMultiplayerField(settings && settings.room)
+        );
+      }
+
       function loadMultiplayerSettings() {
         try {
           const raw = window.localStorage.getItem(multiplayerSettingsStorageKey);
           if (!raw) {
-            return { host: "", room: "", nickname: "" };
+            return { enabled: false, host: "", room: "", nickname: "" };
           }
           const parsed = JSON.parse(raw);
+          const host = sanitizeMultiplayerField(parsed && parsed.host);
+          const room = sanitizeMultiplayerField(parsed && parsed.room);
+          const hasCredentials = Boolean(host && room);
           return {
-            host: sanitizeMultiplayerField(parsed && parsed.host),
-            room: sanitizeMultiplayerField(parsed && parsed.room),
+            enabled: typeof (parsed && parsed.enabled) === "boolean" ? Boolean(parsed && parsed.enabled) : hasCredentials,
+            host,
+            room,
             nickname: sanitizeMultiplayerNickname(parsed && parsed.nickname)
           };
         } catch {
-          return { host: "", room: "", nickname: "" };
+          return { enabled: false, host: "", room: "", nickname: "" };
         }
       }
 
@@ -50,6 +62,20 @@ export const MULTIPLAYER_SCRIPT = `
         const generated = crypto && crypto.randomUUID ? crypto.randomUUID() : "peer-" + Math.random().toString(36).slice(2, 10);
         try {
           window.sessionStorage.setItem(multiplayerPeerIdStorageKey, generated);
+        } catch {}
+        return generated;
+      }
+
+      function loadMultiplayerDeviceId() {
+        try {
+          const existing = sanitizeMultiplayerField(window.localStorage.getItem(multiplayerDeviceIdStorageKey));
+          if (existing) {
+            return existing;
+          }
+        } catch {}
+        const generated = crypto && crypto.randomUUID ? crypto.randomUUID() : "device-" + Math.random().toString(36).slice(2, 10);
+        try {
+          window.localStorage.setItem(multiplayerDeviceIdStorageKey, generated);
         } catch {}
         return generated;
       }
@@ -184,6 +210,12 @@ export const MULTIPLAYER_SCRIPT = `
       }
 
       function syncMultiplayerSettingsUi() {
+        if (multiplayerEnabledButton instanceof HTMLButtonElement) {
+          const enabled = state.multiplayerSettings.enabled === true;
+          multiplayerEnabledButton.classList.toggle("active", enabled);
+          multiplayerEnabledButton.setAttribute("aria-pressed", enabled ? "true" : "false");
+          multiplayerEnabledButton.textContent = enabled ? "Sharing On" : "Sharing Off";
+        }
         if (multiplayerHostInput instanceof HTMLInputElement && multiplayerHostInput.value !== state.multiplayerSettings.host) {
           multiplayerHostInput.value = state.multiplayerSettings.host;
         }
@@ -245,6 +277,33 @@ export const MULTIPLAYER_SCRIPT = `
         };
       }
 
+      function sharedAgentIdentityKeys(agent) {
+        const keys = [];
+        if (!agent || typeof agent !== "object") {
+          return keys;
+        }
+        if (typeof agent.id === "string" && agent.id.length > 0) {
+          keys.push("id:" + agent.id);
+        }
+        if (typeof agent.threadId === "string" && agent.threadId.length > 0) {
+          keys.push("thread:" + agent.threadId);
+        }
+        if (typeof agent.taskId === "string" && agent.taskId.length > 0) {
+          keys.push("task:" + agent.taskId);
+        }
+        return keys;
+      }
+
+      function collectSharedAgentIdentityKeys(agents) {
+        const keys = new Set();
+        for (const agent of Array.isArray(agents) ? agents : []) {
+          for (const key of sharedAgentIdentityKeys(agent)) {
+            keys.add(key);
+          }
+        }
+        return keys;
+      }
+
       function buildSharedFleet(localFleet) {
         if (!localFleet) {
           return null;
@@ -264,7 +323,9 @@ export const MULTIPLAYER_SCRIPT = `
             if (!localSnapshot) {
               continue;
             }
+            const localAgentIdentityKeys = collectSharedAgentIdentityKeys(localSnapshot.agents);
             const mergedAgents = (Array.isArray(remoteSnapshot.agents) ? remoteSnapshot.agents : [])
+              .filter((agent) => !sharedAgentIdentityKeys(agent).some((key) => localAgentIdentityKeys.has(key)))
               .map((agent) => mergeSharedAgent(localSnapshot, remoteSnapshot, agent, peer));
             const mergedEvents = (Array.isArray(remoteSnapshot.events) ? remoteSnapshot.events : [])
               .map((event) => mergeSharedEvent(localSnapshot, remoteSnapshot, event, peer));
@@ -325,6 +386,10 @@ export const MULTIPLAYER_SCRIPT = `
         if (changed) {
           applyFleet(state.localFleet);
         }
+        if (!state.multiplayerSettings.enabled) {
+          setMultiplayerStatus("disabled", "Shared room sync is off.");
+          return;
+        }
         if (!state.multiplayerSettings.host || !state.multiplayerSettings.room) {
           setMultiplayerStatus("disabled", "Shared room sync is off.");
           return;
@@ -368,6 +433,7 @@ export const MULTIPLAYER_SCRIPT = `
         return {
           type: "fleet-sync",
           peerId: multiplayerPeerId,
+          deviceId: multiplayerDeviceId,
           peerLabel: nickname || sharedPeerLabel(),
           nickname,
           sentAt: new Date().toISOString(),
@@ -406,7 +472,13 @@ export const MULTIPLAYER_SCRIPT = `
         } catch {
           return;
         }
-        if (!payload || payload.type !== "fleet-sync" || payload.peerId === multiplayerPeerId || !Array.isArray(payload.projects)) {
+        if (
+          !payload
+          || payload.type !== "fleet-sync"
+          || payload.peerId === multiplayerPeerId
+          || payload.deviceId === multiplayerDeviceId
+          || !Array.isArray(payload.projects)
+        ) {
           return;
         }
         const peerLabel = sanitizeMultiplayerNickname(payload.nickname) || sanitizeMultiplayerField(payload.peerLabel) || "Peer";
@@ -424,6 +496,10 @@ export const MULTIPLAYER_SCRIPT = `
         if (screenshotMode) {
           disconnectMultiplayer({ preserveStatus: true });
           setMultiplayerStatus("disabled", "Shared room sync is disabled in screenshot mode.");
+          return;
+        }
+        if (!state.multiplayerSettings.enabled) {
+          disconnectMultiplayer();
           return;
         }
         const host = sanitizeMultiplayerField(state.multiplayerSettings.host);
@@ -477,10 +553,22 @@ export const MULTIPLAYER_SCRIPT = `
       }
 
       function commitMultiplayerSettings(nextSettings) {
+        const nextHost = sanitizeMultiplayerField(nextSettings && nextSettings.host);
+        const nextRoom = sanitizeMultiplayerField(nextSettings && nextSettings.room);
+        const nextNickname = sanitizeMultiplayerNickname(nextSettings && nextSettings.nickname);
+        const nextHasCredentials = Boolean(nextHost && nextRoom);
+        const previousHadCredentials = hasMultiplayerCredentials(state.multiplayerSettings);
+        const nextEnabled =
+          typeof (nextSettings && nextSettings.enabled) === "boolean"
+            ? Boolean(nextSettings && nextSettings.enabled) && nextHasCredentials
+            : nextHasCredentials
+              ? (!previousHadCredentials ? true : state.multiplayerSettings.enabled === true)
+              : false;
         state.multiplayerSettings = {
-          host: sanitizeMultiplayerField(nextSettings && nextSettings.host),
-          room: sanitizeMultiplayerField(nextSettings && nextSettings.room),
-          nickname: sanitizeMultiplayerNickname(nextSettings && nextSettings.nickname)
+          enabled: nextEnabled,
+          host: nextHost,
+          room: nextRoom,
+          nickname: nextNickname
         };
         saveMultiplayerSettings();
         syncMultiplayerSettingsUi();

@@ -4,7 +4,7 @@ import { ensureAgentAppearance } from "./appearance";
 import { withAppServerClient } from "./app-server";
 import { loadClaudeProjectSnapshotData } from "./claude";
 import { listCloudTasks } from "./cloud";
-import { loadCursorAgents } from "./cursor";
+import { describeCursorAgentAvailability, loadCursorAgents, loadCursorLocalProjectSnapshotData } from "./cursor";
 import { loadOpenClawAgents } from "./openclaw";
 import { loadFreshPresenceAgents } from "./presence";
 import { resolveProjectIdentity } from "./project-identity";
@@ -997,17 +997,30 @@ export async function buildDashboardSnapshotFromState(input: {
     });
   }
 
-  try {
-    const cursorAgents = await loadCursorAgents(projectRoot);
-    for (const cursorAgent of cursorAgents) {
-      agents.push({
-        ...cursorAgent,
-        roomId: findRoomForPaths(roomConfig, projectRoot, cursorAgent.paths)
-      });
+  const cursorLocalData = await loadCursorLocalProjectSnapshotData(projectRoot);
+  for (const cursorAgent of cursorLocalData.agents) {
+    agents.push({
+      ...cursorAgent,
+      roomId: findRoomForPaths(roomConfig, projectRoot, cursorAgent.paths)
+    });
+  }
+
+  const cursorAvailabilityNote = await describeCursorAgentAvailability(projectRoot);
+  if (cursorAvailabilityNote) {
+    notes.push(cursorAvailabilityNote);
+  } else {
+    try {
+      const cursorAgents = await loadCursorAgents(projectRoot);
+      for (const cursorAgent of cursorAgents) {
+        agents.push({
+          ...cursorAgent,
+          roomId: findRoomForPaths(roomConfig, projectRoot, cursorAgent.paths)
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notes.push(`Cursor background agents unavailable: ${message}`);
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    notes.push(`Cursor background agents unavailable: ${message}`);
   }
 
   try {
@@ -1035,7 +1048,7 @@ export async function buildDashboardSnapshotFromState(input: {
     rooms: roomConfig,
     agents,
     cloudTasks,
-    events: [...(input.events ?? []), ...claudeData.events]
+    events: [...(input.events ?? []), ...claudeData.events, ...cursorLocalData.events]
       .filter((event) => {
         const createdAtMs = Date.parse(event.createdAt);
         return Number.isFinite(createdAtMs) && Date.now() - createdAtMs <= SNAPSHOT_EVENT_WINDOW_MS;

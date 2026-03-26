@@ -1,6 +1,7 @@
 export * from "./aseprite";
 export * from "./appearance";
 export * from "./app-server";
+export * from "./app-settings";
 export * from "./cloud";
 export * from "./claude";
 export * from "./claude-agent-sdk";

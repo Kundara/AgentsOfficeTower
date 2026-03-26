@@ -83,7 +83,30 @@ export function renderHtml(options: ServerOptions): string {
                     <output id="text-scale-output">${DEFAULT_GLOBAL_SCENE_SETTINGS.textScale.toFixed(2)}x</output>
                   </label>
                   <div class="settings-section">
+                    <strong>Cursor</strong>
+                    <label class="settings-field" for="cursor-api-key-input">
+                      <span class="muted">API Key</span>
+                      <input
+                        id="cursor-api-key-input"
+                        type="password"
+                        placeholder="cursor_..."
+                        spellcheck="false"
+                        autocapitalize="off"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <div class="settings-note muted">
+                      Local Cursor sessions are inferred automatically for repos opened in the Cursor app on this machine. Save a Cursor API key here only if you also want Cursor Cloud/Background Agents.
+                    </div>
+                    <div class="settings-actions">
+                      <button id="cursor-api-key-save-button" class="toggle-button settings-toggle" type="button">Save Key</button>
+                      <button id="cursor-api-key-clear-button" class="toggle-button settings-toggle" type="button">Clear Saved Key</button>
+                    </div>
+                    <div id="cursor-api-key-status" class="settings-note muted">Loading Cursor integration status...</div>
+                  </div>
+                  <div class="settings-section">
                     <strong>Shared Room</strong>
+                    <button id="multiplayer-enabled-button" class="toggle-button settings-toggle" type="button" aria-pressed="false">Sharing Off</button>
                     <label class="settings-field" for="multiplayer-host-input">
                       <span class="muted">Host</span>
                       <input

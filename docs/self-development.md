@@ -37,7 +37,7 @@ A good iteration improves at least one of these:
 - Codex desktop session visibility may still be incomplete depending on app-server exposure.
 - Claude support still falls back to transcript inference when no project-local hook sidecars are configured.
 - OpenClaw support is currently workspace-path exact-match only, so broader OpenClaw workspaces do not yet project into per-repo office floors.
-- Cursor support currently covers official background agents only; it does not yet discover local Cursor sessions or Cursor-only workspaces by itself.
+- Cursor local support is inferred from workspace storage and logs rather than coming from an official local session API, so it remains weaker and less explicit than Codex app-server visibility.
 - PixelOffice workstation composition still needs refinement and stricter prefab rules.
 - Most Codex event types now reach the snapshot as explicit events, but many of them still share the same notification/motion treatment.
 - Room empty states are still visually heavier than ideal.
@@ -73,6 +73,7 @@ A good iteration improves at least one of these:
 - verify Claude hook-backed sessions are visibly marked as typed rather than inferred when `.codex-agents/claude-hooks/<session-id>.jsonl` exists
 - verify OpenClaw gateway sessions appear only for projects whose normalized root matches the configured OpenClaw agent workspace
 - verify OpenClaw sessions preserve parent-child structure through the shared `parentThreadId` hierarchy
+- verify inferred local Cursor sessions appear for repos that Cursor has opened locally and are marked as inferred in hover/session detail
 - verify Cursor background agents appear only for repos whose normalized `remote.origin.url` matches the selected project
 - verify Cursor API-backed sessions are visibly marked as typed rather than inferred in hover/session detail
 
@@ -81,7 +82,7 @@ A good iteration improves at least one of these:
 - map more app-server `turn/*` and `item/*` events into explicit character motion
 - make started/completed/interrupted/failed turn phases visually distinct beyond shared toast styling
 - add direct approval/input action affordances from the browser queue back into Codex
-- decide whether Cursor local CLI/history is strong enough for an official local-session adapter
+- decide whether Cursor local CLI/history can tighten the new inferred local Cursor adapter into something closer to a durable typed session feed
 - decide whether OpenClaw needs broader workspace containment rules beyond exact workspace-root equality
 - tighten the workstation prefab using only the intended PixelOffice station slices
 - improve side-facing avatar placement and interaction poses

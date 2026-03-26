@@ -472,7 +472,7 @@ test("recently finished local threads stay current for a short grace window", as
   const recentDoneThread = {
     ...sampleThread(),
     status: { type: "idle" },
-    updatedAt: Math.floor((Date.now() - 1000) / 1000),
+    updatedAt: Math.floor(Date.now() / 1000),
     turns: [
       {
         id: "turn_1",
@@ -583,7 +583,7 @@ test("recently finished local threads stay current even when live monitor bookke
   const recentDoneThread = {
     ...sampleThread(),
     status: { type: "idle" },
-    updatedAt: Math.floor((Date.now() - 1000) / 1000),
+    updatedAt: Math.floor(Date.now() / 1000),
     turns: [
       {
         id: "turn_1",
@@ -861,7 +861,7 @@ test("shared cloud rate-limit notes stay human readable", async () => {
 
   const snapshot = monitor.getSnapshot();
   assert.ok(snapshot);
-  assert.deepEqual(snapshot.notes, ["Codex cloud temporarily rate-limited; retrying in 5 minutes."]);
+  assert.ok(snapshot.notes.includes("Codex cloud temporarily rate-limited; retrying in 5 minutes."));
 });
 
 test("explicitly stopped threads leave only after the stop grace window", async () => {

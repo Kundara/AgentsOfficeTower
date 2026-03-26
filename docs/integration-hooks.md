@@ -627,15 +627,30 @@ How this project uses that surface:
 | `status = failed` / `killed` / `timeout` | `blocked` | typed terminal failure or interrupted session |
 | no usable status | `idle` | inactive OpenClaw session |
 
-## Cursor Cloud Agents
+## Cursor
 
-Cursor support uses the official cloud-agent API as a typed secondary source.
+Cursor support now combines a local inferred adapter with the official cloud-agent API.
 
 Primary code path:
 
 - `packages/core/src/cursor.ts`
 
-### Cursor project matching
+### Cursor local workspace adapter
+
+What we read:
+
+- Cursor `User/workspaceStorage/*/workspace.json`
+- Cursor `state.vscdb` and `state.vscdb.backup`
+- recent Cursor `logs/*/main.log` wakelock activity for `reason="agent-loop"`
+
+How we use it:
+
+- discover local Cursor workspaces and map them onto projects by normalized workspace root
+- parse fragmented Composer, prompt, generation, and background-composer JSON directly from raw SQLite bytes
+- infer current local Cursor session state, recent prompt text, branch, and light activity
+- render those sessions as read-only with `confidence = inferred`
+
+### Cursor cloud project matching
 
 What we read:
 
@@ -648,9 +663,8 @@ How we use it:
 - normalize both repo URLs into a comparable HTTPS form
 - collapse GitHub/GitLab/Bitbucket PR URLs back to their repository URL before comparison
 - match Cursor background agents onto the currently selected project
-- avoid transcript scraping or private local storage parsing
 
-### Official Cursor surface
+### Official Cursor cloud surface
 
 Official docs:
 
@@ -666,7 +680,7 @@ What Cursor exposes:
 
 How this project uses that surface:
 
-- reads the official Cursor API when `CURSOR_API_KEY` is configured
+- reads the official Cursor API when `CURSOR_API_KEY` is configured or a Cursor API key has been saved through the web Settings popup
 - follows `GET /v0/agents` pagination through `cursor` / `nextCursor`
 - authenticates against the current API surface and falls back to the older bearer form for compatibility
 - matches agents by normalized repository URL, including PR-backed repository URLs
@@ -683,11 +697,11 @@ How this project uses that surface:
 | `ERROR` | `blocked` | typed failure state |
 | `EXPIRED` | `idle` | no longer active |
 
-What Cursor does not yet provide here:
+What Cursor still does not provide here:
 
 - Codex-style local live thread subscriptions
-- stable room mapping from typed file paths
-- automatic workspace discovery for Cursor-only projects without an explicit local repo context
+- durable typed approvals or input-wait state for local IDE sessions
+- an official local session feed equivalent to the Codex app-server
 
 ## Representation In This Project
 

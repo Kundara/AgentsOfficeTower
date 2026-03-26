@@ -2,7 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const os = require("node:os");
 const path = require("node:path");
-const { mkdtemp, readFile } = require("node:fs/promises");
+const { execFile } = require("node:child_process");
+const { mkdir, mkdtemp, readFile, writeFile } = require("node:fs/promises");
+const { pathToFileURL } = require("node:url");
+const { promisify } = require("node:util");
 
 const {
   buildClaudeSessionEventsForTest,
@@ -15,10 +18,21 @@ const {
   normalizeClaudeSdkMessageForTest
 } = require("../dist/claude-agent-sdk.js");
 const {
+  describeCursorIntegrationSettings,
+  getAppSettingsFilePath,
+  resetAppSettingsCacheForTest,
+  setStoredCursorApiKey
+} = require("../dist/app-settings.js");
+const {
+  describeCursorAgentAvailability,
   cursorAgentMatchesRepository,
+  cursorApiKeyConfigured,
+  loadCursorLocalProjectSnapshotData,
   normalizeRepositoryUrl,
   cursorStatusToActivityState
 } = require("../dist/cursor.js");
+
+const execFileAsync = promisify(execFile);
 
 test("typed Claude permission hooks become approval-backed blocked state", () => {
   const summary = summariseClaudeHookRecord({
@@ -401,6 +415,207 @@ test("cursor background agent statuses map into workload states", () => {
   assert.equal(cursorStatusToActivityState("FINISHED"), "done");
   assert.equal(cursorStatusToActivityState("ERROR"), "blocked");
   assert.equal(cursorStatusToActivityState("EXPIRED"), "idle");
+});
+
+test("cursor local snapshot parsing survives fragmented workspace state blobs", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-local-"));
+  const projectRoot = path.join(tempRoot, "project");
+  const workspaceStorageDir = path.join(tempRoot, "workspaceStorage");
+  const logsDir = path.join(tempRoot, "logs");
+  const workspaceDir = path.join(workspaceStorageDir, "workspace-1");
+  await mkdir(projectRoot, { recursive: true });
+  await mkdir(workspaceDir, { recursive: true });
+  await mkdir(path.join(logsDir, "20260326T120000"), { recursive: true });
+
+  const previousWorkspaceStorageDir = process.env.CURSOR_WORKSPACE_STORAGE_DIR;
+  const previousLogsDir = process.env.CURSOR_LOGS_DIR;
+  const previousCursorUserDataDir = process.env.CURSOR_USER_DATA_DIR;
+  process.env.CURSOR_WORKSPACE_STORAGE_DIR = workspaceStorageDir;
+  process.env.CURSOR_LOGS_DIR = logsDir;
+  delete process.env.CURSOR_USER_DATA_DIR;
+
+  const now = Date.now();
+  const composerId = "composer-1234";
+  const composerData = JSON.stringify({
+    allComposers: [
+      {
+        type: "head",
+        composerId,
+        name: "Local Cursor test",
+        subtitle: "Scanning renderer files",
+        createdAt: now - 30_000,
+        lastUpdatedAt: now - 5_000,
+        unifiedMode: "agent",
+        filesChangedCount: 2,
+        totalLinesAdded: 4,
+        totalLinesRemoved: 1,
+        hasBlockingPendingActions: false,
+        isArchived: false,
+        createdOnBranch: "main",
+        branches: []
+      }
+    ],
+    selectedComposerIds: [composerId],
+    lastFocusedComposerIds: [composerId]
+  });
+  const prompts = JSON.stringify([{ text: "Inspect the local Cursor adapter", commandType: 4 }]);
+  const generations = JSON.stringify([
+    {
+      unixMs: now - 4_000,
+      generationUUID: "generation-1",
+      type: "composer",
+      textDescription: "Inspect the local Cursor adapter"
+    }
+  ]);
+  const backgroundComposer = JSON.stringify({
+    cachedSelectedGitState: {
+      ref: "main",
+      continueRef: "main"
+    }
+  });
+
+  const rawState = Buffer.concat([
+    Buffer.from(`noise composer.composerData${composerData.slice(0, 96)}`, "utf8"),
+    Buffer.from([0, 1, 2]),
+    Buffer.from(composerData.slice(96), "utf8"),
+    Buffer.from([0]),
+    Buffer.from(` aiService.prompts${prompts}`, "utf8"),
+    Buffer.from([0]),
+    Buffer.from(` aiService.generations${generations}`, "utf8"),
+    Buffer.from([0]),
+    Buffer.from(` workbench.backgroundComposer.workspacePersistentData${backgroundComposer}`, "utf8")
+  ]);
+
+  try {
+    await writeFile(path.join(workspaceDir, "workspace.json"), JSON.stringify({
+      folder: pathToFileURL(projectRoot).toString()
+    }));
+    await writeFile(path.join(workspaceDir, "state.vscdb"), rawState);
+    await writeFile(path.join(logsDir, "20260326T120000", "main.log"), "");
+
+    const snapshot = await loadCursorLocalProjectSnapshotData(projectRoot);
+    assert.equal(snapshot.agents.length, 1);
+    assert.equal(snapshot.agents[0].source, "cursor");
+    assert.equal(snapshot.agents[0].confidence, "inferred");
+    assert.equal(snapshot.agents[0].label, "Local Cursor test");
+    assert.equal(snapshot.agents[0].state, "editing");
+    assert.equal(snapshot.agents[0].git?.branch, "main");
+    assert.equal(snapshot.events.length, 1);
+    assert.equal(snapshot.events[0].method, "cursor/local/prompt");
+    assert.match(snapshot.events[0].detail, /Inspect the local Cursor adapter/);
+  } finally {
+    if (typeof previousWorkspaceStorageDir === "string") {
+      process.env.CURSOR_WORKSPACE_STORAGE_DIR = previousWorkspaceStorageDir;
+    } else {
+      delete process.env.CURSOR_WORKSPACE_STORAGE_DIR;
+    }
+    if (typeof previousLogsDir === "string") {
+      process.env.CURSOR_LOGS_DIR = previousLogsDir;
+    } else {
+      delete process.env.CURSOR_LOGS_DIR;
+    }
+    if (typeof previousCursorUserDataDir === "string") {
+      process.env.CURSOR_USER_DATA_DIR = previousCursorUserDataDir;
+    } else {
+      delete process.env.CURSOR_USER_DATA_DIR;
+    }
+  }
+});
+
+test("cursor diagnostics report when the api key is missing", async () => {
+  const previousValue = process.env.CURSOR_API_KEY;
+  const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.XDG_CONFIG_HOME = await mkdtemp(path.join(os.tmpdir(), "cursor-settings-missing-"));
+  delete process.env.CODEX_HOME;
+  resetAppSettingsCacheForTest();
+  delete process.env.CURSOR_API_KEY;
+  try {
+    assert.equal(cursorApiKeyConfigured(), false);
+    assert.equal(
+      await describeCursorAgentAvailability("/mnt/f/AI/CodexAgentsOffice"),
+      "Cursor background agents disabled: CURSOR_API_KEY is not configured for this process."
+    );
+  } finally {
+    if (typeof previousValue === "string") {
+      process.env.CURSOR_API_KEY = previousValue;
+    } else {
+      delete process.env.CURSOR_API_KEY;
+    }
+    if (typeof previousXdgConfigHome === "string") {
+      process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+    } else {
+      delete process.env.XDG_CONFIG_HOME;
+    }
+    if (typeof previousCodexHome === "string") {
+      process.env.CODEX_HOME = previousCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
+    }
+    resetAppSettingsCacheForTest();
+  }
+});
+
+test("stored cursor api key enables cursor integration without CURSOR_API_KEY", async () => {
+  const previousCursorApiKey = process.env.CURSOR_API_KEY;
+  const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.XDG_CONFIG_HOME = await mkdtemp(path.join(os.tmpdir(), "cursor-settings-stored-"));
+  delete process.env.CODEX_HOME;
+  delete process.env.CURSOR_API_KEY;
+  resetAppSettingsCacheForTest();
+
+  try {
+    assert.equal(cursorApiKeyConfigured(), false);
+    await setStoredCursorApiKey("cursor_test_12345678");
+    assert.equal(cursorApiKeyConfigured(), true);
+    assert.deepEqual(describeCursorIntegrationSettings(), {
+      configured: true,
+      source: "stored",
+      maskedKey: "curs...5678",
+      storedConfigured: true,
+      storedMaskedKey: "curs...5678"
+    });
+    const savedSettings = await readFile(getAppSettingsFilePath(), "utf8");
+    assert.match(savedSettings, /cursor_test_12345678/);
+  } finally {
+    if (typeof previousCursorApiKey === "string") {
+      process.env.CURSOR_API_KEY = previousCursorApiKey;
+    } else {
+      delete process.env.CURSOR_API_KEY;
+    }
+    if (typeof previousXdgConfigHome === "string") {
+      process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+    } else {
+      delete process.env.XDG_CONFIG_HOME;
+    }
+    if (typeof previousCodexHome === "string") {
+      process.env.CODEX_HOME = previousCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
+    }
+    resetAppSettingsCacheForTest();
+  }
+});
+
+test("cursor diagnostics report when a git project has no origin remote", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-diagnostics-"));
+  await execFileAsync("git", ["init", projectRoot]);
+
+  const previousValue = process.env.CURSOR_API_KEY;
+  process.env.CURSOR_API_KEY = "test-key";
+  try {
+    assert.equal(
+      await describeCursorAgentAvailability(projectRoot),
+      "Cursor background agents unavailable for this project: git remote.origin.url is missing."
+    );
+  } finally {
+    if (typeof previousValue === "string") {
+      process.env.CURSOR_API_KEY = previousValue;
+    } else {
+      delete process.env.CURSOR_API_KEY;
+    }
+  }
 });
 
 test("cursor agents match the current repo when Cursor reports a PR URL instead of source.repository", () => {
