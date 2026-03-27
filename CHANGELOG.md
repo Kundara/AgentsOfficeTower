@@ -62,9 +62,17 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed Codex local state classification so completed command, file-change, and tool turns now settle to done/idle instead of remaining `running`/`validating`/`editing`, and recent command/file events no longer reactivate a thread that already finished.
+- Fixed typed Codex `Needs You` handling so approval waits surface as blocked desk work, input waits surface as waiting work, and browser workstation seating now respects those visible states instead of treating every `status.type = active` thread as desk-active.
+- Fixed browser desk motion so `running` and `validating` workers stay in the seated workstation pose, and current local desk-live work now gets a short grace window through transient `status.type = notLoaded` gaps instead of bouncing into the rec area between live updates.
+- Fixed browser scene continuity so current local threads remain visible in the map while they transition between desk and rec-area placement, and active local `idle`/`done` wobbles now get a short desk settle window instead of making the agent and workstation pop out between updates.
+- Fixed rec-room rendering so only the 4 most recent top-level resting lead sessions occupy the rec seats, preventing older hidden resters and subagents from wrapping onto duplicate sofa coordinates.
+- Fixed office map scaling so selected and focused single-workspace views now reuse the same compact scene geometry as the tower overview instead of inflating avatars and workstations with a separate prefab scale.
+- Fixed desk-pod placement so workstation pods and their internal seat cells now snap back onto the shared `16px` tile grid, matching the rec-strip furniture alignment contract.
 - Fixed Codex workstation visibility so local sessions that app-server still reports as `active` no longer fall through the browser’s `waiting/done` seating exclusions and disappear from desks while they are still live.
 - Fixed slow desktop Codex observer attaches from degrading too early by widening the live `thread/resume` subscription timeout, so restarted fleet servers recover current threads back to `subscribed` instead of lingering in stale `readOnly` mode.
 - Fixed two-seat workstation growth so a pod's first occupied seat stays anchored to its grid cell and a second seat expands on the right instead of recentering the original workstation.
+- Fixed workstation desk geometry so adding the right-side seat no longer shifts the already placed left desk shell and computer inside the pod.
 - Fixed boss-lane rendering so boss sessions now render inside compact square office shells with centered workstations, using a stacked left-column layout that fits four 3-tile-tall boss offices in a standard room instead of the old rounded offset frame.
 - Fixed workspace/project labels in the web UI so camel-case names like `CodexAgentsOffice` and `ProjectAtlas` render with spaces between words.
 - Fixed Codex runtime discovery on native Windows so the app can fall back to `wsl.exe --exec codex` when Codex CLI is only installed inside WSL.
@@ -83,6 +91,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed workstation occupancy so waiting leads cool down into the rec area while finished top-level threads keep a 5-second desk cooldown for final-message readability before returning to rec-area idle visibility.
 - Fixed workload currentness so future-skewed source timestamps no longer keep finished local threads marked active indefinitely, while genuinely live local sessions still remain visible.
 - Fixed Codex local startup hydration so the first fleet snapshot now waits for initial `thread/resume` hydration and immediately rereads resumed threads, preventing an actively replying desktop thread from appearing as stale `readOnly/notLoaded` rec-room idle after a web-server restart.
+- Fixed Codex local thread discovery so `status.type = active` sessions are always kept in the tracked startup/refresh set even when newer idle threads would otherwise consume the recent-thread limit, preventing a real active desktop session from appearing only after its first fresh update.
 - Fixed browser workstation seating so stale local `notLoaded` threads no longer occupy desks just because workload currentness still marks them recent; only truly ongoing local work or the explicit done cooldown can keep a workstation.
 - Fixed Codex desk occupancy so non-current local threads no longer stay seated on the live floor from a separate browser-side "recently live" fallback; workstation seating now matches the current-workload/session-panel model.
 - Fixed completed Codex process items such as context compaction and reasoning so they no longer leave finished desktop threads stuck in a synthetic `thinking` state after the turn has ended.

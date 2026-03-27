@@ -1,5 +1,6 @@
 import { withAppServerClient } from "../app-server";
 import { ensureAgentAppearance } from "../appearance";
+import { selectProjectThreadsWithParents } from "../local-thread-selection";
 import {
   applyRecentActivityEvent,
   inferThreadAgentRole,
@@ -7,44 +8,14 @@ import {
   parseThreadSourceMeta,
   pickThreadLabel,
   summariseThread,
-  syncSummaryWithLatestThreadMessage,
-  parentThreadIdForThread
+  syncSummaryWithLatestThreadMessage
 } from "../snapshot";
 import type { ProjectAdapter } from "./types";
 import { emptyAdapterSnapshot } from "./helpers";
 import { StaticProjectSource } from "./static-source";
-import { filterThreadsForProject } from "../project-paths";
 import type { CloudTask, CodexThread, DashboardEvent, NeedsUserState } from "../types";
 
-export function selectProjectThreadsWithParents(
-  projectRoot: string,
-  allThreads: CodexThread[],
-  localLimit: number
-): CodexThread[] {
-  const projectThreads = filterThreadsForProject(projectRoot, allThreads);
-  const availableThreadsById = new Map(allThreads.map((thread) => [thread.id, thread]));
-  const trackedThreads = new Map(projectThreads.slice(0, localLimit).map((thread) => [thread.id, thread]));
-  const pendingParents = [...trackedThreads.values()];
-
-  while (pendingParents.length > 0) {
-    const thread = pendingParents.shift();
-    if (!thread) {
-      continue;
-    }
-    const parentThreadId = parentThreadIdForThread(thread);
-    if (!parentThreadId || trackedThreads.has(parentThreadId)) {
-      continue;
-    }
-    const parentThread = availableThreadsById.get(parentThreadId);
-    if (!parentThread) {
-      continue;
-    }
-    trackedThreads.set(parentThread.id, parentThread);
-    pendingParents.push(parentThread);
-  }
-
-  return [...trackedThreads.values()];
-}
+export { selectProjectThreadsWithParents } from "../local-thread-selection";
 
 async function buildLocalAgents(
   projectRoot: string,
@@ -98,12 +69,19 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .map(async (thread) => {
         const recentThreadEvents = recentEventsByThreadId.get(thread.id) ?? [];
+        const needsUser = input.needsUserByThreadId?.get(thread.id) ?? null;
         const inferredOngoing =
           (input.ongoingThreadIds?.has(thread.id) ?? false)
           || isOngoingThread(thread);
         const summary = applyRecentActivityEvent(
           thread,
-          summariseThread(thread),
+          needsUser
+            ? {
+              ...summariseThread(thread),
+              state: needsUser.kind === "approval" ? "blocked" : "waiting",
+              detail: needsUser.kind === "approval" ? "Waiting on approval" : "Waiting on input"
+            }
+            : summariseThread(thread),
           recentThreadEvents
         );
         const syncedMessageSummary = syncSummaryWithLatestThreadMessage(thread, summary, recentThreadEvents);
@@ -147,7 +125,7 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
           git: thread.gitInfo,
           provenance: "codex" as const,
           confidence: "typed" as const,
-          needsUser: input.needsUserByThreadId?.get(thread.id) ?? null,
+          needsUser,
           liveSubscription: input.subscribedThreadIds?.has(thread.id) ? "subscribed" as const : "readOnly" as const,
           network: null
         };

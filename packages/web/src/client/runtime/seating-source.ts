@@ -1,11 +1,28 @@
 export const CLIENT_RUNTIME_SEATING_SOURCE = `
       const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;
       const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 1200;
+      const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
 
       function workstationDoneGraceMs(agent) {
         return agent && agent.parentThreadId
           ? SUBAGENT_DONE_WORKSTATION_GRACE_MS
           : TOP_LEVEL_DONE_WORKSTATION_GRACE_MS;
+      }
+
+      function hasCurrentLocalDeskGrace(agent) {
+        const updatedAt = parseAgentUpdatedAt(agent && agent.updatedAt);
+        return agent && agent.isCurrent === true
+          && isDeskLiveLocalState(agent.state)
+          && Number.isFinite(updatedAt)
+          && Date.now() - updatedAt <= CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS;
+      }
+
+      function hasCurrentLocalSeatCooldown(agent) {
+        const updatedAt = parseAgentUpdatedAt(agent && agent.updatedAt);
+        return agent && agent.source === "local"
+          && agent.isCurrent === true
+          && Number.isFinite(updatedAt)
+          && Date.now() - updatedAt <= CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS;
       }
 
       function shouldSeatAtWorkstation(agent) {
@@ -18,10 +35,24 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
             return Date.now() - stoppedAt <= workstationDoneGraceMs(agent);
           }
           if (agent.statusText === "notLoaded") {
-            return agent.isOngoing === true;
+            if (agent.state === "done") {
+              const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
+              return agent.isCurrent === true
+                && Number.isFinite(updatedAt)
+                && Date.now() - updatedAt <= workstationDoneGraceMs(agent);
+            }
+            return agent.isOngoing === true || hasCurrentLocalDeskGrace(agent);
           }
           if (agent.statusText === "active") {
-            return agent.isCurrent === true;
+            if (agent.state === "waiting") {
+              return false;
+            }
+            if ((agent.state === "idle" || agent.state === "done") && hasCurrentLocalSeatCooldown(agent)) {
+              return true;
+            }
+            return agent.isCurrent === true
+              && agent.state !== "idle"
+              && agent.state !== "done";
           }
           if (agent.state === "done") {
             return agent.isCurrent === true;
@@ -46,5 +77,12 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
         return isRecentLeadCandidate(agent)
           && !shouldSeatAtWorkstation(agent)
           && (agent.state === "waiting" || agent.state === "idle" || agent.state === "done");
+      }
+
+      function isLiveSceneAgent(agent) {
+        if (!agent || agent.source === "cloud" || agent.source === "presence") {
+          return false;
+        }
+        return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;
       }
 `;

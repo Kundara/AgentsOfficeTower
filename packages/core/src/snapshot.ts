@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 
 import { withAppServerClient } from "./app-server";
+import { selectProjectThreadsWithParents } from "./local-thread-selection";
 import { assembleProjectSnapshot } from "./services/snapshot-assembler";
 import { looksLikeValidationCommand, shortenText, isMeaningfulText } from "./utils/text";
 import { summarizeWebSearch } from "./web-search";
@@ -358,6 +359,9 @@ export function summariseThread(thread: CodexThread): {
   paths: string[];
   activityEvent: AgentActivityEvent | null;
 } {
+  const ageMs = Date.now() - thread.updatedAt * 1000;
+  const settledRecentState = ageMs <= DONE_WINDOW_MS ? "done" : "idle";
+
   if (thread.status.type === "systemError") {
     return {
       state: "blocked",
@@ -387,8 +391,6 @@ export function summariseThread(thread: CodexThread): {
 
   const turns = threadTurns(thread);
   const lastTurn = turns.at(-1);
-  const ageMs = Date.now() - thread.updatedAt * 1000;
-  const settledRecentState = ageMs <= DONE_WINDOW_MS ? "done" : "idle";
   if (!lastTurn) {
     const preview = shortenText(thread.preview || "", 88);
     const freshSpawnedDetached = isFreshSpawnedDetachedThread(thread);
@@ -442,10 +444,16 @@ export function summariseThread(thread: CodexThread): {
     case "fileChange": {
       const change = summarizeFileChange(item);
       const status = typeof item.status === "string" ? item.status : "inProgress";
-      const state = status === "failed" || status === "declined" ? "blocked" : "editing";
+      const state =
+        status === "failed" || status === "declined" ? "blocked"
+        : !treatAsInProgress && status === "completed" ? settledRecentState
+        : "editing";
       return {
         state,
-        detail: change.path ? `Editing ${change.path}` : "Editing files",
+        detail:
+          state === "done" || state === "idle"
+            ? change.path ? `Edited ${change.path}` : "Edited files"
+            : change.path ? `Editing ${change.path}` : "Editing files",
         paths: change.paths.length > 0 ? change.paths : [thread.cwd],
         activityEvent: {
           type: "fileChange",
@@ -477,7 +485,10 @@ export function summariseThread(thread: CodexThread): {
         };
       }
       return {
-        state: looksLikeValidationCommand(command) ? "validating" : "running",
+        state:
+          !treatAsInProgress && status === "completed"
+            ? settledRecentState
+            : looksLikeValidationCommand(command) ? "validating" : "running",
         detail: command,
         paths: [cwd],
         activityEvent: {
@@ -513,7 +524,10 @@ export function summariseThread(thread: CodexThread): {
         : "tool";
       const status = typeof item.status === "string" ? item.status : "inProgress";
       return {
-        state: status === "failed" ? "blocked" : "scanning",
+        state:
+          status === "failed" ? "blocked"
+          : !treatAsInProgress && status === "completed" ? settledRecentState
+          : "scanning",
         detail: item.type === "dynamicToolCall" ? tool : `${server}.${tool}`,
         paths: [thread.cwd],
         activityEvent: {
@@ -800,6 +814,9 @@ export function applyRecentActivityEvent(
       activityEvent
     };
   }
+  if (summary.state === "done" || summary.state === "idle") {
+    return summary;
+  }
   const commandText = preferredEvent.command ?? preferredEvent.detail ?? preferredEvent.title;
   const nextState =
     preferredEvent.kind === "fileChange"
@@ -850,26 +867,7 @@ async function buildLocalAgents(
         cwd: projectRoot,
         limit: Math.max(localLimit * 4, 40)
       });
-      const availableThreadsById = new Map(allThreads.map((thread) => [thread.id, thread]));
-      const trackedThreads = new Map(allThreads.slice(0, localLimit).map((thread) => [thread.id, thread]));
-      const pendingParents = [...trackedThreads.values()];
-      while (pendingParents.length > 0) {
-        const thread = pendingParents.shift();
-        if (!thread) {
-          continue;
-        }
-        const parentThreadId = parentThreadIdForThread(thread);
-        if (!parentThreadId || trackedThreads.has(parentThreadId)) {
-          continue;
-        }
-        const parentThread = availableThreadsById.get(parentThreadId);
-        if (!parentThread) {
-          continue;
-        }
-        trackedThreads.set(parentThread.id, parentThread);
-        pendingParents.push(parentThread);
-      }
-      const threads = [...trackedThreads.values()];
+      const threads = selectProjectThreadsWithParents(projectRoot, allThreads, localLimit);
       if (!readThreads) {
         return threads;
       }

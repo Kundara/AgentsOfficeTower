@@ -18,6 +18,17 @@ function patchRuntimeSection(source: string, label: string, from: string, to: st
   return source.replace(from, to);
 }
 
+function patchRuntimeSectionIfPresent(source: string, from: string, to: string): string {
+  return source.includes(from) ? source.replace(from, to) : source;
+}
+
+function patchRuntimeLiteralAll(source: string, label: string, from: string, to: string): string {
+  if (!source.includes(from)) {
+    throw new Error(`Runtime patch "${label}" is out of date.`);
+  }
+  return source.split(from).join(to);
+}
+
 const CLIENT_RUNTIME_SCENE_SOURCE_WITH_STABLE_DESK_SEATS = patchRuntimeSection(
   RAW_CLIENT_RUNTIME_SCENE_SOURCE,
   "stable desk seats",
@@ -48,12 +59,11 @@ const CLIENT_RUNTIME_SCENE_SOURCE_WITH_STABLE_DESK_SEATS = patchRuntimeSection(
                   absoluteY: pod.y
                 }
               );`,
-  `              const padX = compact ? 8 : 10;
-              const centerGap = 0;
-              const cellWidth = Math.max(compact ? 44 : 58, Math.floor((entry.slot.width - padX * 2 - centerGap) / 2));
+  `              const tile = sceneTileSize(compact);
+              const cellWidth = Math.min(entry.slot.width, tile * 3);
               const hasBothSides = Boolean(entry.agents[0] && entry.agents[1]);
-              const leftCellX = padX;
-              const rightCellX = padX + cellWidth + centerGap;
+              const leftCellX = 0;
+              const rightCellX = Math.max(0, entry.slot.width - cellWidth);
               const seatMirrored = hasBothSides
                 ? index === 1
                 : previousSceneMirrored(snapshot, agent) === true;
@@ -96,8 +106,16 @@ const CLIENT_RUNTIME_SCENE_SOURCE_WITH_STABLE_DESK_MIRROR_STATE = patchRuntimeSe
                 });`
 );
 
-const CLIENT_RUNTIME_SCENE_SOURCE = patchRuntimeSection(
+const CLIENT_RUNTIME_SCENE_SOURCE_WITH_STABLE_DESK_GEOMETRY = patchRuntimeSectionIfPresent(
   CLIENT_RUNTIME_SCENE_SOURCE_WITH_STABLE_DESK_MIRROR_STATE,
+  `        const centerInset = options.sharedCenter ? 0 : innerInset;
+        const deskEdgeClamp = options.sharedCenter ? 0 : 2;`,
+  `        const centerInset = innerInset;
+        const deskEdgeClamp = 2;`
+);
+
+const CLIENT_RUNTIME_SCENE_SOURCE = patchRuntimeSection(
+  CLIENT_RUNTIME_SCENE_SOURCE_WITH_STABLE_DESK_GEOMETRY,
   "boss office seating",
   `          officeAssignments.forEach((entry) => {
             const officeX = roomX + entry.slot.x;
@@ -127,11 +145,8 @@ const CLIENT_RUNTIME_SCENE_SOURCE = patchRuntimeSection(
             const officeX = roomX + entry.slot.x;
             const officeY = roomY + entry.slot.y;
             const role = agentRole(entry.agent);
-            const innerPadX = compact ? 10 : 12;
-            const cellWidth = Math.max(
-              compact ? 36 : 40,
-              Math.min(entry.slot.width - innerPadX * 2, compact ? 44 : 48)
-            );
+            const tile = sceneTileSize(compact);
+            const cellWidth = Math.min(entry.slot.width, tile * 3);
             const cellX = Math.round((entry.slot.width - cellWidth) / 2);
             const visual = buildCubicleCellVisualModel(
               snapshot,
@@ -151,6 +166,100 @@ const CLIENT_RUNTIME_SCENE_SOURCE = patchRuntimeSection(
                 absoluteY: officeY
               }
             );`
+);
+
+const CLIENT_RUNTIME_SCENE_SOURCE_WITH_SMALLER_PREFABS = patchRuntimeLiteralAll(
+  CLIENT_RUNTIME_SCENE_SOURCE,
+  "smaller workstation prefabs",
+  `(compact ? 1.25 : 1.5)`,
+  `(compact ? 1 : 1.08)`
+);
+
+const CLIENT_RUNTIME_SCENE_SOURCE_WITH_SEATED_ACTIVE_WORK = patchRuntimeSection(
+  CLIENT_RUNTIME_SCENE_SOURCE_WITH_SMALLER_PREFABS,
+  "seated active workstation pose",
+  `          if (state === "running" || state === "validating" || state === "blocked") {
+            const workingX = mirrored
+              ? clampAvatarX(sideX + (compact ? 4 : 6))
+              : clampAvatarX(sideX - (compact ? 4 : 6));
+            return { x: workingX, y: baseY, flip: workstationFlip };
+          }`,
+  `          if (state === "running" || state === "validating") {
+            return { x: seatedX, y: Math.max(0, baseY - (compact ? 1 : 3)), flip: workstationFlip };
+          }
+          if (state === "blocked") {
+            const workingX = mirrored
+              ? clampAvatarX(sideX + (compact ? 4 : 6))
+              : clampAvatarX(sideX - (compact ? 4 : 6));
+            return { x: workingX, y: baseY, flip: workstationFlip };
+          }`
+);
+
+const CLIENT_RUNTIME_SCENE_SOURCE_FINAL = patchRuntimeSection(
+  CLIENT_RUNTIME_SCENE_SOURCE_WITH_SEATED_ACTIVE_WORK,
+  "grid aligned workstation bounds",
+  `        const absoluteCellX = Math.round(options.absoluteX ?? x);
+        const absoluteCellY = Math.round(options.absoluteY ?? y);
+        const stationBoundsX = mirrored
+          ? absoluteCellX + Math.round(deskX)
+          : absoluteCellX + Math.round(deskX + deskWidth - sceneTile * 3);
+        const stationBoundsY = absoluteCellY + Math.round(deskY + deskHeight - sceneTile * 2);`,
+  `        const absoluteCellX = Math.round(options.absoluteX ?? x);
+        const absoluteCellY = Math.round(options.absoluteY ?? y);
+        const stationBoundsX = absoluteCellX + Math.max(0, Math.round((boothWidth - sceneTile * 3) / 2));
+        const stationBoundsY = absoluteCellY + Math.max(0, boothHeight - sceneTile);`
+);
+
+const CLIENT_RUNTIME_SCENE_SOURCE_WITH_WORKSTATION_FOOTPRINT = patchRuntimeSection(
+  CLIENT_RUNTIME_SCENE_SOURCE_FINAL,
+  "workstation footprint row",
+  `          workstationBounds: {
+            x: stationBoundsX,
+            y: stationBoundsY,
+            width: sceneTile * 3,
+            height: sceneTile * 2,
+            tileWidth: 3,
+            tileHeight: 2
+          },`,
+  `          workstationBounds: {
+            x: stationBoundsX,
+            y: stationBoundsY,
+            width: sceneTile * 3,
+            height: sceneTile,
+            tileWidth: 3,
+            tileHeight: 1
+          },`
+);
+
+const CLIENT_RUNTIME_SCENE_SOURCE_WITH_RECENT_RESTING_LEADS = patchRuntimeSection(
+  CLIENT_RUNTIME_SCENE_SOURCE_WITH_WORKSTATION_FOOTPRINT,
+  "recent resting lead limit",
+  `        const waitingAgents = snapshot.agents
+          .filter((agent) => agent.state === "waiting" && agent.source !== "cloud")
+          .sort(compareAgentsByRecencyStable);
+        const restingAgents = restingAgentsFor(snapshot, compact);
+        const offDeskAgentIds = new Set([...waitingAgents, ...restingAgents].map((agent) => agent.id));`,
+  `        const waitingAgents = snapshot.agents
+          .filter((agent) => agent.state === "waiting" && agent.source !== "cloud")
+          .sort(compareAgentsByRecencyStable);
+        const allRestingAgents = restingAgentsFor(snapshot, compact);
+        const restingAgents = allRestingAgents
+          .filter((agent) =>
+            !agent.parentThreadId
+            && agent.source !== "presence"
+            && Boolean(agent.threadId || agent.taskId || agent.url || agent.source === "claude")
+          )
+          .slice(0, 4);
+        const offDeskAgentIds = new Set([...waitingAgents, ...allRestingAgents].map((agent) => agent.id));`
+);
+
+const CLIENT_RUNTIME_SCENE_SOURCE_WITH_BOUNDED_REC_ASSIGNMENTS = patchRuntimeSection(
+  CLIENT_RUNTIME_SCENE_SOURCE_WITH_RECENT_RESTING_LEADS,
+  "bounded rec resting assignments",
+  `            const waitingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "waiting", waitingAgents);
+            const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents);`,
+  `            const waitingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "waiting", waitingAgents);
+            const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents, 4);`
 );
 
 const CLIENT_RUNTIME_NAVIGATION_SOURCE = patchRuntimeSection(
@@ -222,8 +331,61 @@ const CLIENT_RUNTIME_NAVIGATION_SOURCE = patchRuntimeSection(
           officeNodes.push(doorway);`
 );
 
-const CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_RELATIONSHIP_LINES = patchRuntimeSection(
+const CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_SMALLER_DESK_RENDERING = patchRuntimeSection(
   CLIENT_RUNTIME_NAVIGATION_SOURCE,
+  "smaller desk rendering",
+  `        function addSpriteNode(definition) {
+          const sprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(definition.sprite) || definition.sprite);
+          const snappedWidth = pixelSnap(definition.width, 1);
+          const snappedHeight = pixelSnap(definition.height, 1);
+          sprite.x = pixelSnap(definition.x);
+          sprite.y = pixelSnap(definition.y);
+          sprite.width = snappedWidth;
+          sprite.height = snappedHeight;
+          sprite.alpha = Number.isFinite(definition.alpha) ? definition.alpha : 1;`,
+  `        function addSpriteNode(definition) {
+          const sprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(definition.sprite) || definition.sprite);
+          const deskShellScale = definition && definition.z >= 7 && definition.z <= 9 ? 0.86 : 1;
+          const deskShellLift = definition && definition.z === 8 ? 4 : 0;
+          const snappedWidth = pixelSnap(definition.width * deskShellScale, 1);
+          const snappedHeight = pixelSnap(definition.height * deskShellScale, 1);
+          const offsetX = pixelSnap((definition.width - snappedWidth) / 2);
+          const offsetY = pixelSnap(definition.height - snappedHeight) - deskShellLift;
+          sprite.x = pixelSnap(definition.x) + offsetX;
+          sprite.y = pixelSnap(definition.y) + offsetY;
+          sprite.width = snappedWidth;
+          sprite.height = snappedHeight;
+          sprite.alpha = Number.isFinite(definition.alpha) ? definition.alpha : 1;`
+);
+
+const CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_SMALLER_AVATAR_RENDERING = patchRuntimeSection(
+  CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_SMALLER_DESK_RENDERING,
+  "smaller avatar rendering",
+  `        function addAvatarNode(agent, zIndex = 12) {
+          const avatar = PIXI.Sprite.from(loadedOfficeAssetImages.get(agent.sprite) || agent.sprite);
+          const createdNodes = [];
+          const snappedWidth = pixelSnap(agent.width, 1);
+          const snappedHeight = pixelSnap(agent.height, 1);
+          avatar.x = pixelSnap(agent.x);
+          avatar.y = pixelSnap(agent.y);
+          avatar.width = snappedWidth;
+          avatar.height = snappedHeight;`,
+  `        function addAvatarNode(agent, zIndex = 12) {
+          const avatar = PIXI.Sprite.from(loadedOfficeAssetImages.get(agent.sprite) || agent.sprite);
+          const createdNodes = [];
+          const avatarScale = agent && agent.slotId ? 0.86 : 1;
+          const snappedWidth = pixelSnap(agent.width * avatarScale, 1);
+          const snappedHeight = pixelSnap(agent.height * avatarScale, 1);
+          const offsetX = pixelSnap((agent.width - snappedWidth) / 2);
+          const offsetY = pixelSnap(agent.height - snappedHeight);
+          avatar.x = pixelSnap(agent.x) + offsetX;
+          avatar.y = pixelSnap(agent.y) + offsetY;
+          avatar.width = snappedWidth;
+          avatar.height = snappedHeight;`
+);
+
+const CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_RELATIONSHIP_LINES = patchRuntimeSection(
+  CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_SMALLER_AVATAR_RENDERING,
   "boss relationship arrows",
   `        model.relationshipLines.forEach((line) => {
           const path = new PIXI.Graphics()
@@ -289,8 +451,22 @@ const CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_RELATIONSHIP_LINES = patchRuntimeSec
         });`
 );
 
-const CLIENT_RUNTIME_NAVIGATION_SOURCE_FINAL = patchRuntimeSection(
+const CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_EXPLICIT_DEPARTURES = patchRuntimeSection(
   CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_RELATIONSHIP_LINES,
+  "explicit departure ghosts",
+  `        previousMotionStates.forEach((motionState, key) => {
+          if (!motionState || currentAgentKeys.has(key) || motionState.exiting) {
+            return;
+          }`,
+  `        const departingAgentKeys = new Set(departingAgents.map((agent) => agent.key));
+        previousMotionStates.forEach((motionState, key) => {
+          if (!motionState || currentAgentKeys.has(key) || motionState.exiting || !departingAgentKeys.has(key)) {
+            return;
+          }`
+);
+
+const CLIENT_RUNTIME_NAVIGATION_SOURCE_FINAL = patchRuntimeSection(
+  CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_EXPLICIT_DEPARTURES,
   "boss relationship arrow focus",
   `      function applyOfficeRendererFocus(renderer) {
         if (!renderer || !Array.isArray(renderer.focusables)) {
@@ -443,8 +619,187 @@ const CLIENT_RUNTIME_UI_SOURCE = patchRuntimeSection(
       }`
 );
 
-const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_DISPLAY_MARKDOWN = patchRuntimeSection(
+const CLIENT_RUNTIME_UI_SOURCE_WITH_DEDUPED_DEPARTURES = patchRuntimeSection(
+  CLIENT_RUNTIME_UI_SOURCE,
+  "deduped departing agents",
+  `        for (const [key, entry] of liveAgentMemory.entries()) {
+          if (!nextMemory.has(key)) {
+            const sceneState = renderedAgentSceneState.get(key) || null;
+            if (!sceneState) {
+              continue;
+            }
+            departingAgents.push({
+              ...entry,
+              sceneState,
+              expiresAt: now + DEPARTING_AGENT_TTL_MS
+            });
+          }
+        }`,
+  `        for (const [key, entry] of liveAgentMemory.entries()) {
+          if (!nextMemory.has(key)) {
+            const sceneState = renderedAgentSceneState.get(key) || null;
+            if (!sceneState) {
+              continue;
+            }
+            const existingGhost = departingAgents.find((ghost) => ghost.key === key) || null;
+            if (existingGhost) {
+              existingGhost.projectRoot = entry.projectRoot;
+              existingGhost.roomId = entry.roomId;
+              existingGhost.agent = entry.agent;
+              existingGhost.sceneState = sceneState;
+              existingGhost.expiresAt = now + DEPARTING_AGENT_TTL_MS;
+              continue;
+            }
+            departingAgents.push({
+              ...entry,
+              sceneState,
+              expiresAt: now + DEPARTING_AGENT_TTL_MS
+            });
+          }
+        }`
+);
+
+const CLIENT_RUNTIME_UI_SOURCE_WITH_STABLE_INITIAL_PRESENCE = patchRuntimeSection(
+  CLIENT_RUNTIME_UI_SOURCE_WITH_DEDUPED_DEPARTURES,
+  "stable initial presence",
+  `        enteringAgentKeys = new Set(
+          [...nextMemory.keys()].filter((key) => !previousKeys.has(key))
+        );`,
+  `        enteringAgentKeys = previousKeys.size === 0 || screenshotMode
+          ? new Set()
+          : new Set(
+              [...nextMemory.keys()].filter((key) => !previousKeys.has(key))
+            );`
+);
+
+const CLIENT_RUNTIME_UI_SOURCE_FINAL = patchRuntimeSection(
+  CLIENT_RUNTIME_UI_SOURCE_WITH_STABLE_INITIAL_PRESENCE,
+  "single workspace compact scene",
+  `renderWorkspaceFloor(snapshot, {
+                  compact: false,
+                  focusMode: state.workspaceFullscreen,`,
+  `renderWorkspaceFloor(snapshot, {
+                  compact: true,
+                  focusMode: state.workspaceFullscreen,`
+);
+
+const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_WAITING_ACTIVE_DESKS = patchRuntimeSection(
   CLIENT_RUNTIME_LAYOUT_SOURCE,
+  "active waiting desks",
+  `          if (agent.statusText === "active") {
+            return agent.isCurrent === true;
+          }`,
+  `          if (agent.statusText === "active") {
+            return agent.isCurrent === true
+              && agent.state !== "waiting"
+              && agent.state !== "idle"
+              && agent.state !== "done";
+          }`
+);
+
+const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_CURRENT_LOCAL_DESK_GRACE = patchRuntimeSection(
+  CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_WAITING_ACTIVE_DESKS,
+  "current local desk grace",
+  `      const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;
+      const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 1200;`,
+  `      const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;
+      const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 1200;
+      const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
+
+      function hasCurrentLocalDeskGrace(agent) {
+        const updatedAt = parseAgentUpdatedAt(agent && agent.updatedAt);
+        return agent && agent.isCurrent === true
+          && isDeskLiveLocalState(agent.state)
+          && Number.isFinite(updatedAt)
+          && Date.now() - updatedAt <= CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS;
+      }
+
+      function hasCurrentLocalSeatCooldown(agent) {
+        const updatedAt = parseAgentUpdatedAt(agent && agent.updatedAt);
+        return agent && agent.source === "local"
+          && agent.isCurrent === true
+          && Number.isFinite(updatedAt)
+          && Date.now() - updatedAt <= CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS;
+      }`
+);
+
+const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_ACTIVE_SEAT_COOLDOWN = patchRuntimeSection(
+  CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_CURRENT_LOCAL_DESK_GRACE,
+  "active seat cooldown",
+  `          if (agent.statusText === "active") {
+            return agent.isCurrent === true
+              && agent.state !== "waiting"
+              && agent.state !== "idle"
+              && agent.state !== "done";
+          }`,
+  `          if (agent.statusText === "active") {
+            if (agent.state === "waiting") {
+              return false;
+            }
+            if ((agent.state === "idle" || agent.state === "done") && hasCurrentLocalSeatCooldown(agent)) {
+              return true;
+            }
+            return agent.isCurrent === true
+              && agent.state !== "idle"
+              && agent.state !== "done";
+          }`
+);
+
+const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_NOTLOADED_DESK_GRACE = patchRuntimeSection(
+  CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_ACTIVE_SEAT_COOLDOWN,
+  "notLoaded desk grace",
+  `          if (agent.statusText === "notLoaded") {
+            return agent.isOngoing === true;
+          }`,
+  `          if (agent.statusText === "notLoaded") {
+            if (agent.state === "done") {
+              const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
+              return agent.isCurrent === true
+                && Number.isFinite(updatedAt)
+                && Date.now() - updatedAt <= workstationDoneGraceMs(agent);
+            }
+            return agent.isOngoing === true || hasCurrentLocalDeskGrace(agent);
+          }`
+);
+
+const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_VISIBLE_CURRENT_SCENE_AGENTS = patchRuntimeSection(
+  CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_NOTLOADED_DESK_GRACE,
+  "visible current scene agents",
+  `      function viewSnapshot(snapshot, recentLeadLimit = SCENE_RECENT_LEAD_LIMIT) {
+        const activeAgents = snapshot.agents.filter(shouldSeatAtWorkstation);
+        const recentLeads = recentLeadAgents(snapshot, recentLeadLimit);
+        return {
+          ...snapshot,
+          agents: [...activeAgents, ...recentLeads]
+        };
+      }`,
+  `      function isLiveSceneAgent(agent) {
+        if (!agent || agent.source === "cloud" || agent.source === "presence") {
+          return false;
+        }
+        return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;
+      }
+
+      function viewSnapshot(snapshot, recentLeadLimit = SCENE_RECENT_LEAD_LIMIT) {
+        const liveAgents = snapshot.agents.filter(isLiveSceneAgent);
+        const recentLeads = recentLeadAgents(snapshot, recentLeadLimit);
+        const seenAgentIds = new Set();
+        return {
+          ...snapshot,
+          agents: [...liveAgents, ...recentLeads].filter((agent) => {
+            const agentId = String(agent && agent.id || "");
+            if (!agentId || seenAgentIds.has(agentId)) {
+              return false;
+            }
+            seenAgentIds.add(agentId);
+            return true;
+          })
+        };
+      }`
+);
+
+const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_DISPLAY_MARKDOWN = patchRuntimeSection(
+  CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_VISIBLE_CURRENT_SCENE_AGENTS,
   "display markdown cleanup",
   `      function normalizeDisplayText(projectRoot, value) {
         const normalized = String(value || "").trim();
@@ -537,19 +892,135 @@ const CLIENT_RUNTIME_RENDER_SOURCE_WITH_DISPLAY_MARKDOWN = patchRuntimeSection(
       }`
 );
 
+const CLIENT_RUNTIME_RENDER_SOURCE_WITH_SAFE_REC_SEATS = patchRuntimeSection(
+  CLIENT_RUNTIME_RENDER_SOURCE_WITH_DISPLAY_MARKDOWN,
+  "safe rec seats",
+  `      function recRoomSeatSlotAt(agent, index, compact, roomPixelWidth, baseY, sofaColumns = null) {
+        const layout = sofaColumns
+          ? {
+              sofaWidth: sceneTileSize(compact) * 2,
+              sofas: [
+                { id: "sofa-left", x: sofaColumns.left * sceneTileSize(compact), y: baseY },
+                { id: "sofa-right", x: sofaColumns.right * sceneTileSize(compact), y: baseY }
+              ]
+            }
+          : recRoomSofaLayout(compact, roomPixelWidth, baseY);`,
+  `      function recRoomSeatSlotAt(agent, index, compact, roomPixelWidth, baseY, sofaColumns = null) {
+        const tile = sceneTileSize(compact);
+        const defaultLayout = recRoomSofaLayout(compact, roomPixelWidth, baseY);
+        const requestedLayout = sofaColumns
+          ? {
+              sofaWidth: tile * 2,
+              sofas: [
+                { id: "sofa-left", x: sofaColumns.left * tile, y: baseY },
+                { id: "sofa-right", x: sofaColumns.right * tile, y: baseY }
+              ]
+            }
+          : null;
+        const layout =
+          requestedLayout
+          && Math.abs(requestedLayout.sofas[1].x - requestedLayout.sofas[0].x) >= tile * 3
+            ? requestedLayout
+            : defaultLayout;`
+);
+
+const CLIENT_RUNTIME_SETTINGS_SOURCE_WITH_BOUNDED_REC_SLOTS = patchRuntimeSection(
+  CLIENT_RUNTIME_SETTINGS_SOURCE,
+  "bounded rec slot memory",
+  `      function stableSceneSlotAssignments(projectRoot, category, agents) {
+        const memoryKey = String(projectRoot) + "::" + String(category);
+        const previous = recSlotMemory.get(memoryKey) || new Map();
+        const next = new Map();
+        const assignments = [];
+        const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+        const usedIndexes = new Set();
+
+        for (const [agentId, slotIndex] of previous.entries()) {
+          const agent = agentById.get(agentId);
+          if (!agent || !Number.isFinite(slotIndex) || usedIndexes.has(slotIndex)) {
+            continue;
+          }
+          next.set(agentId, slotIndex);
+          usedIndexes.add(slotIndex);
+          assignments.push({ agent, slotIndex });
+        }
+
+        let nextSlotIndex = 0;
+        for (const agent of agents) {
+          if (next.has(agent.id)) {
+            continue;
+          }
+          while (usedIndexes.has(nextSlotIndex)) {
+            nextSlotIndex += 1;
+          }
+          next.set(agent.id, nextSlotIndex);
+          usedIndexes.add(nextSlotIndex);
+          assignments.push({ agent, slotIndex: nextSlotIndex });
+          nextSlotIndex += 1;
+        }
+
+        recSlotMemory.set(memoryKey, next);
+        return assignments.sort((left, right) => left.slotIndex - right.slotIndex);
+      }`,
+  `      function stableSceneSlotAssignments(projectRoot, category, agents, maxSlots = null) {
+        const memoryKey = String(projectRoot) + "::" + String(category);
+        const previous = recSlotMemory.get(memoryKey) || new Map();
+        const next = new Map();
+        const assignments = [];
+        const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+        const usedIndexes = new Set();
+        const slotLimit = Number.isFinite(maxSlots) ? Math.max(0, Math.floor(maxSlots)) : null;
+
+        for (const [agentId, slotIndex] of previous.entries()) {
+          const agent = agentById.get(agentId);
+          if (
+            !agent
+            || !Number.isFinite(slotIndex)
+            || usedIndexes.has(slotIndex)
+            || (slotLimit !== null && slotIndex >= slotLimit)
+          ) {
+            continue;
+          }
+          next.set(agentId, slotIndex);
+          usedIndexes.add(slotIndex);
+          assignments.push({ agent, slotIndex });
+        }
+
+        let nextSlotIndex = 0;
+        for (const agent of agents) {
+          if (next.has(agent.id)) {
+            continue;
+          }
+          while (usedIndexes.has(nextSlotIndex)) {
+            nextSlotIndex += 1;
+          }
+          if (slotLimit !== null && nextSlotIndex >= slotLimit) {
+            break;
+          }
+          next.set(agent.id, nextSlotIndex);
+          usedIndexes.add(nextSlotIndex);
+          assignments.push({ agent, slotIndex: nextSlotIndex });
+          nextSlotIndex += 1;
+        }
+
+        recSlotMemory.set(memoryKey, next);
+        return assignments.sort((left, right) => left.slotIndex - right.slotIndex);
+      }`
+);
+
 const RUNTIME_SECTIONS = [
   CLIENT_RUNTIME_BOOTSTRAP_SOURCE,
-  CLIENT_RUNTIME_SETTINGS_SOURCE,
+  CLIENT_RUNTIME_SETTINGS_SOURCE_WITH_BOUNDED_REC_SLOTS,
   SCENE_GRID_SCRIPT,
   TOAST_SCRIPT,
   MULTIPLAYER_SCRIPT,
   CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_DISPLAY_PATH_SCAN,
   CLIENT_RUNTIME_SEATING_SOURCE,
-  CLIENT_RUNTIME_RENDER_SOURCE_WITH_DISPLAY_MARKDOWN,
+  CLIENT_RUNTIME_RENDER_SOURCE_WITH_SAFE_REC_SEATS,
   CLIENT_RUNTIME_MESSAGE_FILTER_SOURCE,
-  CLIENT_RUNTIME_SCENE_SOURCE,
+  CLIENT_RUNTIME_SCENE_SOURCE_WITH_BOUNDED_REC_ASSIGNMENTS,
   CLIENT_RUNTIME_NAVIGATION_SOURCE_FINAL,
-  CLIENT_RUNTIME_UI_SOURCE
+  CLIENT_RUNTIME_UI_SOURCE_FINAL
 ];
 
 export const CLIENT_RUNTIME_SOURCE = RUNTIME_SECTIONS.join("");

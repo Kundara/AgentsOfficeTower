@@ -58,6 +58,7 @@ The live browser path now uses a hybrid approach:
 
 - `thread/list` and `thread/read` stay authoritative for stable thread state
 - `thread/list` is discovery-oriented only; ongoing occupancy also follows `thread/read` turn state so a `notLoaded` thread with an in-progress turn still stays live on the floor
+- active `thread/list` rows are always retained in the tracked local-thread set even when they are older than the normal recent-thread cutoff, so a live desktop session is subscribed on startup before its next visible delta
 - active and recent threads are resumed on the observer connection so the app can receive live `turn/*`, `item/*`, approval, input, and `serverRequest/resolved` events
 - observer runtime unload notifications such as `thread/closed` or `thread/status/changed -> notLoaded` are treated as subscription state, not as proof that the underlying thread resolved
 - slow desktop `thread/resume` attaches now happen in the background so the web server does not block initial rendering on them
@@ -126,6 +127,8 @@ Sources:
 - browser map layout now derives from a tile-grid settings model instead of renderer-local pixel literals
 - internal scene settings define prefab geometry and spacing such as tile size, boss-booth size, desk-pod span, top-band depth, cubicle-group spacing, column spacing, and rec-strip depth
 - the scene tile is now a fixed `16px` unit in both normal and compact map modes so grid placement aligns with native PixelOffice asset sizing
+- selected-workspace and focused single-workspace rendering reuse the same compact scene prefab geometry as the tower overview; only whole-scene fit scaling changes between those views
+- desk-pod origins and the workstation seat cells inside them are expected to stay tile-aligned, matching the same grid contract used by rec-strip furniture
 - global browser settings currently expose only text scale; it applies to hover/toast/map text but does not change room or prefab geometry
 - the retained browser map path now uses a persistent Pixi scene host plus HTML anchor overlays for toast positioning, so map updates can mutate scene entities without replacing the scene shell
 - routed avatar movement in the Pixi scene now uses a lightweight grid pathfinder against room occupancy instead of direct straight-line scene tweens

@@ -16,6 +16,7 @@ import {
   isOngoingThread,
   parentThreadIdForThread
 } from "./snapshot";
+import { selectProjectThreadsWithParents } from "./local-thread-selection";
 import type {
   CloudTask,
   CodexThread,
@@ -1392,7 +1393,8 @@ export class ProjectLiveMonitor extends EventEmitter {
       const projectThreads = filterThreadsForProject(this.projectRoot, allThreads);
       const projectThreadsById = new Map(projectThreads.map((thread) => [thread.id, thread]));
       const trackedThreads = new Map(
-        projectThreads.slice(0, this.localLimit).map((thread) => [thread.id, thread])
+        selectProjectThreadsWithParents(this.projectRoot, allThreads, this.localLimit)
+          .map((thread) => [thread.id, thread])
       );
       const pendingAncestors = [...trackedThreads.values()];
       while (pendingAncestors.length > 0) {

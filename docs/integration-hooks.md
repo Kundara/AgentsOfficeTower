@@ -159,6 +159,7 @@ Used in:
 How we use it:
 
 - active threads and threads updated in the last 10 minutes are resumed on the observer connection
+- active threads are included in that tracked set even when they fall outside the normal recent-thread limit, so startup discovery does not wait for a fresh delta before subscribing them
 - the observer keeps at most 8 project threads subscribed at once
 - subscription sync now runs in the background so the web server can render before slow desktop thread attaches finish
 - desktop-backed `thread/resume` attaches can take tens of seconds in practice, so the observer now gives subscription sync a 60-second timeout budget before degrading that thread back to `readOnly`

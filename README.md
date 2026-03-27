@@ -35,6 +35,8 @@ Browser workload behavior:
 - local Codex sessions stay on desks while app-server still reports `status.type = "active"`, even if the latest visible item is waiting for input/approval or has already streamed a recent reply
 - the rec area holds recent resting lead sessions, not stale active-looking placeholders
 - stale local `notLoaded` threads and completed process-only items like context compaction no longer count as active desk work after the turn has actually finished
+- single-project focus reuses the same compact scene geometry as the tower overview, with only whole-scene fit scaling changing between those modes
+- desk pods and their workstation seat cells stay snapped to the `16px` tile grid instead of shifting onto separate pixel offsets
 
 ## Support matrix
 

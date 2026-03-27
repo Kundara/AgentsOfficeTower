@@ -18,22 +18,9 @@ test("renderHtml loads external client assets and bootstrap config", () => {
   assert.match(html, /window\.__AGENTS_OFFICE_CLIENT_CONFIG__/);
 });
 
-test("client runtime does not seat notLoaded local threads at workstations just because they are current", () => {
-  const layoutSource = readFileSync(
-    join(__dirname, "../src/client/runtime/layout-source.ts"),
-    "utf8"
-  );
-
-  assert.match(layoutSource, /if \(agent\.statusText === \\"notLoaded\\"\) \{\\n\s+return agent\.isOngoing === true;/);
-  assert.match(
-    layoutSource,
-    /return agent\.statusText !== \\"notLoaded\\" && isDeskLiveLocalState\(agent\.state\);/
-  );
-});
-
-test("client runtime keeps app-server active local threads on desks before waiting or done fallbacks", () => {
-  const layoutSource = readFileSync(
-    join(__dirname, "../src/client/runtime/layout-source.ts"),
+test("client runtime keeps current local desk-live work on a workstation through notLoaded transport gaps", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
     "utf8"
   );
   const seatingSource = readFileSync(
@@ -41,8 +28,86 @@ test("client runtime keeps app-server active local threads on desks before waiti
     "utf8"
   );
 
-  assert.match(layoutSource, /if \(agent\.statusText === \\"active\\"\) \{\\n\s+return agent\.isCurrent === true;/);
-  assert.match(seatingSource, /if \(agent\.statusText === "active"\) {\n\s+return agent\.isCurrent === true;/);
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_CURRENT_LOCAL_DESK_GRACE = patchRuntimeSection('),
+    "runtime source should patch a short current-local desk grace into the assembled layout runtime"
+  );
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_NOTLOADED_DESK_GRACE = patchRuntimeSection('),
+    "runtime source should patch notLoaded desk grace into the assembled layout runtime"
+  );
+  assert.ok(
+    runtimeSource.includes('const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;'),
+    "layout runtime should bound current local desk grace to a short window"
+  );
+  assert.ok(
+    runtimeSource.includes('return agent.isOngoing === true || hasCurrentLocalDeskGrace(agent);'),
+    "layout runtime should keep current desk-live work seated through notLoaded gaps"
+  );
+  assert.ok(
+    runtimeSource.includes('if (agent.state === "done") {\n              const updatedAt = parseAgentUpdatedAt(agent.updatedAt);'),
+    "layout runtime should honor a short done grace before cooling a notLoaded current thread into the rec area"
+  );
+  assert.match(
+    seatingSource,
+    /const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;/
+  );
+  assert.match(
+    seatingSource,
+    /function hasCurrentLocalDeskGrace\(agent\) {\n\s+const updatedAt = parseAgentUpdatedAt\(agent && agent\.updatedAt\);/
+  );
+  assert.match(
+    seatingSource,
+    /if \(agent\.statusText === "notLoaded"\) {\n\s+if \(agent\.state === "done"\) {\n\s+const updatedAt = parseAgentUpdatedAt\(agent\.updatedAt\);/
+  );
+  assert.match(
+    seatingSource,
+    /return agent\.isCurrent === true\n\s+&& Number\.isFinite\(updatedAt\)\n\s+&& Date\.now\(\) - updatedAt <= workstationDoneGraceMs\(agent\);/
+  );
+  assert.match(
+    seatingSource,
+    /return agent\.isOngoing === true \|\| hasCurrentLocalDeskGrace\(agent\);/
+  );
+});
+
+test("client runtime keeps active local desks live, leaves waiting in the rec area, and gives current idle/done work a short settle window", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
+    "utf8"
+  );
+  const seatingSource = readFileSync(
+    join(__dirname, "../src/client/runtime/seating-source.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_WAITING_ACTIVE_DESKS = patchRuntimeSection('),
+    "runtime source should patch waiting active threads out of workstation seating"
+  );
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_ACTIVE_SEAT_COOLDOWN = patchRuntimeSection('),
+    "runtime source should patch a short active-seat cooldown for current local idle/done threads"
+  );
+  assert.ok(
+    runtimeSource.includes('if (agent.state === "waiting") {\n              return false;\n            }'),
+    "layout runtime should keep waiting agents out of workstation seating"
+  );
+  assert.ok(
+    runtimeSource.includes('if ((agent.state === "idle" || agent.state === "done") && hasCurrentLocalSeatCooldown(agent)) {\n              return true;\n            }'),
+    "layout runtime should keep current local idle/done work on the desk through a short settle window"
+  );
+  assert.ok(
+    runtimeSource.includes('return agent.isCurrent === true\n              && agent.state !== "idle"\n              && agent.state !== "done";'),
+    "layout runtime should still require current non-resting work after the settle window"
+  );
+  assert.match(
+    seatingSource,
+    /function hasCurrentLocalSeatCooldown\(agent\) {\n\s+const updatedAt = parseAgentUpdatedAt\(agent && agent\.updatedAt\);/
+  );
+  assert.match(
+    seatingSource,
+    /if \(agent\.statusText === "active"\) {\n\s+if \(agent\.state === "waiting"\) {\n\s+return false;\n\s+}\n\s+if \(\(agent\.state === "idle" \|\| agent\.state === "done"\) && hasCurrentLocalSeatCooldown\(agent\)\) {\n\s+return true;\n\s+}\n\s+return agent\.isCurrent === true\n\s+&& agent\.state !== "idle"\n\s+&& agent\.state !== "done";/
+  );
 });
 
 test("client runtime only keeps ordinary local desks for current workload", () => {
@@ -72,8 +137,16 @@ test("runtime source keeps desk seats stable when a second workstation appears i
     "runtime source should patch the raw scene source for stable desk seats"
   );
   assert.ok(
-    runtimeSource.includes('const leftCellX = padX;'),
+    runtimeSource.includes('const tile = sceneTileSize(compact);'),
+    "desk seating should derive seat cells from the scene tile size"
+  );
+  assert.ok(
+    runtimeSource.includes('const leftCellX = 0;'),
     "single-seat pods should anchor to the left seat cell"
+  );
+  assert.ok(
+    runtimeSource.includes('const rightCellX = Math.max(0, entry.slot.width - cellWidth);'),
+    "second-seat pods should use the grid-aligned right seat cell"
   );
   assert.ok(
     runtimeSource.includes('const seatMirrored = hasBothSides'),
@@ -86,6 +159,82 @@ test("runtime source keeps desk seats stable when a second workstation appears i
   assert.ok(
     runtimeSource.includes('mirrored: seatMirrored,'),
     "desk visuals should propagate the stable seat choice into mirrored workstation state"
+  );
+  assert.ok(
+    runtimeSource.includes('function patchRuntimeSectionIfPresent(source: string, from: string, to: string): string {'),
+    "runtime source should provide an optional patch helper for scene fragments that may drift in generated literals"
+  );
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_SCENE_SOURCE_WITH_STABLE_DESK_GEOMETRY = patchRuntimeSectionIfPresent('),
+    "stable desk geometry should no longer hard-fail startup when the raw scene literal shape changes"
+  );
+  assert.ok(
+    runtimeSource.includes('return source.includes(from) ? source.replace(from, to) : source;'),
+    "optional runtime patches should leave the assembled source unchanged when a fragment is absent"
+  );
+  assert.ok(
+    runtimeSource.includes('`        const centerInset = options.sharedCenter ? 0 : innerInset;\n        const deskEdgeClamp = options.sharedCenter ? 0 : 2;`'),
+    "desk geometry patch should still target the shared-center recentering branch when that fragment exists"
+  );
+  assert.ok(
+    runtimeSource.includes('`        const centerInset = innerInset;\n        const deskEdgeClamp = 2;`'),
+    "desk geometry patch should still replace the shared-center recentering branch with fixed insets when present"
+  );
+});
+
+test("runtime source keeps running and validating workers seated at their workstation", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_SCENE_SOURCE_WITH_SEATED_ACTIVE_WORK = patchRuntimeSection('),
+    "runtime source should patch the raw scene source for seated active workstation poses"
+  );
+  assert.ok(
+    runtimeSource.includes('if (state === "running" || state === "validating") {'),
+    "running and validating workers should share the seated active workstation pose"
+  );
+  assert.ok(
+    runtimeSource.includes('if (state === "blocked") {'),
+    "blocked workers should keep their separate non-seated pose"
+  );
+});
+
+test("workspace focus reuses compact scene geometry and grid-snapped desk starts", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
+    "utf8"
+  );
+  const sceneGridSource = readFileSync(
+    join(__dirname, "../src/client/scene-grid-source.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_UI_SOURCE_FINAL = patchRuntimeSection('),
+    "runtime source should patch the single-workspace render path"
+  );
+  assert.ok(
+    runtimeSource.includes('compact: true,'),
+    "single-workspace rendering should reuse compact scene geometry"
+  );
+  assert.ok(
+    sceneGridSource.includes('const deskStartColumn = Math.max('),
+    "desk columns should start from a snapped tile column"
+  );
+  assert.ok(
+    sceneGridSource.includes('const deskStartX = deskStartColumn * config.tileSize;'),
+    "desk pod origins should convert the snapped column back into tile pixels"
+  );
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_SCENE_SOURCE_WITH_WORKSTATION_FOOTPRINT = patchRuntimeSection('),
+    "runtime source should patch the workstation footprint onto the lower desk row"
+  );
+  assert.ok(
+    runtimeSource.includes('tileHeight: 1'),
+    "workstation footprint should occupy only the bottom row"
   );
 });
 
@@ -126,6 +275,162 @@ test("runtime source strips markdown formatting markers from display text", () =
   assert.ok(
     runtimeSource.includes('output += plainText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));'),
     "path cleanup should run against stripped display text"
+  );
+});
+
+test("rec-room roster keeps space for recently visible resting leads that went active", () => {
+  const layoutSource = readFileSync(
+    join(__dirname, "../src/client/runtime/layout-source.ts"),
+    "utf8"
+  );
+  const specSource = readFileSync(
+    join(__dirname, "../../../docs/spec.md"),
+    "utf8"
+  );
+
+  assert.match(
+    layoutSource,
+    /const effectiveLimit = Math\.max\(0, limit - reservedRecentLeadSlots\(snapshot\)\);/
+  );
+  assert.match(
+    layoutSource,
+    /slice\(0, effectiveLimit\);/
+  );
+  assert.match(
+    specSource,
+    /The rec area should keep at most the 4 most recent lead sessions visible;/,
+  );
+  assert.match(
+    specSource,
+    /If one of those visible resting leads becomes active again, older hidden leads should not pop back into the rec area just to fill that seat for a moment\./,
+  );
+});
+
+test("runtime source limits visible rec-room resters to recent top-level leads", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_SCENE_SOURCE_WITH_RECENT_RESTING_LEADS = patchRuntimeSection('),
+    "runtime source should patch the raw scene source for visible resting lead limits"
+  );
+  assert.ok(
+    runtimeSource.includes('const allRestingAgents = restingAgentsFor(snapshot, compact);'),
+    "scene runtime should keep all resting agents off desks before choosing visible rec leads"
+  );
+  assert.ok(
+    runtimeSource.includes('.filter((agent) =>\n            !agent.parentThreadId'),
+    "rec-room visibility should exclude subagents from the limited resting lead display"
+  );
+  assert.ok(
+    runtimeSource.includes('.slice(0, 4);'),
+    "rec-room visibility should cap visible resting leads at four seats"
+  );
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_SCENE_SOURCE_WITH_BOUNDED_REC_ASSIGNMENTS = patchRuntimeSection('),
+    "runtime source should patch the resting assignment call site for the 4-seat rec limit"
+  );
+  assert.ok(
+    runtimeSource.includes('const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents, 4);'),
+    "resting rec assignments should use the bounded 4-seat allocator"
+  );
+});
+
+test("runtime source falls back to default rec layout when saved sofa columns overlap", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_RENDER_SOURCE_WITH_SAFE_REC_SEATS = patchRuntimeSection('),
+    "runtime source should patch rec seat placement safety into the render source"
+  );
+  assert.ok(
+    runtimeSource.includes('const defaultLayout = recRoomSofaLayout(compact, roomPixelWidth, baseY);'),
+    "rec seat placement should retain a default layout fallback"
+  );
+  assert.ok(
+    runtimeSource.includes('Math.abs(requestedLayout.sofas[1].x - requestedLayout.sofas[0].x) >= tile * 3'),
+    "rec seat placement should reject overlapping saved sofa positions"
+  );
+  assert.ok(
+    runtimeSource.includes(': defaultLayout;'),
+    "rec seat placement should fall back to the default sofa layout when overrides collapse"
+  );
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_SETTINGS_SOURCE_WITH_BOUNDED_REC_SLOTS = patchRuntimeSection('),
+    "runtime source should patch bounded resting slot memory into the settings section"
+  );
+  assert.ok(
+    runtimeSource.includes('function stableSceneSlotAssignments(projectRoot, category, agents, maxSlots = null) {'),
+    "stable scene slot memory should accept an optional max-slot bound"
+  );
+  assert.ok(
+    runtimeSource.includes('|| (slotLimit !== null && slotIndex >= slotLimit)'),
+    "resting slot memory should discard remembered indexes outside the visible seat bound"
+  );
+  assert.ok(
+    runtimeSource.includes('if (slotLimit !== null && nextSlotIndex >= slotLimit) {'),
+    "resting slot allocation should stop before assigning a seat beyond the visible seat bound"
+  );
+});
+
+test("runtime source avoids doorway arrival animations for first-load historical sessions", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_UI_SOURCE_WITH_STABLE_INITIAL_PRESENCE = patchRuntimeSection('),
+    "runtime source should patch stable initial presence into the UI runtime"
+  );
+  assert.ok(
+    runtimeSource.includes('enteringAgentKeys = previousKeys.size === 0 || screenshotMode'),
+    "initial hydrate and screenshot mode should not mark all visible agents as doorway arrivals"
+  );
+  assert.ok(
+    runtimeSource.includes('? new Set()'),
+    "stable initial presence should clear entering agent keys on first-load historical renders"
+  );
+});
+
+test("runtime source keeps current agents in the map scene even when they are between desk and rec placement states", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
+    "utf8"
+  );
+  const seatingSource = readFileSync(
+    join(__dirname, "../src/client/runtime/seating-source.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    runtimeSource.includes('const CLIENT_RUNTIME_LAYOUT_SOURCE_WITH_VISIBLE_CURRENT_SCENE_AGENTS = patchRuntimeSection('),
+    "runtime source should patch current-agent scene visibility into the layout runtime"
+  );
+  assert.ok(
+    runtimeSource.includes('function isLiveSceneAgent(agent) {'),
+    "layout runtime should define a live-scene agent predicate"
+  );
+  assert.ok(
+    runtimeSource.includes('return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;'),
+    "current agents should stay visible in the map scene even when not currently desk-seated"
+  );
+  assert.ok(
+    runtimeSource.includes('const liveAgents = snapshot.agents.filter(isLiveSceneAgent);'),
+    "view snapshots should start from live-scene agents instead of workstation-only agents"
+  );
+  assert.ok(
+    runtimeSource.includes('const seenAgentIds = new Set();'),
+    "view snapshots should dedupe current and recent-lead agents by id"
+  );
+  assert.match(
+    seatingSource,
+    /function isLiveSceneAgent\(agent\) {\n\s+if \(!agent \|\| agent\.source === "cloud" \|\| agent\.source === "presence"\) {\n\s+return false;\n\s+}\n\s+return shouldSeatAtWorkstation\(agent\) \|\| agent\.isCurrent === true;\n\s+}/
   );
 });
 
@@ -246,5 +551,57 @@ test("boss relationship arrows are hover-only curved overlays with arrowheads", 
   assert.match(
     specSource,
     /Boss-to-subagent relationship arrows should only appear when the user is hovering or focusing that boss in the scene;/,
+  );
+});
+
+test("spec defines door-based arrivals and departures for visible agents", () => {
+  const specSource = readFileSync(
+    join(__dirname, "../../../docs/spec.md"),
+    "utf8"
+  );
+
+  assert.match(
+    specSource,
+    /A newly visible active agent should enter from the room door and walk to its assigned workstation\./,
+  );
+  assert.match(
+    specSource,
+    /If a resting lead becomes active again, it should leave its rec-area seat and walk to its newly assigned workstation instead of despawning and respawning\./,
+  );
+  assert.match(
+    specSource,
+    /When an agent truly leaves the visible scene, it should walk back out through the room door\./,
+  );
+});
+
+test("runtime source only animates exit ghosts for explicit departures and dedupes them", () => {
+  const runtimeSource = readFileSync(
+    join(__dirname, "../src/client/runtime-source.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    runtimeSource.includes("const CLIENT_RUNTIME_NAVIGATION_SOURCE_WITH_EXPLICIT_DEPARTURES = patchRuntimeSection("),
+    "runtime source should patch navigation ghosting to require explicit departures"
+  );
+  assert.ok(
+    runtimeSource.includes("const departingAgentKeys = new Set(departingAgents.map((agent) => agent.key));"),
+    "exit ghost generation should key off explicit departing agents"
+  );
+  assert.ok(
+    runtimeSource.includes("!motionState || currentAgentKeys.has(key) || motionState.exiting || !departingAgentKeys.has(key)"),
+    "transient scene churn should not manufacture exit ghosts"
+  );
+  assert.ok(
+    runtimeSource.includes("const CLIENT_RUNTIME_UI_SOURCE_WITH_DEDUPED_DEPARTURES = patchRuntimeSection("),
+    "runtime source should patch UI departure bookkeeping"
+  );
+  assert.ok(
+    runtimeSource.includes("const existingGhost = departingAgents.find((ghost) => ghost.key === key) || null;"),
+    "departure bookkeeping should reuse an existing ghost for the same agent"
+  );
+  assert.ok(
+    runtimeSource.includes("existingGhost.expiresAt = now + DEPARTING_AGENT_TTL_MS;"),
+    "reused departure ghosts should refresh their expiry window"
   );
 });

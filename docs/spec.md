@@ -93,6 +93,7 @@ Claude local logs and Cursor background agents are secondary inputs. They can en
 - `?view=map|terminal` should deep-link the active browser view.
 - Selecting a workspace changes focus only; it does not change fleet monitoring scope.
 - A selected workspace can enter a focused single-workspace mode through the browser control and `?focus=1`.
+- Selected and focused single-workspace map views should reuse the same compact scene geometry as the tower overview; focus may change whole-scene fit scaling and browser chrome, but it must not swap in a different avatar, workstation, or pod scale.
 - `?screenshot=1` should disable live SSE-only behavior that would make still captures unstable and should report snapshot connection state instead of live streaming.
 - The browser header Settings popup is the home for viewer controls and machine-local integration settings.
 
@@ -112,7 +113,9 @@ Current browser settings surfaces are:
 - A local thread that is still truly ongoing may keep its workstation through short-lived freshness/current signal dips between polls, but stale `notLoaded` locals must not hold desks just because they were recently current.
 - Workstation release should be conservative. Ordinary poll jitter, UI rerenders, debug toggles, or temporary freshness gaps must not pull a still-working agent off a desk.
 - A workstation should only be released when the thread has actually settled into a resting/finished state according to the browser placement rules, with the explicit post-stop cooldown described below.
-- The rec area should keep at most the 4 most recent lead sessions visible.
+- The rec area should keep at most the 4 most recent lead sessions visible;
+  it may show fewer while one of those visible resting leads is back at work.
+- If one of those visible resting leads becomes active again, older hidden leads should not pop back into the rec area just to fill that seat for a moment.
 - Finished subagents should despawn instead of taking rec-area slots.
 - Empty rooms should read as quiet space, not as errors.
 
@@ -122,6 +125,8 @@ Current browser settings surfaces are:
 - Rooms from `.codex-agents/rooms.xml` define the outer floor bounds; internal furniture/layout is then placed on a tile grid inside those room bounds.
 - The grid starts at the end of the wall band and continues through the whole visible floor area to the bottom of the room.
 - The renderer may scale tiles to fit available width, but object placement should stay grid-derived rather than free-floating.
+- Whole-scene fit scaling may vary by container, but prefab geometry should stay consistent across tower, selected-workspace, and focused single-workspace rendering.
+- Desk pods, workstation furniture, and their seat cells should resolve from tile columns/rows and tile spans, not ad hoc pixel offsets inside the room.
 - Some prefabs can span multiple tiles; the layout contract is based on tile spans, not only `1x1` occupancy.
 - The tile system should preserve stable desk slots so agents do not repack across the room on routine live updates.
 - Existing seated agents keep their assigned desk slot unless occupancy truly changes enough to force a new allocation.
@@ -131,6 +136,9 @@ Current browser settings surfaces are:
 - Agent movement in the retained browser scene should follow walkable tile paths instead of straight-line tween resets.
 - Tile pathfinding should avoid occupied cells from furniture, workstation footprints, and already-seated agents.
 - Visual-only updates such as debug overlays, text-scale changes, or scene host rerenders must not be treated as a new placement instruction.
+- A newly visible active agent should enter from the room door and walk to its assigned workstation.
+- If a resting lead becomes active again, it should leave its rec-area seat and walk to its newly assigned workstation instead of despawning and respawning.
+- When an agent truly leaves the visible scene, it should walk back out through the room door.
 
 ### Scene settings model
 
@@ -204,12 +212,14 @@ Global text scale rules:
 ### Desk spacing and grouping
 
 - A desk pod is the basic active-work prefab and should keep a stable tile footprint.
+- Desk pod origins should snap to the same tile grid used by rec-area furniture instead of starting from free-floating pixel math.
 - Related work should stay visually grouped by cubicle/workstation group before spilling into a new column.
 - Space between related-work cubicle groups should stay tighter than space between major desk columns.
 - The current internal defaults are:
   `space between cubicle groups = 1 tile`
   `space between columns = 4 tiles`
 - A single occupied two-seat pod should keep the live workstation anchored to a real seat cell on the grid instead of recentring within the whole pod footprint.
+- The two seat cells inside a pod should be tile-aligned halves of that pod footprint so the workstation and avatar read as part of the same pixel grid as the surrounding room furniture.
 - By default, the first occupied seat in a two-seat pod should use the left seat cell, and a newly added second seat should grow in the right seat cell.
 - Within a two-seat pod, left/right seat choice should remain stable for an already-seated agent whenever possible, including across ordinary rerenders and refreshes.
 

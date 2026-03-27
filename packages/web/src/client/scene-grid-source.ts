@@ -84,10 +84,13 @@ export const SCENE_GRID_SCRIPT = `
       function buildDeskSlots(config, roomPixelWidth, podCount, hasBossLane) {
         const slotsPerColumn = config.cubiclesPerColumn * config.cubicleRows;
         const columnCount = Math.max(1, Math.ceil(Math.max(1, podCount) / slotsPerColumn));
-        const deskStartX = Math.max(
-          Math.round(roomPixelWidth * config.deskStartRatio),
-          hasBossLane ? config.bossLaneX + config.bossLaneWidth + config.bossOfficeGapToDesk : 0
+        const deskStartColumn = Math.max(
+          Math.round((roomPixelWidth * config.deskStartRatio) / config.tileSize),
+          hasBossLane
+            ? Math.ceil((config.bossLaneX + config.bossLaneWidth + config.bossOfficeGapToDesk) / config.tileSize)
+            : 0
         );
+        const deskStartX = deskStartColumn * config.tileSize;
         const slots = [];
         for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
           const columnX = deskStartX + columnIndex * (config.podWidth + config.deskColumnGap);

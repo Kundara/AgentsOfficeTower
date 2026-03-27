@@ -11,7 +11,12 @@ const {
   shouldMarkThreadLiveFromAppServerNotification,
   shouldMarkThreadStoppedFromAppServerNotification
 } = require("../dist/live-monitor.js");
-const { buildDashboardSnapshotFromState, parentThreadIdForThread } = require("../dist/snapshot.js");
+const {
+  applyRecentActivityEvent,
+  buildDashboardSnapshotFromState,
+  parentThreadIdForThread,
+  summariseThread
+} = require("../dist/snapshot.js");
 const { applyCurrentWorkloadState, isCurrentWorkloadAgent } = require("../dist/workload.js");
 const {
   buildCodexLocalAdapterSnapshotFromState,
@@ -388,6 +393,127 @@ test("snapshot carries typed needs-user and live subscription metadata", async (
   assert.ok(agent);
   assert.deepEqual(agent.needsUser, { kind: "approval", requestId: "88", reason: "Need approval" });
   assert.equal(agent.liveSubscription, "subscribed");
+});
+
+test("typed approval waits surface as blocked current workload", async () => {
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    threads: [sampleThread()],
+    events: [],
+    needsUserByThreadId: new Map([
+      ["thr_123", { kind: "approval", requestId: "88", reason: "Need approval" }]
+    ])
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.state, "blocked");
+  assert.equal(agent.detail, "Waiting on approval");
+  assert.equal(agent.isCurrent, true);
+});
+
+test("typed input waits surface as waiting current workload", async () => {
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    threads: [sampleThread()],
+    events: [],
+    needsUserByThreadId: new Map([
+      ["thr_123", { kind: "input", requestId: "99", reason: "Need answer" }]
+    ])
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.state, "waiting");
+  assert.equal(agent.detail, "Waiting on input");
+  assert.equal(agent.isCurrent, true);
+});
+
+test("completed command, file, and tool items settle to done instead of active work", () => {
+  const updatedAt = Math.floor((Date.now() - 10_000) / 1000);
+  const cases = [
+    {
+      item: {
+        type: "commandExecution",
+        command: "npm test",
+        cwd: "/tmp/CodexAgentsOffice",
+        status: "completed"
+      }
+    },
+    {
+      item: {
+        type: "fileChange",
+        status: "completed",
+        changes: [{ path: "/tmp/CodexAgentsOffice/packages/core/src/snapshot.ts", kind: "edit" }]
+      }
+    },
+    {
+      item: {
+        type: "dynamicToolCall",
+        name: "browser_snapshot",
+        status: "completed"
+      }
+    }
+  ];
+
+  for (const { item } of cases) {
+    const summary = summariseThread({
+      ...sampleThread(),
+      status: { type: "idle" },
+      updatedAt,
+      turns: [{
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [item]
+      }]
+    });
+
+    assert.equal(summary.state, "done");
+  }
+});
+
+test("recent command activity does not reactivate a completed thread", () => {
+  const thread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor((Date.now() - 10_000) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            text: "Finished work.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  const summary = summariseThread(thread);
+  const next = applyRecentActivityEvent(thread, summary, [
+    {
+      id: "evt_cmd_started",
+      source: "codex",
+      confidence: "typed",
+      threadId: "thr_123",
+      createdAt: new Date().toISOString(),
+      method: "rollout/exec_command/started",
+      kind: "command",
+      phase: "started",
+      title: "Command started",
+      detail: "npm test",
+      path: "/tmp/CodexAgentsOffice",
+      command: "npm test"
+    }
+  ]);
+
+  assert.equal(next.state, "done");
+  assert.equal(next.detail, "Finished work.");
 });
 
 test("codex local adapter keeps message detail aligned with the newest thread reply", async () => {
@@ -996,6 +1122,32 @@ test("codex local adapter keeps parent threads available even when only the chil
   );
 
   assert.deepEqual(selected.map((thread) => thread.id), ["thr_child", "thr_parent"]);
+});
+
+test("codex local adapter keeps active threads selected even when a newer idle thread would fill the limit", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const activeThread = {
+    ...sampleThread(),
+    id: "thr_active",
+    updatedAt: now - 3600,
+    status: { type: "active", activeFlags: [] },
+    turns: []
+  };
+  const recentIdleThread = {
+    ...sampleThread(),
+    id: "thr_recent",
+    updatedAt: now,
+    status: { type: "idle" },
+    turns: []
+  };
+
+  const selected = selectProjectThreadsWithParents(
+    "/tmp/CodexAgentsOffice",
+    [recentIdleThread, activeThread],
+    1
+  );
+
+  assert.deepEqual(selected.map((thread) => thread.id), ["thr_active"]);
 });
 
 test("codex local adapter synthesizes stoppedAt for quiet static done threads", async () => {
@@ -1757,6 +1909,73 @@ test("initial discovery waits for resumed live thread hydration before the first
   assert.equal(agent.liveSubscription, "subscribed");
   assert.equal(agent.state, "thinking");
   assert.equal(agent.isCurrent, true);
+});
+
+test("initial discovery still subscribes active older threads before their first new update", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false,
+    localLimit: 1
+  });
+  const now = Math.floor(Date.now() / 1000);
+  const recentIdleThread = {
+    ...sampleThread(),
+    id: "thr_recent",
+    status: { type: "idle" },
+    updatedAt: now,
+    turns: []
+  };
+  const activeThread = {
+    ...sampleThread(),
+    id: "thr_active",
+    status: { type: "active", activeFlags: [] },
+    updatedAt: now - 3600,
+    turns: []
+  };
+  const hydratedActiveThread = {
+    ...activeThread,
+    turns: [
+      {
+        id: "turn_live",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            id: "item_commentary",
+            type: "agentMessage",
+            text: "Still working before the next delta lands.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+
+  const resumedThreadIds = [];
+  monitor.client = {
+    listThreads: async () => [recentIdleThread, activeThread],
+    listLoadedThreads: async () => [],
+    resumeThread: async (threadId) => {
+      resumedThreadIds.push(threadId);
+    },
+    readThread: async (threadId) => {
+      if (threadId === activeThread.id) {
+        return hydratedActiveThread;
+      }
+      return recentIdleThread;
+    }
+  };
+
+  await monitor.discoverThreads();
+  await monitor.rebuildSnapshot();
+
+  const snapshot = monitor.getSnapshot();
+  const agent = snapshot.agents.find((entry) => entry.threadId === activeThread.id);
+  assert.ok(agent);
+  assert.deepEqual(resumedThreadIds, [activeThread.id]);
+  assert.equal(agent.liveSubscription, "subscribed");
+  assert.equal(agent.isCurrent, true);
+  assert.equal(agent.detail, "Still working before the next delta lands.");
 });
 
 test("hydrated thread rereads do not synthesize assistant replies as fresh events", async () => {

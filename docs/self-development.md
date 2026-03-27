@@ -67,8 +67,10 @@ A good iteration improves at least one of these:
 - verify a newly active agent takes a free desk instead of stealing an already-occupied stable seat from another live agent
 - verify resting/rec agents do not reshuffle seats on ordinary live updates
 - verify visual-only updates such as debug overlays do not trigger desk/recside movement
+- verify selected-workspace and focused single-workspace map views keep the same compact avatar/workstation/pod geometry as the tower overview instead of swapping to a separate scale profile
 - verify a restarted fleet server eventually recovers the current desktop thread to `liveSubscription = subscribed` instead of leaving it stuck in `readOnly`
 - verify rec-strip furniture starts on the first floor-grid row and does not exceed 2 tiles of depth from the top band
+- verify desk pods start on tile columns and their workstation seat cells remain aligned to the same grid contract as rec-strip furniture
 - verify global text scale changes hover/toast/map text without changing room geometry or desk assignment
 - verify approval, input-wait, file-change, command-run, and turn lifecycle states have clear visible notification paths
 - verify the browser session panel exposes the durable approval/input "needs you" queue
