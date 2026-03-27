@@ -18,6 +18,7 @@ const DEFAULT_CURSOR_LOCAL_SESSION_LIMIT = 12;
 const CURSOR_LOCAL_ACTIVE_WINDOW_MS = 2 * 60 * 1000;
 const CURSOR_LOCAL_DONE_WINDOW_MS = 15 * 60 * 1000;
 const CURSOR_LOCAL_EVENT_WINDOW_MS = 2 * 60 * 1000;
+const CURSOR_CLOUD_CONVERSATION_WINDOW_MS = 30 * 60 * 1000;
 
 interface CursorWorkspaceEntry {
   id: string;
@@ -112,6 +113,17 @@ interface RawCursorAgent {
     autoCreatePr?: boolean;
   };
   model?: string;
+}
+
+interface RawCursorConversationResponse {
+  messages?: RawCursorConversationMessage[];
+}
+
+interface RawCursorConversationMessage {
+  id?: string;
+  type?: string;
+  text?: string;
+  createdAt?: string;
 }
 
 function cursorLocalSessionLimit(): number {
@@ -722,7 +734,10 @@ function cursorLocalActivityState(input: {
   now: number;
 }): { state: ActivityState; isOngoing: boolean } {
   const composerUpdatedAt = cursorComposerTimestamp(input.composer);
-  const referenceUpdatedAt = Math.max(composerUpdatedAt, input.latestGenerationMs, input.agentLoop.updatedAtMs ?? 0);
+  const latestGenerationMs = input.isPrimaryComposer ? input.latestGenerationMs : 0;
+  const agentLoopUpdatedAtMs = input.isPrimaryComposer ? (input.agentLoop.updatedAtMs ?? 0) : 0;
+  const agentLoopActive = input.isPrimaryComposer ? input.agentLoop.active : false;
+  const referenceUpdatedAt = Math.max(composerUpdatedAt, latestGenerationMs, agentLoopUpdatedAtMs);
   const ageMs = input.now - referenceUpdatedAt;
   const changedFiles = input.composer.filesChangedCount ?? 0;
   const changedLines = (input.composer.totalLinesAdded ?? 0) + (input.composer.totalLinesRemoved ?? 0);
@@ -731,7 +746,7 @@ function cursorLocalActivityState(input: {
     return { state: "blocked", isOngoing: true };
   }
 
-  if (input.isPrimaryComposer && (input.agentLoop.active || ageMs <= CURSOR_LOCAL_ACTIVE_WINDOW_MS)) {
+  if (input.isPrimaryComposer && (agentLoopActive || ageMs <= CURSOR_LOCAL_ACTIVE_WINDOW_MS)) {
     if (changedFiles > 0 || changedLines > 0) {
       return { state: "editing", isOngoing: true };
     }
@@ -831,7 +846,16 @@ export async function loadCursorLocalProjectSnapshotData(projectRoot: string, li
       agentLoop,
       now
     });
-    const updatedAtMs = Math.max(cursorComposerTimestamp(composer), latestGenerationMs, workspace.updatedAtMs);
+    if (state === "idle" && !isOngoing) {
+      continue;
+    }
+
+    const updatedAtMs = Math.max(
+      cursorComposerTimestamp(composer),
+      isPrimaryComposer ? latestGenerationMs : 0,
+      isPrimaryComposer ? workspace.updatedAtMs : 0,
+      isPrimaryComposer ? (agentLoop.updatedAtMs ?? 0) : 0
+    );
     const updatedAt = new Date(updatedAtMs || now).toISOString();
     const activityPrompt = isPrimaryComposer ? latestPromptText : null;
     const activityEvent: AgentActivityEvent | null = activityPrompt
@@ -1064,6 +1088,10 @@ async function fetchCursorListPage(
     url.searchParams.set("cursor", cursor);
   }
 
+  return fetchCursorJson<RawCursorListResponse>(apiKey, url);
+}
+
+async function fetchCursorJson<T>(apiKey: string, url: URL): Promise<T> {
   let firstFailure: Error | null = null;
   for (const scheme of ["basic", "bearer"] as const) {
     const response = await fetch(url, {
@@ -1074,7 +1102,7 @@ async function fetchCursorListPage(
     });
 
     if (response.ok) {
-      return await response.json() as RawCursorListResponse;
+      return await response.json() as T;
     }
 
     const body = await response.text().catch(() => "");
@@ -1146,22 +1174,128 @@ export function cursorAgentMatchesRepository(
   return cursorAgentRepositories(agent).includes(normalizedRepository);
 }
 
-export async function loadCursorAgents(projectRoot: string, limit = cursorAgentLimit()): Promise<DashboardAgent[]> {
+function cursorConversationMessageType(
+  message: Pick<RawCursorConversationMessage, "type">
+): AgentActivityEvent["type"] | null {
+  const normalized = typeof message.type === "string" ? message.type.trim().toLowerCase() : "";
+  switch (normalized) {
+    case "user_message":
+    case "user":
+      return "userMessage";
+    case "assistant_message":
+    case "assistant":
+      return "agentMessage";
+    default:
+      return null;
+  }
+}
+
+function cursorConversationMessageText(message: Pick<RawCursorConversationMessage, "text">): string | null {
+  if (typeof message.text !== "string") {
+    return null;
+  }
+  const normalized = message.text.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+async function fetchCursorAgentConversation(apiKey: string, agentId: string): Promise<RawCursorConversationMessage[]> {
+  const url = new URL(`/v0/agents/${encodeURIComponent(agentId)}/conversation`, cursorApiBaseUrl());
+  const parsed = await fetchCursorJson<RawCursorConversationResponse>(apiKey, url);
+  return Array.isArray(parsed.messages) ? parsed.messages : [];
+}
+
+function shouldFetchCursorAgentConversation(agent: RawCursorAgent, nowMs: number): boolean {
+  if (isCursorAgentOngoing(agent.status)) {
+    return true;
+  }
+  const updatedAtMs = Date.parse(agent.updatedAt ?? agent.createdAt ?? "");
+  if (!Number.isFinite(updatedAtMs)) {
+    return false;
+  }
+  return nowMs - updatedAtMs <= CURSOR_CLOUD_CONVERSATION_WINDOW_MS;
+}
+
+function cursorConversationEvent(input: {
+  projectRoot: string;
+  agentId: string;
+  message: RawCursorConversationMessage;
+  createdAt: string;
+}): DashboardEvent | null {
+  const messageId = typeof input.message.id === "string" ? input.message.id.trim() : "";
+  const type = cursorConversationMessageType(input.message);
+  const text = cursorConversationMessageText(input.message);
+  if (messageId.length === 0 || !type || !text) {
+    return null;
+  }
+
+  return {
+    id: `${input.projectRoot}::cursor-cloud::${input.agentId}::${messageId}`,
+    source: "cursor",
+    confidence: "typed",
+    threadId: input.agentId,
+    createdAt: input.createdAt,
+    method: type === "userMessage" ? "cursor/cloud/userMessage" : "cursor/cloud/agentMessage",
+    itemId: messageId,
+    itemType: type === "userMessage" ? "user_message" : "assistant_message",
+    kind: "message",
+    phase: "updated",
+    title: type === "userMessage" ? "Cursor prompt" : "Cursor reply",
+    detail: text,
+    path: input.projectRoot,
+    action: "said",
+    isImage: false
+  };
+}
+
+export async function loadCursorCloudProjectSnapshotData(
+  projectRoot: string,
+  options?: {
+    limit?: number;
+    knownConversationMessageIds?: Map<string, Set<string>>;
+    emitConversationEvents?: boolean;
+  }
+): Promise<{ agents: DashboardAgent[]; events: DashboardEvent[] }> {
+  const limit = options?.limit ?? cursorAgentLimit();
   const apiKey = cursorApiKey();
   if (!apiKey) {
-    return [];
+    return { agents: [], events: [] };
   }
 
   const repositoryUrl = await gitRemoteOriginUrl(projectRoot);
   if (!repositoryUrl) {
-    return [];
+    return { agents: [], events: [] };
   }
 
   const listedAgents = await listCursorBackgroundAgents(limit);
   const matchingAgents = listedAgents.filter((agent) => cursorAgentMatchesRepository(agent, repositoryUrl));
+  const nowMs = Date.now();
+  const knownConversationMessageIds = options?.knownConversationMessageIds ?? new Map<string, Set<string>>();
+  const emitConversationEvents = options?.emitConversationEvents ?? false;
+  const conversations = new Map<string, RawCursorConversationMessage[]>();
+
+  await Promise.all(matchingAgents.map(async (agent) => {
+    if (!shouldFetchCursorAgentConversation(agent, nowMs)) {
+      return;
+    }
+    try {
+      conversations.set(agent.id, await fetchCursorAgentConversation(apiKey, agent.id));
+    } catch {
+      // Conversation polling is best-effort; keep status-only agent visibility when it fails.
+    }
+  }));
 
   const agents: DashboardAgent[] = [];
+  const events: DashboardEvent[] = [];
   for (const agent of matchingAgents) {
+    const conversation = conversations.get(agent.id) ?? [];
+    const latestConversationMessage = conversation
+      .slice()
+      .reverse()
+      .find((message) => cursorConversationMessageType(message) && cursorConversationMessageText(message)) ?? null;
+    const latestAssistantMessage = conversation
+      .slice()
+      .reverse()
+      .find((message) => cursorConversationMessageType(message) === "agentMessage" && cursorConversationMessageText(message)) ?? null;
     const appearance = await ensureAgentAppearance(projectRoot, `cursor:${agent.id}`);
     const state = cursorStatusToActivityState(agent.status);
     const updatedAt = agent.updatedAt ?? agent.createdAt ?? new Date().toISOString();
@@ -1174,6 +1308,44 @@ export async function loadCursorAgents(projectRoot: string, limit = cursorAgentL
     const summary = typeof agent.summary === "string" && agent.summary.trim().length > 0
       ? agent.summary.trim()
       : null;
+    const latestAssistantText = latestAssistantMessage ? cursorConversationMessageText(latestAssistantMessage) : null;
+    const activityEvent: AgentActivityEvent | null = latestAssistantText
+      ? {
+        type: "agentMessage",
+        action: "said",
+        path: projectRoot,
+        title: latestAssistantText,
+        isImage: false
+      }
+      : null;
+
+    const knownIds = knownConversationMessageIds.get(agent.id) ?? new Set<string>();
+    if (!knownConversationMessageIds.has(agent.id)) {
+      knownConversationMessageIds.set(agent.id, knownIds);
+    }
+    conversation.forEach((message, index) => {
+      const messageId = typeof message.id === "string" ? message.id.trim() : "";
+      if (messageId.length === 0) {
+        return;
+      }
+      const seen = knownIds.has(messageId);
+      knownIds.add(messageId);
+      if (!emitConversationEvents || seen) {
+        return;
+      }
+      const createdAt = typeof message.createdAt === "string" && Number.isFinite(Date.parse(message.createdAt))
+        ? new Date(message.createdAt).toISOString()
+        : new Date(nowMs + index).toISOString();
+      const event = cursorConversationEvent({
+        projectRoot,
+        agentId: agent.id,
+        message,
+        createdAt
+      });
+      if (event) {
+        events.push(event);
+      }
+    });
 
     agents.push({
       id: `cursor:${agent.id}`,
@@ -1196,9 +1368,9 @@ export async function loadCursorAgents(projectRoot: string, limit = cursorAgentL
       updatedAt,
       stoppedAt: state === "done" || state === "blocked" || state === "idle" ? updatedAt : null,
       paths: [projectRoot],
-      activityEvent: null,
-      latestMessage: summary,
-      threadId: null,
+      activityEvent,
+      latestMessage: latestAssistantMessage ? (cursorConversationMessageText(latestAssistantMessage) ?? summary) : summary,
+      threadId: agent.id,
       taskId: agent.id,
       resumeCommand: null,
       url: agent.target?.url ?? null,
@@ -1215,5 +1387,12 @@ export async function loadCursorAgents(projectRoot: string, limit = cursorAgentL
     });
   }
 
-  return agents.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return {
+    agents: agents.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    events: events.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+  };
+}
+
+export async function loadCursorAgents(projectRoot: string, limit = cursorAgentLimit()): Promise<DashboardAgent[]> {
+  return (await loadCursorCloudProjectSnapshotData(projectRoot, { limit })).agents;
 }

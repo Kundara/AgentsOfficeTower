@@ -4,7 +4,8 @@
   "main": "dist/server.js",
   "types": "dist/server.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build-client.mjs && tsc -p tsconfig.json",
+    "test": "node --test test/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
   },

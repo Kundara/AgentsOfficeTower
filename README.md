@@ -18,18 +18,20 @@ Browser office view, terminal snapshot, and VS Code panel for current Codex, Cla
 ## What you get
 
 - Browser office view with fleet mode and single-project focus.
+- Adapter-first shared snapshot assembly with a static source registry for Codex, Claude, Cursor, OpenClaw, presence, and cloud integrations.
 - A reserved multiplayer interface so a secured sync method can plug into the web surface later.
 - Optional browser-side shared-room sync via PartyKit `host`, `room`, and short `nickname` settings.
 - Terminal snapshot and watch mode.
 - VS Code activity-bar panel.
 - Current-workload-first scene with subtle recent history.
 - Shared model across all renderers.
+- External bundled browser assets under `packages/web/dist/client` instead of inline HTML script/style payloads.
 
 ## Support matrix
 
 | Source | Project discovery | Live state | Typed approvals/input | Subagent correlation | Resume/open |
 | --- | --- | --- | --- | --- | --- |
-| Codex app-server | V | V | V | V | V |
+| Codex runtime (`codex app-server` via CLI or app) | V | V | V | V | V |
 | Claude Agent SDK + hooks | V | basic | V | basic | X |
 | Claude local transcripts only | V | inferred | X | X | X |
 | Cursor local workspace state | V | inferred | X | X | X |
@@ -55,7 +57,9 @@ That bootstraps the workspace if needed, rebuilds, and starts the web server on 
 
 ### Optional integrations
 
-- Codex CLI or Codex app for the strongest local visibility
+- Codex CLI for the strongest local visibility
+- Codex desktop app as an optional fallback runtime when the CLI is not installed
+- On native Windows, a WSL-installed Codex CLI is also supported through `wsl.exe` when no Windows-side `codex.cmd` is available
 - Claude local sessions for passive Claude visibility
 - Claude hooks or Agent SDK bridge for stronger typed Claude visibility
 - an installed Cursor app for inferred local Cursor visibility from workspace storage and logs
@@ -147,13 +151,14 @@ Preferred sources:
 Important product rule:
 
 - Codex is still the strongest integration surface today.
+- Codex CLI is the preferred runtime. The desktop app is a fallback, not a requirement.
 - Claude, Cursor, and OpenClaw are useful secondary sources.
 - Provenance and confidence stay visible so inferred state does not look like typed state.
 
 ## Repo layout
 
-- `packages/core`: shared discovery, normalization, rooms, appearance, and snapshot plumbing
-- `packages/web`: browser server and office renderer
+- `packages/core`: shared discovery, adapter contracts, services, domain policies, rooms, appearance, and snapshot plumbing
+- `packages/web`: browser server, render shell, and bundled client runtime
 - `packages/cli`: `watch`, `snapshot`, demo, and web entrypoints
 - `packages/vscode`: VS Code activity-bar integration
 - `docs`: architecture, integration hooks, references, and priorities

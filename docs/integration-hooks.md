@@ -78,9 +78,11 @@ Resolution details:
 
 - prefer `CODEX_CLI_PATH` when explicitly set
 - otherwise prefer `codex` on `PATH`
+- on native Windows, if `codex.cmd` is unavailable but `codex` exists inside WSL, fall back to `wsl.exe --exec codex`
 - on macOS, fall back to the bundled Codex app binary in `/Applications/Codex.app/Contents/Resources/codex` or `~/Applications/Codex.app/Contents/Resources/codex` when present
 - on Windows and Windows+WSL, fall back to the Microsoft Store Codex app by copying its packaged `app/resources` bundle into `%LOCALAPPDATA%\\CodexAgentsOffice\\cache\\windows-store\\<version>` and spawning the cached `codex.exe`
-- when both a WSL-side Codex CLI and the Windows app exist, `codex` on `PATH` still wins unless `CODEX_CLI_PATH` overrides it
+- when both a native Windows CLI and a WSL-side Codex CLI exist, `codex` on `PATH` still wins unless `CODEX_CLI_PATH` overrides it
+- when both a WSL-side Codex CLI and the Windows app exist, the WSL CLI now wins before the app fallback unless `CODEX_CLI_PATH` overrides it
 
 ### `thread/list`
 
@@ -226,7 +228,7 @@ Current item-to-state mapping:
 Mapped in:
 
 - `packages/core/src/snapshot.ts`
-- `packages/web/src/client-script.ts`
+- `packages/web/src/client/runtime-source.ts`
 
 ### Web search visibility
 
@@ -234,7 +236,7 @@ Mapped in:
 
 - `packages/core/src/live-monitor.ts`
 - `packages/core/src/snapshot.ts`
-- `packages/web/src/client-script.ts`
+- `packages/web/src/client/runtime-source.ts`
 
 Current behavior:
 
@@ -262,7 +264,7 @@ How we use it:
 Mapped in:
 
 - `packages/core/src/snapshot.ts`
-- `packages/web/src/client-script.ts`
+- `packages/web/src/client/runtime-source.ts`
 
 What we read from Codex:
 
@@ -286,8 +288,8 @@ How we use it:
 Mapped in:
 
 - `packages/web/src/scene-config.ts`
-- `packages/web/src/client-script.ts`
-- `packages/web/src/client-styles.ts`
+- `packages/web/src/client/runtime-source.ts`
+- `packages/web/src/client/styles.css`
 
 What we define internally:
 
@@ -316,7 +318,7 @@ Mapped in:
 - `packages/core/src/live-monitor.ts`
 - `packages/core/src/snapshot.ts`
 - `packages/web/src/pixel-office.ts`
-- `packages/web/src/client-script.ts`
+- `packages/web/src/client/runtime-source.ts`
 
 What we read from Codex:
 
@@ -648,6 +650,7 @@ How we use it:
 - discover local Cursor workspaces and map them onto projects by normalized workspace root
 - parse fragmented Composer, prompt, generation, and background-composer JSON directly from raw SQLite bytes
 - infer current local Cursor session state, recent prompt text, branch, and light activity
+- keep stale retained composers out of the live workload view so one new chat does not fan out into several fake active agents
 - render those sessions as read-only with `confidence = inferred`
 
 ### Cursor cloud project matching
@@ -674,6 +677,7 @@ Official docs:
 What Cursor exposes:
 
 - `GET /v0/agents` for agent ids, status, summary, repo/ref, branch, and target URLs
+- `GET /v0/agents/{id}/conversation` for typed `user_message` / `assistant_message` history
 - agent conversation history
 - status-change webhooks
 - model listing for background-agent creation
@@ -682,11 +686,13 @@ How this project uses that surface:
 
 - reads the official Cursor API when `CURSOR_API_KEY` is configured or a Cursor API key has been saved through the web Settings popup
 - follows `GET /v0/agents` pagination through `cursor` / `nextCursor`
+- polls `GET /v0/agents/{id}/conversation` for active or recently updated agents and maps newly seen messages into typed office message events
 - authenticates against the current API surface and falls back to the older bearer form for compatibility
 - matches agents by normalized repository URL, including PR-backed repository URLs
 - maps agent status into shared workload state
 - renders Cursor agents with `confidence = typed`
 - keeps them read-only because this project is observing, not driving Cursor agent execution
+- currently treats webhooks as a future terminal-state accelerator because the documented webhook surface only emits `statusChange` for `ERROR` and `FINISHED`, not live message deltas
 
 ### Cursor state mapping
 
@@ -732,7 +738,7 @@ Then it:
 Rendered in:
 
 - `packages/web/src/render-html.ts`
-- `packages/web/src/client-script.ts`
+- `packages/web/src/client/runtime-source.ts`
 
 How normalized fields become visuals:
 
@@ -759,7 +765,7 @@ Transport:
 
 - `packages/web/src/fleet-live-service.ts`
 - `packages/web/src/router.ts`
-- `packages/web/src/client-script.ts`
+- `packages/web/src/client/runtime-source.ts`
 
 How it works:
 

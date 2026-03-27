@@ -27,10 +27,12 @@ const {
   describeCursorAgentAvailability,
   cursorAgentMatchesRepository,
   cursorApiKeyConfigured,
+  loadCursorCloudProjectSnapshotData,
   loadCursorLocalProjectSnapshotData,
   normalizeRepositoryUrl,
   cursorStatusToActivityState
 } = require("../dist/cursor.js");
+const { cursorCloudAdapter } = require("../dist/adapters/cursor-cloud.js");
 
 const execFileAsync = promisify(execFile);
 
@@ -417,7 +419,179 @@ test("cursor background agent statuses map into workload states", () => {
   assert.equal(cursorStatusToActivityState("EXPIRED"), "idle");
 });
 
-test("cursor local snapshot parsing survives fragmented workspace state blobs", async () => {
+test("cursor cloud snapshot maps conversation messages into typed activity and events", { concurrency: false }, async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-cloud-snapshot-"));
+  await execFileAsync("git", ["init", projectRoot]);
+  await execFileAsync("git", ["-C", projectRoot, "remote", "add", "origin", "https://github.com/Kundara/CodexAgentsOffice.git"]);
+
+  const previousCursorApiKey = process.env.CURSOR_API_KEY;
+  const previousFetch = global.fetch;
+  process.env.CURSOR_API_KEY = "cursor_test_12345678";
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("/v0/agents?")) {
+      return new Response(JSON.stringify({
+        agents: [
+          {
+            id: "agent-123",
+            name: "Cursor cloud task",
+            status: "RUNNING",
+            createdAt: "2026-03-27T00:00:00.000Z",
+            updatedAt: "2026-03-27T00:01:00.000Z",
+            summary: "Implementing cursor conversation polling",
+            source: {
+              repository: "https://github.com/Kundara/CodexAgentsOffice.git",
+              ref: "main"
+            },
+            target: {
+              url: "https://cursor.com/agents/agent-123",
+              branchName: "cursor/conversation-polling",
+              prUrl: null,
+              autoCreatePr: false
+            },
+            model: "gpt-5"
+          }
+        ]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    if (url.endsWith("/v0/agents/agent-123/conversation")) {
+      return new Response(JSON.stringify({
+        messages: [
+          {
+            id: "message-1",
+            type: "user_message",
+            text: "Please implement Cursor toast support"
+          },
+          {
+            id: "message-2",
+            type: "assistant_message",
+            text: "Implemented Cursor toast support."
+          }
+        ]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    const snapshot = await loadCursorCloudProjectSnapshotData(projectRoot, {
+      emitConversationEvents: true
+    });
+    assert.equal(snapshot.agents.length, 1);
+    assert.equal(snapshot.agents[0].threadId, "agent-123");
+    assert.equal(snapshot.agents[0].latestMessage, "Implemented Cursor toast support.");
+    assert.equal(snapshot.agents[0].activityEvent?.type, "agentMessage");
+    assert.equal(snapshot.events.length, 2);
+    assert.equal(snapshot.events[0].source, "cursor");
+    assert.equal(snapshot.events[0].confidence, "typed");
+    assert.equal(snapshot.events[0].threadId, "agent-123");
+    assert.equal(snapshot.events[0].kind, "message");
+    assert.equal(snapshot.events[1].detail, "Please implement Cursor toast support");
+  } finally {
+    if (typeof previousCursorApiKey === "string") {
+      process.env.CURSOR_API_KEY = previousCursorApiKey;
+    } else {
+      delete process.env.CURSOR_API_KEY;
+    }
+    global.fetch = previousFetch;
+  }
+});
+
+test("cursor cloud adapter suppresses historical conversation toasts on first refresh and emits only new messages later", { concurrency: false }, async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-cloud-adapter-"));
+  await execFileAsync("git", ["init", projectRoot]);
+  await execFileAsync("git", ["-C", projectRoot, "remote", "add", "origin", "https://github.com/Kundara/CodexAgentsOffice.git"]);
+
+  const previousCursorApiKey = process.env.CURSOR_API_KEY;
+  const previousFetch = global.fetch;
+  process.env.CURSOR_API_KEY = "cursor_test_12345678";
+
+  let conversationMessages = [
+    {
+      id: "message-1",
+      type: "user_message",
+      text: "Initial prompt"
+    },
+    {
+      id: "message-2",
+      type: "assistant_message",
+      text: "Initial reply"
+    }
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("/v0/agents?")) {
+      return new Response(JSON.stringify({
+        agents: [
+          {
+            id: "agent-123",
+            name: "Cursor cloud task",
+            status: "RUNNING",
+            createdAt: "2026-03-27T00:00:00.000Z",
+            updatedAt: "2026-03-27T00:01:00.000Z",
+            summary: "Implementing cursor conversation polling",
+            source: {
+              repository: "https://github.com/Kundara/CodexAgentsOffice.git",
+              ref: "main"
+            },
+            target: {
+              url: "https://cursor.com/agents/agent-123",
+              branchName: "cursor/conversation-polling",
+              prUrl: null,
+              autoCreatePr: false
+            },
+            model: "gpt-5"
+          }
+        ]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    if (url.endsWith("/v0/agents/agent-123/conversation")) {
+      return new Response(JSON.stringify({ messages: conversationMessages }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    const source = cursorCloudAdapter.createSource({ projectRoot });
+    await source.warm();
+    const firstSnapshot = source.getCachedSnapshot();
+    assert.equal(firstSnapshot.events.length, 0);
+    assert.equal(firstSnapshot.agents[0].latestMessage, "Initial reply");
+
+    conversationMessages = [
+      ...conversationMessages,
+      {
+        id: "message-3",
+        type: "assistant_message",
+        text: "Follow-up reply"
+      }
+    ];
+
+    await source.refresh("interval");
+    const secondSnapshot = source.getCachedSnapshot();
+    assert.equal(secondSnapshot.events.length, 1);
+    assert.equal(secondSnapshot.events[0].detail, "Follow-up reply");
+    assert.equal(secondSnapshot.agents[0].latestMessage, "Follow-up reply");
+    await source.dispose();
+  } finally {
+    if (typeof previousCursorApiKey === "string") {
+      process.env.CURSOR_API_KEY = previousCursorApiKey;
+    } else {
+      delete process.env.CURSOR_API_KEY;
+    }
+    global.fetch = previousFetch;
+  }
+});
+
+test("cursor local snapshot parsing survives fragmented workspace state blobs", { concurrency: false }, async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-local-"));
   const projectRoot = path.join(tempRoot, "project");
   const workspaceStorageDir = path.join(tempRoot, "workspaceStorage");
@@ -522,7 +696,110 @@ test("cursor local snapshot parsing survives fragmented workspace state blobs", 
   }
 });
 
-test("cursor diagnostics report when the api key is missing", async () => {
+test("cursor local snapshot ignores stale retained composers when a new chat updates the workspace", { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-local-retained-"));
+  const projectRoot = path.join(tempRoot, "project");
+  const workspaceStorageDir = path.join(tempRoot, "workspaceStorage");
+  const logsDir = path.join(tempRoot, "logs");
+  const workspaceDir = path.join(workspaceStorageDir, "workspace-1");
+  await mkdir(projectRoot, { recursive: true });
+  await mkdir(workspaceDir, { recursive: true });
+  await mkdir(path.join(logsDir, "20260326T120000"), { recursive: true });
+
+  const previousWorkspaceStorageDir = process.env.CURSOR_WORKSPACE_STORAGE_DIR;
+  const previousLogsDir = process.env.CURSOR_LOGS_DIR;
+  const previousCursorUserDataDir = process.env.CURSOR_USER_DATA_DIR;
+  process.env.CURSOR_WORKSPACE_STORAGE_DIR = workspaceStorageDir;
+  process.env.CURSOR_LOGS_DIR = logsDir;
+  delete process.env.CURSOR_USER_DATA_DIR;
+
+  const now = Date.now();
+  const activeComposerId = "composer-active";
+  const staleComposerId = "composer-stale";
+  const composerData = JSON.stringify({
+    allComposers: [
+      {
+        composerId: activeComposerId,
+        name: "Active Cursor chat",
+        subtitle: "Editing renderer",
+        createdAt: now - 60_000,
+        lastUpdatedAt: now - 5_000,
+        unifiedMode: "agent",
+        filesChangedCount: 1,
+        totalLinesAdded: 3,
+        totalLinesRemoved: 0,
+        hasBlockingPendingActions: false,
+        isArchived: false,
+        createdOnBranch: "main",
+        branches: []
+      },
+      {
+        composerId: staleComposerId,
+        name: "Old retained chat",
+        subtitle: "Previously asked a question",
+        createdAt: now - (2 * 60 * 60 * 1000),
+        lastUpdatedAt: now - (90 * 60 * 1000),
+        unifiedMode: "agent",
+        filesChangedCount: 0,
+        totalLinesAdded: 0,
+        totalLinesRemoved: 0,
+        hasBlockingPendingActions: false,
+        isArchived: false,
+        createdOnBranch: "main",
+        branches: []
+      }
+    ],
+    selectedComposerIds: [activeComposerId, staleComposerId],
+    lastFocusedComposerIds: [activeComposerId, staleComposerId]
+  });
+  const prompts = JSON.stringify([{ text: "Inspect the current Cursor chat", commandType: 4 }]);
+  const generations = JSON.stringify([
+    {
+      unixMs: now - 4_000,
+      generationUUID: "generation-active",
+      type: "composer",
+      textDescription: "Inspect the current Cursor chat"
+    }
+  ]);
+
+  try {
+    await writeFile(path.join(workspaceDir, "workspace.json"), JSON.stringify({
+      folder: pathToFileURL(projectRoot).toString()
+    }));
+    await writeFile(path.join(workspaceDir, "state.vscdb"), Buffer.from([
+      `composer.composerData${composerData}`,
+      ` aiService.prompts${prompts}`,
+      ` aiService.generations${generations}`
+    ].join("\0"), "utf8"));
+    await writeFile(path.join(logsDir, "20260326T120000", "main.log"), "");
+
+    const snapshot = await loadCursorLocalProjectSnapshotData(projectRoot);
+    assert.equal(snapshot.agents.length, 1);
+    assert.equal(snapshot.agents[0].id, `cursor-local:${activeComposerId}`);
+    assert.equal(snapshot.agents[0].label, "Active Cursor chat");
+    assert.equal(snapshot.agents[0].state, "editing");
+    assert.equal(snapshot.events.length, 1);
+    assert.equal(snapshot.events[0].threadId, activeComposerId);
+  } finally {
+    if (typeof previousWorkspaceStorageDir === "string") {
+      process.env.CURSOR_WORKSPACE_STORAGE_DIR = previousWorkspaceStorageDir;
+    } else {
+      delete process.env.CURSOR_WORKSPACE_STORAGE_DIR;
+    }
+    if (typeof previousLogsDir === "string") {
+      process.env.CURSOR_LOGS_DIR = previousLogsDir;
+    } else {
+      delete process.env.CURSOR_LOGS_DIR;
+    }
+    if (typeof previousCursorUserDataDir === "string") {
+      process.env.CURSOR_USER_DATA_DIR = previousCursorUserDataDir;
+    } else {
+      delete process.env.CURSOR_USER_DATA_DIR;
+    }
+  }
+});
+
+test("cursor diagnostics report when the api key is missing", { concurrency: false }, async () => {
   const previousValue = process.env.CURSOR_API_KEY;
   const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
   const previousCodexHome = process.env.CODEX_HOME;
@@ -556,7 +833,7 @@ test("cursor diagnostics report when the api key is missing", async () => {
   }
 });
 
-test("stored cursor api key enables cursor integration without CURSOR_API_KEY", async () => {
+test("stored cursor api key enables cursor integration without CURSOR_API_KEY", { concurrency: false }, async () => {
   const previousCursorApiKey = process.env.CURSOR_API_KEY;
   const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
   const previousCodexHome = process.env.CODEX_HOME;
@@ -598,7 +875,7 @@ test("stored cursor api key enables cursor integration without CURSOR_API_KEY", 
   }
 });
 
-test("cursor diagnostics report when a git project has no origin remote", async () => {
+test("cursor diagnostics report when a git project has no origin remote", { concurrency: false }, async () => {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-diagnostics-"));
   await execFileAsync("git", ["init", projectRoot]);
 

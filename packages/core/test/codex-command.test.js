@@ -51,6 +51,24 @@ test("Windows app bundle candidate is included after PATH", () => {
   );
 });
 
+test("Windows candidates include a WSL Codex fallback before the app bundle", () => {
+  assert.deepEqual(
+    buildCodexCommandCandidates({
+      platform: "win32",
+      windowsWslCommand: ["--exec", "codex"],
+      windowsAppPath: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe"
+    }),
+    [
+      { command: "codex.cmd", label: "Codex CLI on PATH" },
+      { command: "wsl.exe", label: "Codex CLI via WSL", argsPrefix: ["--exec", "codex"] },
+      {
+        command: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe",
+        label: "Codex Windows app bundle"
+      }
+    ]
+  );
+});
+
 test("Windows paths convert to WSL mount paths", () => {
   assert.equal(
     windowsPathToWslPath("C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\codex.exe"),

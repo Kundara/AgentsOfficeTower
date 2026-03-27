@@ -25,12 +25,12 @@ A good iteration improves at least one of these:
 
 ## Current technical priorities
 
-1. Improve real session discovery before inventing synthetic presence.
-2. Keep the shared snapshot model authoritative across all front ends.
+1. Keep the shared adapter registry and snapshot assembler authoritative across all front ends.
+2. Improve real session discovery before inventing synthetic presence.
 3. Increase event-level transparency so visible state is traceable to real Codex signals.
-4. Make the workstation prefab visually coherent and consistent.
+4. Continue breaking large source-specific loaders into smaller adapter/service/domain helpers.
 5. Preserve enough structure in the scene that busy workspaces still scan quickly.
-6. Move the browser map toward a retained 2D scene renderer instead of HTML subtree replacement.
+6. Continue reducing the remaining transitional browser runtime source now that delivery has moved to bundled external assets.
 
 ## Known weak spots
 
@@ -44,6 +44,7 @@ A good iteration improves at least one of these:
 - Live movement is still simpler than the intended office-life simulation.
 - Map and terminal browser views still share some presentation assumptions that should diverge further.
 - The office map now renders through a retained Pixi scene; remaining work is about refining prefab composition, motion, and editor parity rather than migrating off the old HTML map path.
+- The browser runtime is now externally bundled, but `packages/web/src/client/runtime-source.ts` is still a large transitional module and should continue to be split into smaller browser-native modules.
 
 ## Acceptance checks for future changes
 
@@ -95,6 +96,7 @@ A good iteration improves at least one of these:
 - keep the retained Pixi scene stable across scene refreshes with predictable entity ids, z-order, and incremental updates
 - keep user-facing scene controls minimal and global, starting with text scale, while prefab sizing and spacing remain internal until furniture editing exists
 - finish translating the previous office look into the tile system so the retained scene feels like the established PixelOffice floor instead of temporary placeholder geometry
+- keep the new file-size and import-boundary rails strict enough to block new monoliths while allowing the remaining transitional browser runtime to shrink incrementally
 
 ## Not the goal
 

@@ -1,24 +1,16 @@
 import { basename } from "node:path";
 
-import { ensureAgentAppearance } from "./appearance";
 import { withAppServerClient } from "./app-server";
-import { loadClaudeProjectSnapshotData } from "./claude";
-import { listCloudTasks } from "./cloud";
-import { describeCursorAgentAvailability, loadCursorAgents, loadCursorLocalProjectSnapshotData } from "./cursor";
-import { loadOpenClawAgents } from "./openclaw";
-import { loadFreshPresenceAgents } from "./presence";
-import { resolveProjectIdentity } from "./project-identity";
-import { findRoomForPaths, loadRoomConfig } from "./room-config";
-import { projectLabelFromRoot } from "./project-paths";
-import { isCurrentWorkloadAgent } from "./workload";
+import { assembleProjectSnapshot } from "./services/snapshot-assembler";
+import { looksLikeValidationCommand, shortenText, isMeaningfulText } from "./utils/text";
 import { summarizeWebSearch } from "./web-search";
+import type { AdapterSnapshot, ProjectSource } from "./adapters";
 import type {
   AgentActivityEvent,
   ActivityState,
   CloudTask,
   CodexThread,
   CodexTurn,
-  DashboardAgent,
   DashboardEvent,
   DashboardSnapshot,
   NeedsUserState,
@@ -29,26 +21,13 @@ import type {
 const DONE_WINDOW_MS = 15 * 60 * 1000;
 const USER_PROMPT_ACTIVE_WINDOW_MS = 30 * 1000;
 const EVENT_ACTIVITY_WINDOW_MS = 90 * 1000;
-const SNAPSHOT_EVENT_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_LOCAL_THREAD_LIMIT = 24;
 
-function shorten(text: string, maxLength: number): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxLength - 1)}…`;
-}
-
-function isMeaningfulAgentText(text: string | null | undefined): text is string {
-  if (typeof text !== "string") {
-    return false;
-  }
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return false;
-  }
-  return !/^[.\-_~`"'!,;:|/\\()[\]{}]+$/.test(normalized);
+function isFreshActivityEvent(event: DashboardEvent, threadUpdatedAtMs: number, nowMs = Date.now()): boolean {
+  const createdAtMs = Date.parse(event.createdAt);
+  return Number.isFinite(createdAtMs)
+    && createdAtMs >= threadUpdatedAtMs - EVENT_ACTIVITY_WINDOW_MS
+    && createdAtMs >= nowMs - EVENT_ACTIVITY_WINDOW_MS;
 }
 
 function threadTurns(thread: CodexThread): CodexTurn[] {
@@ -59,13 +38,7 @@ export function pickThreadLabel(thread: CodexThread): string {
   return (
     thread.name ??
     thread.agentNickname ??
-    shorten(thread.preview || thread.id, 42)
-  );
-}
-
-function looksLikeValidationCommand(command: string): boolean {
-  return /\b(test|tests|lint|build|check|verify|pytest|cargo test|go test|npm test|pnpm test|vitest|jest)\b/i.test(
-    command
+    shortenText(thread.preview || thread.id, 42)
   );
 }
 
@@ -154,33 +127,83 @@ function extractPathsFromText(text: string): string[] {
 
 function describeAgentMessage(item: ThreadItem): { detail: string; paths: string[] } {
   const candidateText = typeof item.text === "string" ? item.text : null;
-  const text = isMeaningfulAgentText(candidateText)
+  const text = isMeaningfulText(candidateText)
     ? candidateText
     : "Responding";
   return {
-    detail: shorten(text, 88),
+    detail: shortenText(text, 88),
     paths: extractPathsFromText(text)
   };
 }
 
-function latestAgentMessageForThread(thread: CodexThread): string | null {
+export function latestAgentMessageForThread(thread: CodexThread): string | null {
   const turns = threadTurns(thread);
   for (const turn of [...turns].reverse()) {
     for (const item of [...turn.items].reverse()) {
       if (item.type !== "agentMessage" || typeof item.text !== "string") {
         continue;
       }
-      const text = shorten(item.text, 240);
-      if (isMeaningfulAgentText(text)) {
+      const text = shortenText(item.text, 240);
+      if (isMeaningfulText(text)) {
         return text;
       }
     }
   }
   if (turns.length === 0) {
-    const preview = shorten(thread.preview || "", 240);
-    return isMeaningfulAgentText(preview) ? preview : null;
+    const preview = shortenText(thread.preview || "", 240);
+    return isMeaningfulText(preview) ? preview : null;
   }
   return null;
+}
+
+export function syncSummaryWithLatestThreadMessage(
+  thread: CodexThread,
+  summary: ReturnType<typeof summariseThread>,
+  recentEvents: DashboardEvent[] = []
+): {
+  latestMessage: string | null;
+  summary: ReturnType<typeof summariseThread>;
+} {
+  const latestMessage = latestAgentMessageForThread(thread);
+  if (!latestMessage || summary.activityEvent?.type !== "agentMessage") {
+    return { latestMessage, summary };
+  }
+
+  if (summary.detail === latestMessage && summary.activityEvent.title === latestMessage) {
+    return { latestMessage, summary };
+  }
+
+  const latestRecentMessageEvent = recentEvents
+    .filter((event) => event.threadId === thread.id && event.kind === "message")
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+  const latestRecentMessageCreatedAtMs = latestRecentMessageEvent
+    ? Date.parse(latestRecentMessageEvent.createdAt)
+    : Number.NaN;
+  const summaryUsesRecentMessage =
+    latestRecentMessageEvent
+    && (
+      summary.detail === latestRecentMessageEvent.detail
+      || summary.activityEvent.title === latestRecentMessageEvent.detail
+    );
+  if (
+    summaryUsesRecentMessage
+    && Number.isFinite(latestRecentMessageCreatedAtMs)
+    && latestRecentMessageCreatedAtMs > thread.updatedAt * 1000
+  ) {
+    return { latestMessage, summary };
+  }
+
+  return {
+    latestMessage,
+    summary: {
+      ...summary,
+      detail: latestMessage,
+      activityEvent: {
+        ...summary.activityEvent,
+        title: latestMessage
+      }
+    }
+  };
 }
 
 function extractPromptRole(text: string | null | undefined): string | null {
@@ -195,7 +218,7 @@ function extractPromptRole(text: string | null | undefined): string | null {
   return impliedRoleMatch ? impliedRoleMatch[1].trim().toLowerCase() : null;
 }
 
-function parseThreadSourceMeta(thread: CodexThread): {
+export function parseThreadSourceMeta(thread: CodexThread): {
   sourceKind: string;
   parentThreadId: string | null;
   depth: number;
@@ -242,7 +265,7 @@ export function parentThreadIdForThread(thread: CodexThread): string | null {
   return parseThreadSourceMeta(thread).parentThreadId;
 }
 
-function inferThreadAgentRole(thread: CodexThread, sourceKind: string): string | null {
+export function inferThreadAgentRole(thread: CodexThread, sourceKind: string): string | null {
   if (sourceKind === "subAgent") {
     const previewRole = extractPromptRole(thread.preview);
     if (previewRole && previewRole !== "default") {
@@ -344,7 +367,7 @@ export function summariseThread(thread: CodexThread): {
   const lastTurn = turns.at(-1);
   if (!lastTurn) {
     const ageMs = Date.now() - thread.updatedAt * 1000;
-    const preview = shorten(thread.preview || "", 88);
+    const preview = shortenText(thread.preview || "", 88);
     const recentState = ageMs <= DONE_WINDOW_MS ? "done" : "idle";
     return {
       state:
@@ -576,7 +599,7 @@ export function summariseThread(thread: CodexThread): {
       const review = typeof item.review === "string" ? item.review : "Review";
       return {
         state: "validating",
-        detail: shorten(review, 88),
+        detail: shortenText(review, 88),
         paths: [thread.cwd],
         activityEvent: {
           type: "enteredReviewMode",
@@ -591,7 +614,7 @@ export function summariseThread(thread: CodexThread): {
       const review = typeof item.review === "string" ? item.review : "Review";
       return {
         state: treatAsInProgress ? "thinking" : "done",
-        detail: shorten(review, 88),
+        detail: shortenText(review, 88),
         paths: [thread.cwd],
         activityEvent: {
           type: "exitedReviewMode",
@@ -642,13 +665,13 @@ export function summariseThread(thread: CodexThread): {
       const promptIsFresh = ageMs <= USER_PROMPT_ACTIVE_WINDOW_MS;
       return {
         state: treatAsInProgress || promptIsFresh ? "planning" : "idle",
-        detail: shorten(text, 88),
+        detail: shortenText(text, 88),
         paths: paths.length > 0 ? paths : [thread.cwd],
         activityEvent: {
           type: "userMessage",
           action: "updated",
           path: paths[0] ?? thread.cwd,
-          title: shorten(text, 88),
+          title: shortenText(text, 88),
           isImage: false
         }
       };
@@ -674,7 +697,7 @@ export function summariseThread(thread: CodexThread): {
   };
 }
 
-function buildActivityEventFromDashboardEvent(event: DashboardEvent): AgentActivityEvent | null {
+export function buildActivityEventFromDashboardEvent(event: DashboardEvent): AgentActivityEvent | null {
   switch (event.kind) {
     case "fileChange":
       return {
@@ -707,7 +730,7 @@ function buildActivityEventFromDashboardEvent(event: DashboardEvent): AgentActiv
   }
 }
 
-function applyRecentActivityEvent(
+export function applyRecentActivityEvent(
   thread: CodexThread,
   summary: ReturnType<typeof summariseThread>,
   recentEvents: DashboardEvent[]
@@ -725,8 +748,7 @@ function applyRecentActivityEvent(
       if (!["fileChange", "command", "message"].includes(event.kind)) {
         return false;
       }
-      const createdAtMs = Date.parse(event.createdAt);
-      return Number.isFinite(createdAtMs) && createdAtMs >= updatedAtMs - EVENT_ACTIVITY_WINDOW_MS;
+      return isFreshActivityEvent(event, updatedAtMs);
     })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .find((event) => event.kind === "fileChange" || event.kind === "command" || event.kind === "message");
@@ -794,14 +816,6 @@ export function filterProjectCloudTasks(tasks: CloudTask[], projectRoot: string)
   });
 }
 
-function matchesProjectCloudTask(task: CloudTask, projectRoot: string): boolean {
-  const label = task.environmentLabel?.toLowerCase();
-  if (!label) {
-    return false;
-  }
-  return label.includes(basename(projectRoot).toLowerCase());
-}
-
 async function buildLocalAgents(
   projectRoot: string,
   localLimit: number,
@@ -857,234 +871,101 @@ export async function buildDashboardSnapshotFromState(input: {
   stoppedAtByThreadId?: Map<string, number>;
   ongoingThreadIds?: Set<string>;
 }): Promise<DashboardSnapshot> {
-  const projectRoot = input.projectRoot;
-  const projectLabel = projectLabelFromRoot(projectRoot);
-  const projectIdentity = await resolveProjectIdentity(projectRoot);
-  const roomConfig = await loadRoomConfig(projectRoot);
-  const notes = [...(input.notes ?? [])];
-  const agents: DashboardAgent[] = [];
-  const recentEventsByThreadId = new Map<string, DashboardEvent[]>();
+  const snapshotStartedAt = Date.now();
+  const [
+    { buildCodexLocalAdapterSnapshotFromState },
+    { cloudTasksToAgents, codexCloudAdapter },
+    { claudeAdapter },
+    { cursorCloudAdapter },
+    { cursorLocalAdapter },
+    { openClawAdapter },
+    { presenceAdapter }
+  ] = await Promise.all([
+    import("./adapters/codex-local"),
+    import("./adapters/codex-cloud"),
+    import("./adapters/claude"),
+    import("./adapters/cursor-cloud"),
+    import("./adapters/cursor-local"),
+    import("./adapters/openclaw"),
+    import("./adapters/presence")
+  ]);
 
-  for (const event of input.events ?? []) {
-    if (!event.threadId) {
-      continue;
-    }
-    const existing = recentEventsByThreadId.get(event.threadId) ?? [];
-    existing.push(event);
-    recentEventsByThreadId.set(event.threadId, existing);
-  }
+  const localSnapshotPromise = buildCodexLocalAdapterSnapshotFromState({
+    projectRoot: input.projectRoot,
+    threads: input.threads,
+    events: input.events,
+    notes: input.notes,
+    needsUserByThreadId: input.needsUserByThreadId,
+    subscribedThreadIds: input.subscribedThreadIds,
+    stoppedAtByThreadId: input.stoppedAtByThreadId,
+    ongoingThreadIds: input.ongoingThreadIds
+  });
 
-  const threads = [...input.threads].sort((left, right) => right.updatedAt - left.updatedAt);
-
-  for (const thread of threads) {
-    const inferredOngoing =
-      (input.ongoingThreadIds?.has(thread.id) ?? false)
-      || isOngoingThread(thread);
-    const summary = applyRecentActivityEvent(
-      thread,
-      summariseThread(thread),
-      recentEventsByThreadId.get(thread.id) ?? []
-    );
-    const stoppedAtMs =
-      inferredOngoing ? null
-      : input.stoppedAtByThreadId
-        ? (input.stoppedAtByThreadId.get(thread.id) ?? null)
-        : !input.ongoingThreadIds && thread.status.type !== "active" && (summary.state === "done" || summary.state === "idle")
-          ? thread.updatedAt * 1000
-          : null;
-    const latestMessage = latestAgentMessageForThread(thread);
-    const appearance = await ensureAgentAppearance(projectRoot, thread.id);
-    const sourceMeta = parseThreadSourceMeta(thread);
-    const resolvedRole = inferThreadAgentRole(thread, sourceMeta.sourceKind);
-    agents.push({
-      id: thread.id,
-      label: pickThreadLabel(thread),
-      source: "local",
-      sourceKind: sourceMeta.sourceKind,
-      parentThreadId: sourceMeta.parentThreadId,
-      depth: sourceMeta.depth,
-      isCurrent: false,
-      isOngoing: inferredOngoing,
-      statusText: thread.status.type,
-      role: resolvedRole,
-      nickname: thread.agentNickname,
-      isSubagent: Boolean(resolvedRole),
-      state: summary.state,
-      detail: summary.detail,
-      cwd: thread.cwd,
-      roomId: findRoomForPaths(roomConfig, projectRoot, summary.paths),
-      appearance,
-      updatedAt: new Date(thread.updatedAt * 1000).toISOString(),
-      stoppedAt: stoppedAtMs ? new Date(stoppedAtMs).toISOString() : null,
-      paths: summary.paths,
-      activityEvent: summary.activityEvent,
-      latestMessage,
-      threadId: thread.id,
-      taskId: null,
-      resumeCommand: `codex resume ${thread.id}`,
-      url: null,
-      git: thread.gitInfo,
-      provenance: "codex",
-      confidence: "typed",
-      needsUser: input.needsUserByThreadId?.get(thread.id) ?? null,
-      liveSubscription: input.subscribedThreadIds?.has(thread.id) ? "subscribed" : "readOnly",
-      network: null
-    });
-  }
-
-  const cloudTasks = input.cloudTasks ?? [];
-  for (const task of cloudTasks) {
-    const appearance = await ensureAgentAppearance(projectRoot, task.id);
-    agents.push({
-      id: task.id,
-      label: task.title,
-      source: "cloud",
-      sourceKind: "cloud",
-      parentThreadId: null,
-      depth: 0,
-      isCurrent: false,
-      isOngoing: false,
-      statusText: task.status,
-      role: null,
-      nickname: null,
-      isSubagent: false,
-      state: "cloud",
-      detail: `${task.status} · ${task.summary.filesChanged} files`,
-      cwd: null,
-      roomId: null,
-      appearance,
-      updatedAt: task.updatedAt,
-      stoppedAt: null,
-      paths: [],
-      activityEvent: null,
-      latestMessage: null,
-      threadId: null,
-      taskId: task.id,
-      resumeCommand: null,
-      url: task.url,
-      git: null,
-      provenance: "cloud",
-      confidence: "typed",
-      needsUser: null,
-      liveSubscription: "readOnly",
-      network: null
-    });
-  }
-
-  const presenceAgents = await loadFreshPresenceAgents(projectRoot);
-  for (const presenceAgent of presenceAgents) {
-    agents.push({
-      ...presenceAgent,
-      roomId: findRoomForPaths(roomConfig, projectRoot, presenceAgent.paths),
-      isOngoing: false,
-      stoppedAt: null,
-      activityEvent: null,
-      latestMessage: null,
-      provenance: "presence",
-      confidence: "typed",
-      needsUser: null,
-      liveSubscription: "readOnly",
-      network: null
-    });
-  }
-
-  const claudeData = await loadClaudeProjectSnapshotData(projectRoot);
-  const claudeAgents = claudeData.agents;
-  for (const claudeAgent of claudeAgents) {
-    agents.push({
-      ...claudeAgent,
-      roomId: findRoomForPaths(roomConfig, projectRoot, claudeAgent.paths)
-    });
-  }
-
-  const cursorLocalData = await loadCursorLocalProjectSnapshotData(projectRoot);
-  for (const cursorAgent of cursorLocalData.agents) {
-    agents.push({
-      ...cursorAgent,
-      roomId: findRoomForPaths(roomConfig, projectRoot, cursorAgent.paths)
-    });
-  }
-
-  const cursorAvailabilityNote = await describeCursorAgentAvailability(projectRoot);
-  if (cursorAvailabilityNote) {
-    notes.push(cursorAvailabilityNote);
-  } else {
-    try {
-      const cursorAgents = await loadCursorAgents(projectRoot);
-      for (const cursorAgent of cursorAgents) {
-        agents.push({
-          ...cursorAgent,
-          roomId: findRoomForPaths(roomConfig, projectRoot, cursorAgent.paths)
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      notes.push(`Cursor background agents unavailable: ${message}`);
-    }
-  }
-
-  try {
-    const openClawAgents = await loadOpenClawAgents(projectRoot);
-    for (const openClawAgent of openClawAgents) {
-      agents.push({
-        ...openClawAgent,
-        roomId: findRoomForPaths(roomConfig, projectRoot, openClawAgent.paths)
-      });
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    notes.push(`OpenClaw gateway agents unavailable: ${message}`);
-  }
-
-  for (const agent of agents) {
-    agent.isCurrent = isCurrentWorkloadAgent(agent);
-  }
-
-  return {
-    projectRoot,
-    projectLabel,
-    projectIdentity,
-    generatedAt: new Date().toISOString(),
-    rooms: roomConfig,
-    agents,
-    cloudTasks,
-    events: [...(input.events ?? []), ...claudeData.events, ...cursorLocalData.events]
-      .filter((event) => {
-        const createdAtMs = Date.parse(event.createdAt);
-        return Number.isFinite(createdAtMs) && Date.now() - createdAtMs <= SNAPSHOT_EVENT_WINDOW_MS;
-      })
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    notes
+  const staticSourceContexts = {
+    projectRoot: input.projectRoot,
+    localLimit: DEFAULT_LOCAL_THREAD_LIMIT,
+    readThreads: true
   };
+  const sources: ProjectSource[] = [
+    input.cloudTasks ? null : codexCloudAdapter.createSource(staticSourceContexts),
+    claudeAdapter.createSource(staticSourceContexts),
+    cursorLocalAdapter.createSource(staticSourceContexts),
+    cursorCloudAdapter.createSource(staticSourceContexts),
+    openClawAdapter.createSource(staticSourceContexts),
+    presenceAdapter.createSource(staticSourceContexts)
+  ].filter((source): source is ProjectSource => source !== null);
+
+  const staticSnapshotsPromise = Promise.all(sources.map(async (source) => {
+    await source.warm();
+    const snapshot = source.getCachedSnapshot();
+    await source.dispose();
+    return snapshot;
+  }));
+
+  const staticSnapshots = await staticSnapshotsPromise;
+  const adapterSnapshots: AdapterSnapshot[] = [
+    await localSnapshotPromise,
+    ...(input.cloudTasks
+      ? [{
+        adapterId: "codex-cloud",
+        source: "cloud" as const,
+        generatedAt: new Date().toISOString(),
+        agents: await cloudTasksToAgents(input.projectRoot, input.cloudTasks),
+        events: [],
+        notes: [],
+        cloudTasks: input.cloudTasks,
+        health: {
+          status: "ready" as const,
+          detail: null,
+          lastUpdatedAt: new Date().toISOString()
+        }
+      }]
+      : []),
+    ...staticSnapshots
+  ];
+
+  return assembleProjectSnapshot({
+    projectRoot: input.projectRoot,
+    adapterSnapshots,
+    currentnessNow: snapshotStartedAt
+  });
 }
 
 export async function buildDashboardSnapshot(
   options: SnapshotOptions
 ): Promise<DashboardSnapshot> {
-  const projectRoot = options.projectRoot;
   const notes: string[] = [];
-
   const threads = await buildLocalAgents(
-    projectRoot,
+    options.projectRoot,
     options.localLimit ?? DEFAULT_LOCAL_THREAD_LIMIT,
     notes,
     options.readThreads !== false
   );
-  let cloudTasks: CloudTask[] = [];
-  if (options.includeCloud !== false) {
-    try {
-      const listedCloudTasks = await listCloudTasks(10);
-      cloudTasks = filterProjectCloudTasks(listedCloudTasks, projectRoot);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      notes.push(`Codex cloud list unavailable: ${message}`);
-    }
-  }
-
+  const initialCloudTasks = options.includeCloud === false ? [] : undefined;
   return buildDashboardSnapshotFromState({
-    projectRoot,
+    projectRoot: options.projectRoot,
     threads,
-    cloudTasks,
+    cloudTasks: initialCloudTasks,
     notes
   });
 }

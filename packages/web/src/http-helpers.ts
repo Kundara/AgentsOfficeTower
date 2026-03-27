@@ -25,6 +25,8 @@ function contentTypeForPath(filePath: string): string {
       return "application/json; charset=utf-8";
     case ".html":
       return "text/html; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
     case ".js":
     case ".mjs":
       return "text/javascript; charset=utf-8";
@@ -67,13 +69,14 @@ export async function sendStaticAsset(
 export async function sendAbsoluteFileAsset(
   response: ServerResponse,
   filePath: string,
-  method: string
+  method: string,
+  cacheControl = "public, max-age=3600"
 ): Promise<void> {
   try {
     const body = await readFile(filePath);
     response.writeHead(200, {
       "content-type": contentTypeForPath(filePath),
-      "cache-control": "public, max-age=3600"
+      "cache-control": cacheControl
     });
     if (method === "HEAD") {
       response.end();

@@ -14,7 +14,7 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](/mnt/f/AI/C
 
    Official docs describe `thread/start`, `thread/list`, `thread/read`, and a live notification stream for `turn/*`, `item/*`, approvals, command execution, and file changes. That makes it the best local integration surface for CLI, IDE, and app-originated threads.
 
-   In this codebase, that still means we need a runnable Codex executable. We prefer `codex` on `PATH`, allow `CODEX_CLI_PATH` overrides, fall back to the macOS app bundle binary when present, and on Windows can extract the Store app's packaged `codex.exe` into a local cache and run that copy. When both WSL CLI and Windows app runtimes exist, `PATH` still decides unless the override is set.
+   In this codebase, that still means we need a runnable Codex executable. We prefer `codex` on `PATH`, allow `CODEX_CLI_PATH` overrides, fall back on native Windows to `wsl.exe --exec codex` when the CLI is only installed inside WSL, fall back to the macOS app bundle binary when present, and on Windows can extract the Store app's packaged `codex.exe` into a local cache and run that copy. When both native/WSL CLI and app runtimes exist, CLI still decides unless the override is set.
 
    Source: [App Server](https://developers.openai.com/codex/app-server)
 
@@ -129,34 +129,49 @@ Sources:
 
 ### Web package composition
 
-The web package now separates transport, lifecycle, and rendering concerns instead of keeping them in one oversized entry file.
+The web package now separates transport, lifecycle, rendering, and client delivery concerns instead of keeping them in one oversized entry file.
 
-- `packages/web/src/server.ts`
+### Core package composition
+
+- `packages/core/src/adapters`
+  Defines the shared `ProjectAdapter` and `ProjectSource` contracts plus the built-in source registry for Codex local/cloud, Claude, Cursor local/cloud, OpenClaw, and presence.
+- `packages/core/src/services`
+  Holds cross-cutting orchestration such as project discovery re-exports, refresh scheduling, snapshot assembly, and the live-monitor compatibility surface.
+- `packages/core/src/domain`
+  Holds workload/currentness policy and other state rules shared across snapshot assembly and tests.
+- `packages/core/src/utils`
+  Holds small reusable JSON/text helpers extracted from the older source-specific modules.
+
+Snapshot assembly now happens in one place through `SnapshotAssembler`, which merges cached adapter snapshots, applies room mapping once, and evaluates workload currentness against the snapshot start time so slow secondary adapters do not incorrectly evict freshly finished local work.
+
+- `packages/web/src/server/server.ts`
   Starts the HTTP server, wires shutdown, and delegates everything else.
-- `packages/web/src/server-options.ts`
+- `packages/web/src/server/server-options.ts`
   Parses CLI args and normalizes project descriptors.
-- `packages/web/src/server-metadata.ts`
+- `packages/web/src/server/server-metadata.ts`
   Builds startup fleet placeholders and the shared `/api/server-meta` payload shape.
-- `packages/web/src/fleet-live-service.ts`
-  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, exposes disabled multiplayer status for future secured sync work, and fans snapshots out over SSE. Fleet-wide cloud task polling also lives here now so `codex cloud list` runs once per fleet refresh cycle instead of once per project monitor, with shared backoff when the upstream cloud surface rate-limits.
-- `packages/web/src/router.ts`
+- `packages/web/src/server/fleet-live-service.ts`
+  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, exposes disabled multiplayer status for future secured sync work, and fans snapshots out over SSE. Fleet-wide cloud task polling still lives here so `codex cloud list` runs once per fleet refresh cycle instead of once per project monitor, with shared backoff when the upstream cloud surface rate-limits. Startup now publishes a placeholder fleet immediately and warms project monitors in the background.
+- `packages/web/src/server/router.ts`
   Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, and room scaffolding. In fleet mode, the meta route now reports the live project set from `FleetLiveService`, not just the startup seed options.
-- `packages/web/src/render-html.ts`
+- `packages/web/src/render/render-html.ts`
   Builds the HTML shell and injects the browser assets.
-- `packages/web/src/client-script.ts`
-  Holds the browser-side office/terminal renderer, scene state wiring, and live update client.
-- `packages/web/src/multiplayer-script.ts`
+- `packages/web/src/client/index.ts`
+  Bundled browser entrypoint that loads the external client assets and executes the current runtime source against server-injected bootstrap config.
+- `packages/web/src/client/runtime-source.ts`
+  Transitional browser runtime source, now delivered as a built asset instead of an inline HTML script payload.
+- `packages/web/src/client/multiplayer-source.ts`
   Holds the browser-side PartyKit room sync overlay, shared-room settings persistence, and remote fleet merge helpers so the realtime room transport stays outside the main renderer script.
 - `packages/party`
   Holds the deployable PartyKit room relay that validates and rebroadcasts the browser `fleet-sync` payloads over shared room sockets.
-- `packages/web/src/toast-script.ts`
+- `packages/web/src/client/toast-source.ts`
   Holds browser-side toast queueing, stacking, timing, preview, and DOM rendering so notification behavior does not stay embedded in the main renderer script.
-- `packages/web/src/client-styles.ts`
-  Holds the browser CSS.
+- `packages/web/src/client/styles.css`
+  Holds the browser CSS that now builds into `/client/app.css`.
 - `packages/web/src/http-helpers.ts`
   Centralizes JSON/body helpers and static/project-file response handling.
 
-This keeps the browser behavior the same, but makes the server easier to extend and test without threading unrelated concerns through the entrypoint.
+This keeps the browser behavior broadly the same, but it stops HTML responses from embedding giant JS/CSS strings and gives the repo clearer seams for future adapter and client-runtime work.
 
 ## Room XML
 
@@ -304,15 +319,17 @@ The local inferred adapter:
 - discovers recent Cursor workspaces from `User/workspaceStorage/*/workspace.json`
 - parses `state.vscdb` / `state.vscdb.backup` directly to recover composer, prompt, generation, and background-composer state even when SQLite page boundaries fragment the stored JSON
 - infers current local Cursor work by matching the stored workspace root back onto the selected project
+- suppresses stale retained composers so fresh workspace activity only lights up the current/recent local Cursor work instead of every old chat tab
 - renders those local sessions with `source = cursor` and `confidence = inferred`
 
 The cloud typed adapter:
 
 - matches agents to the selected project by normalized git `remote.origin.url`, `source.repository`, or PR-backed repository URLs when Cursor reports `source.prUrl` or `target.prUrl`
+- polls the official agent conversation endpoint for active/recent Cursor agents so newly seen prompts and replies can flow into the shared toast/event model
 - renders Cursor cloud agents in the same room and session model with `confidence = typed`
 - surfaces typed status, summary, branch, repo, and target URL data
 
-Cursor still does not provide Codex-style local live thread subscriptions here, so local Cursor visibility remains inferred and read-only rather than app-server-grade typed state.
+Cursor still does not provide Codex-style local live thread subscriptions here, and the documented webhook surface only covers terminal `ERROR` / `FINISHED` status changes, so Cursor visibility remains polling-based rather than app-server-grade live streaming.
 
 ## Secondary OpenClaw support
 

@@ -11,31 +11,51 @@ const execFileAsync = promisify(execFile);
 export interface CodexCommandCandidate {
   command: string;
   label: string;
+  argsPrefix?: string[];
 }
 
 export function buildCodexCommandCandidates(input: {
   platform: NodeJS.Platform;
   codexCliPath?: string | null;
   macAppBundlePaths?: string[];
+  windowsWslCommand?: string[] | null;
   windowsAppPath?: string | null;
 }): CodexCommandCandidate[] {
   const candidates: CodexCommandCandidate[] = [];
   const seen = new Set<string>();
 
-  const pushCandidate = (command: string | null | undefined, label: string): void => {
+  const pushCandidate = (
+    command: string | null | undefined,
+    label: string,
+    argsPrefix?: string[] | null
+  ): void => {
     if (typeof command !== "string") {
       return;
     }
     const normalized = command.trim();
-    if (!normalized || seen.has(normalized)) {
+    const normalizedArgsPrefix = (argsPrefix ?? []).filter((value) => typeof value === "string" && value.trim().length > 0);
+    const candidateKey = [normalized, ...normalizedArgsPrefix].join("\u0000");
+    if (!normalized || seen.has(candidateKey)) {
       return;
     }
-    seen.add(normalized);
-    candidates.push({ command: normalized, label });
+    seen.add(candidateKey);
+    candidates.push(
+      normalizedArgsPrefix.length > 0
+        ? { command: normalized, label, argsPrefix: normalizedArgsPrefix }
+        : { command: normalized, label }
+    );
   };
 
   pushCandidate(input.codexCliPath, "CODEX_CLI_PATH override");
   pushCandidate(input.platform === "win32" ? "codex.cmd" : "codex", "Codex CLI on PATH");
+  if (input.platform === "win32") {
+    const windowsWslCommand = input.windowsWslCommand ?? null;
+    pushCandidate(
+      Array.isArray(windowsWslCommand) ? "wsl.exe" : null,
+      "Codex CLI via WSL",
+      windowsWslCommand
+    );
+  }
 
   if (input.platform === "darwin") {
     for (const bundlePath of input.macAppBundlePaths ?? []) {
@@ -81,6 +101,7 @@ async function isExecutable(filePath: string): Promise<boolean> {
 
 export async function listCodexCommandCandidates(): Promise<CodexCommandCandidate[]> {
   const macAppBundlePaths: string[] = [];
+  let windowsWslCommand: string[] | null = null;
   let windowsAppPath: string | null = null;
 
   if (platform === "darwin") {
@@ -96,6 +117,10 @@ export async function listCodexCommandCandidates(): Promise<CodexCommandCandidat
     }
   }
 
+  if (platform === "win32") {
+    windowsWslCommand = await resolveWindowsWslCodexCommand().catch(() => null);
+  }
+
   if (platform === "win32" || isWslLikeEnvironment()) {
     windowsAppPath = await resolveWindowsAppCodexPath().catch(() => null);
   }
@@ -104,8 +129,14 @@ export async function listCodexCommandCandidates(): Promise<CodexCommandCandidat
     platform,
     codexCliPath: process.env.CODEX_CLI_PATH,
     macAppBundlePaths,
+    windowsWslCommand,
     windowsAppPath
   });
+}
+
+async function resolveWindowsWslCodexCommand(): Promise<string[] | null> {
+  await execFileAsync("wsl.exe", ["--exec", "sh", "-lc", "command -v codex >/dev/null 2>&1"]);
+  return ["--exec", "codex"];
 }
 
 async function resolveWindowsAppCodexPath(): Promise<string | null> {
@@ -148,7 +179,7 @@ function codexResolutionHint(): string {
     return "Install Codex CLI, set CODEX_CLI_PATH, or install the Codex app in /Applications.";
   }
   if (platform === "win32") {
-    return "Install Codex CLI, install the Codex Windows app, or set CODEX_CLI_PATH to a runnable Codex executable.";
+    return "Install Codex CLI, install the Codex Windows app, install Codex CLI inside WSL, or set CODEX_CLI_PATH to a runnable Codex executable.";
   }
   if (isWslLikeEnvironment()) {
     return "Install Codex CLI, install the Codex Windows app, or set CODEX_CLI_PATH to a runnable Codex executable.";
@@ -166,7 +197,7 @@ async function spawnCandidate(
   args: string[]
 ): Promise<ChildProcessWithoutNullStreams> {
   return await new Promise<ChildProcessWithoutNullStreams>((resolve, reject) => {
-    const child = spawn(candidate.command, args, {
+    const child = spawn(candidate.command, [...(candidate.argsPrefix ?? []), ...args], {
       stdio: ["pipe", "pipe", "pipe"]
     });
 
@@ -209,7 +240,7 @@ export async function execCodex(args: string[]): Promise<{ stdout: string; stder
 
   for (const candidate of candidates) {
     try {
-      const result = await execFileAsync(candidate.command, args);
+      const result = await execFileAsync(candidate.command, [...(candidate.argsPrefix ?? []), ...args]);
       return {
         stdout: result.stdout,
         stderr: result.stderr,

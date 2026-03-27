@@ -5,8 +5,7 @@ import {
   cycleAgentAppearance,
   filterSnapshotToCurrentWorkload,
   getRoomsFilePath,
-  scaffoldRoomsFile,
-  type DashboardSnapshot
+  scaffoldRoomsFile
 } from "@codex-agents-office/core";
 
 const VIEW_ID = "codexAgentsOffice.view";

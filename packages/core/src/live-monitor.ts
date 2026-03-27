@@ -34,6 +34,7 @@ const THREAD_READ_DEBOUNCE_MS = 80;
 const ACTIVE_SUBSCRIPTION_WINDOW_MS = 10 * 60 * 1000;
 const MAX_SUBSCRIBED_THREADS = 8;
 const MAX_RECENT_EVENTS = 64;
+const RECENT_EVENT_RETENTION_MS = 90 * 1000;
 // Desktop-backed threads can take noticeably longer to resume than simple CLI
 // sessions, and a too-short timeout drops the live item stream we need for
 // `item/agentMessage/*` notifications.
@@ -1338,8 +1339,6 @@ export class ProjectLiveMonitor extends EventEmitter {
         }
       }
       this.clearMatchingNote("Local Codex app-server unavailable:");
-      const listedIds = new Set(trackedThreads.keys());
-
       await Promise.all(
         [...trackedThreads.values()].map(async (listedThread) => {
           const known = this.threads.get(listedThread.id);
@@ -1572,9 +1571,19 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   private pushRecentEvent(event: DashboardEvent): void {
+    const now = Date.now();
+    const createdAtMs = Date.parse(event.createdAt);
+    if (Number.isFinite(createdAtMs) && createdAtMs < now - RECENT_EVENT_RETENTION_MS) {
+      return;
+    }
+
     this.recentEvents.unshift(event);
     const seen = new Set<string>();
     this.recentEvents = this.recentEvents.filter((entry) => {
+      const entryCreatedAtMs = Date.parse(entry.createdAt);
+      if (Number.isFinite(entryCreatedAtMs) && entryCreatedAtMs < now - RECENT_EVENT_RETENTION_MS) {
+        return false;
+      }
       if (seen.has(entry.id)) {
         return false;
       }

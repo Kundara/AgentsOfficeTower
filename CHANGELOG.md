@@ -9,6 +9,10 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added a shared adapter contract in `packages/core` with a static built-in registry for Codex local/cloud, Claude, Cursor local/cloud, OpenClaw, and presence sources.
+- Added a shared snapshot assembler plus refresh-scheduler/domain helper layers so snapshot assembly, room mapping, and workload-currentness policy are no longer spread across several source-specific call sites.
+- Added a bundled external browser client build under `packages/web/dist/client`, replacing inline HTML delivery of the main browser JS/CSS payloads.
+- Added repo rail guards for file-size limits and import-boundary checks, plus adapter-registry and bundled-client asset tests.
 - Added a server-backed Cursor API key field in the web Settings popup, persisting a machine-local key outside the repo so Cursor background-agent visibility can be enabled once without relaunch-time env wiring.
 - Added inferred local Cursor session support by reading Cursor workspace storage and recent logs, so repos opened in the local Cursor app now surface read-only local Cursor activity alongside cloud agents.
 - Added a neutral multiplayer status interface in the web server so a secured sync transport can plug in later without another contract change.
@@ -25,6 +29,9 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed `buildDashboardSnapshotFromState()` to assemble source snapshots in parallel and evaluate workload currentness against snapshot start time, fixing the stale-freshness race for recently finished local threads.
+- Changed project discovery to consult the shared adapter registry instead of hardcoding every secondary source in one discovery function.
+- Changed the web server structure to use `server/`, `render/`, and `client/` internal folders while keeping the public routes and `startWebServer` surface stable.
 - Changed Cursor API key resolution so saved app settings now backfill `CURSOR_API_KEY` for Cursor background-agent loading across snapshot and watch flows, while the process environment still takes precedence.
 - Changed Cursor documentation and settings copy to distinguish automatic local Cursor visibility from optional API-key-backed Cursor cloud/background agents.
 - Expanded the shared snapshot shape with git-backed project identity metadata and generic remote-agent provenance so a future secured multiplayer sync path can reuse the existing model.
@@ -41,14 +48,19 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Docs
 
+- Updated the README and architecture/self-development docs to describe the adapter-first core layout, async snapshot assembly, and external bundled browser client delivery.
 - Added a short PartyKit hosting walkthrough to the README and references so shared-room setup includes the current official create, deploy, and generated-host flow.
 - Expanded the README shared-room section with the rebuild steps for a missing `/vendor/partysocket/index.js` browser import and clarified that connection is room-based via shared `Host` and `Room` values.
+- Clarified that Codex CLI is the preferred runtime, the desktop app is a fallback, and native Windows can bridge to a WSL-installed CLI.
 
 ### Fixed
 
+- Fixed Codex runtime discovery on native Windows so the app can fall back to `wsl.exe --exec codex` when Codex CLI is only installed inside WSL.
 - Fixed the silent empty-state path for Cursor integration so snapshots now explain when the current process is missing `CURSOR_API_KEY` or when a project has no `git remote.origin.url`.
 - Fixed Claude agent labels so synthetic/system transcript model placeholders like `<synthetic>` no longer appear in the office UI.
 - Fixed Cursor project matching when the API only exposes GitHub pull request, GitLab merge request, or similar PR-backed repository URLs.
+- Fixed inferred local Cursor chat discovery so a new Cursor chat no longer revives every stale retained composer as a separate live office agent.
+- Improved Cursor cloud tracking by polling the official agent conversation API for active/recent agents and mapping newly seen prompts/replies into typed office events without replaying old history on startup.
 - Fixed Codex runtime discovery on Windows and Windows+WSL environments where the CLI is absent but the Codex desktop app is installed.
 - Improved Cursor agent loading compatibility by tolerating auth scheme differences and multi-page API responses.
 - Extended text message toast lifetime by 1 second without changing other toast types.

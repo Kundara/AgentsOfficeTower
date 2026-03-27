@@ -7,6 +7,12 @@
   ],
   "scripts": {
     "build": "npm run build -w packages/core && npm run build -w packages/web && npm run build -w packages/cli && npm run build -w packages/vscode",
+    "test": "npm test --workspaces --if-present",
+    "lint": "node scripts/check-import-boundaries.js",
+    "lint:eslint": "eslint packages/core/src/adapters packages/core/src/domain packages/core/src/services packages/core/src/project-paths.ts packages/core/src/snapshot.ts packages/core/src/workload.ts packages/web/src/server packages/web/src/render packages/web/src/client/index.ts packages/web/src/server.ts packages/web/src/fleet-live-service.ts packages/web/src/router.ts packages/web/src/server-metadata.ts packages/web/src/server-options.ts packages/web/src/server-types.ts packages/cli/src packages/vscode/src scripts eslint.config.js",
+    "check:file-size": "node scripts/check-file-sizes.js",
+    "check:boundaries": "node scripts/check-import-boundaries.js",
+    "check": "npm run lint && npm run check:file-size && npm run check:boundaries && npm run typecheck && npm run test",
     "start": "node scripts/bootstrap-web.js",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "web": "node packages/cli/dist/index.js web",
@@ -14,7 +20,13 @@
     "party:deploy": "npm run deploy -w packages/party"
   },
   "devDependencies": {
+    "@eslint/js": "^9.24.0",
+    "@typescript-eslint/eslint-plugin": "^8.29.1",
+    "@typescript-eslint/parser": "^8.29.1",
     "@types/node": "^22.13.10",
+    "eslint": "^9.24.0",
+    "esbuild": "^0.25.2",
+    "globals": "^15.15.0",
     "typescript": "^5.8.2"
   }
 }

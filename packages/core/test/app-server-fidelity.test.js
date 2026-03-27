@@ -13,6 +13,10 @@ const {
 } = require("../dist/live-monitor.js");
 const { buildDashboardSnapshotFromState, parentThreadIdForThread } = require("../dist/snapshot.js");
 const { isCurrentWorkloadAgent } = require("../dist/workload.js");
+const {
+  buildCodexLocalAdapterSnapshotFromState,
+  selectProjectThreadsWithParents
+} = require("../dist/adapters/codex-local.js");
 
 function sampleThread() {
   return {
@@ -266,6 +270,108 @@ test("snapshot carries typed needs-user and live subscription metadata", async (
   assert.ok(agent);
   assert.deepEqual(agent.needsUser, { kind: "approval", requestId: "88", reason: "Need approval" });
   assert.equal(agent.liveSubscription, "subscribed");
+});
+
+test("codex local adapter keeps message detail aligned with the newest thread reply", async () => {
+  const thread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: 1730832999,
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_msg_new",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "something"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildCodexLocalAdapterSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [thread],
+    events: [
+      {
+        id: "evt_old_message",
+        source: "codex",
+        confidence: "typed",
+        kind: "message",
+        phase: "completed",
+        title: "Reply completed",
+        detail: "The older commentary reply that should not win.",
+        createdAt: "2024-11-05T10:15:30.000Z",
+        threadId: "thr_123",
+        turnId: "turn_1",
+        itemId: "item_msg_old",
+        path: "/mnt/f/AI/CodexAgentsOffice",
+        method: "thread/read/agentMessage"
+      }
+    ]
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.latestMessage, "something");
+  assert.equal(agent.detail, "something");
+  assert.equal(agent.activityEvent?.type, "agentMessage");
+  assert.equal(agent.activityEvent?.title, "something");
+});
+
+test("stale historical message events do not override dormant thread summaries", async () => {
+  const threeDaysAgoMs = Date.now() - (3 * 24 * 60 * 60 * 1000);
+  const dormantThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor(threeDaysAgoMs / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            text: "Dormant final reply",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [dormantThread],
+    events: [
+      {
+        id: "evt_stale_msg",
+        source: "codex",
+        confidence: "typed",
+        threadId: "thr_123",
+        createdAt: new Date(threeDaysAgoMs + 5_000).toISOString(),
+        method: "thread/read/agentMessage",
+        turnId: "turn_1",
+        itemId: "item_msg_stale",
+        kind: "message",
+        phase: "completed",
+        title: "Reply completed",
+        detail: "Random stale text from days ago",
+        path: "/mnt/f/AI/CodexAgentsOffice"
+      }
+    ]
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.detail, "Dormant final reply");
+  assert.equal(agent.activityEvent?.title, "Dormant final reply");
 });
 
 test("fresh local thinking agents do not remain current when they are only read-only", () => {
@@ -615,6 +721,71 @@ test("recently finished local threads stay current even when live monitor bookke
   assert.equal(agent.isCurrent, true);
 });
 
+test("codex local adapter keeps parent threads available even when only the child cwd matches the project", () => {
+  const parentThread = {
+    ...sampleThread(),
+    id: "thr_parent",
+    cwd: "/mnt/f/SomeOtherWorkspace",
+    source: "vscode",
+    turns: []
+  };
+  const childThread = {
+    ...sampleThread(),
+    id: "thr_child",
+    cwd: "/mnt/f/AI/CodexAgentsOffice",
+    source: {
+      subAgent: {
+        thread_spawn: {
+          parent_thread_id: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    turns: []
+  };
+
+  const selected = selectProjectThreadsWithParents(
+    "/mnt/f/AI/CodexAgentsOffice",
+    [parentThread, childThread],
+    24
+  );
+
+  assert.deepEqual(selected.map((thread) => thread.id), ["thr_child", "thr_parent"]);
+});
+
+test("codex local adapter synthesizes stoppedAt for quiet static done threads", async () => {
+  const quietDoneThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor((Date.now() - 60_000) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildCodexLocalAdapterSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [quietDoneThread],
+    events: [],
+    notes: []
+  });
+
+  assert.equal(snapshot.agents.length, 1);
+  assert.equal(snapshot.agents[0].state, "done");
+  assert.notEqual(snapshot.agents[0].stoppedAt, null);
+});
+
 test("explicit stop tracking keeps an ongoing quiet thread current", async () => {
   const ongoingQuietThread = {
     ...sampleThread(),
@@ -757,6 +928,76 @@ test("interrupted commentary replies stay in thinking state while the subscribed
   assert.equal(agent.isCurrent, true);
 });
 
+test("stale interrupted commentary settles out of thinking on startup", async () => {
+  const staleInterruptedThread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor((Date.now() - (24 * 60 * 60 * 1000)) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            text: "Old commentary text that should not keep the thread live.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [staleInterruptedThread],
+    events: [],
+    subscribedThreadIds: new Set(),
+    stoppedAtByThreadId: new Map(),
+    ongoingThreadIds: new Set()
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.state, "done");
+  assert.equal(agent.isCurrent, false);
+});
+
+test("stale process-only local threads settle to idle on startup", async () => {
+  const staleCompactionThread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor((Date.now() - (24 * 60 * 60 * 1000)) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            type: "contextCompaction"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    threads: [staleCompactionThread],
+    events: [],
+    subscribedThreadIds: new Set(),
+    stoppedAtByThreadId: new Map(),
+    ongoingThreadIds: new Set()
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.state, "idle");
+  assert.equal(agent.isCurrent, false);
+});
+
 test("fresh user prompts stay planning-current before the next turn starts", async () => {
   const freshPromptThread = {
     ...sampleThread(),
@@ -862,6 +1103,38 @@ test("shared cloud rate-limit notes stay human readable", async () => {
   const snapshot = monitor.getSnapshot();
   assert.ok(snapshot);
   assert.ok(snapshot.notes.includes("Codex cloud temporarily rate-limited; retrying in 5 minutes."));
+});
+
+test("live monitor drops stale historical events instead of replaying them on startup", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    includeCloud: false
+  });
+
+  monitor.pushRecentEvent({
+    id: "evt_old_rollout",
+    source: "codex",
+    confidence: "typed",
+    threadId: "thr_123",
+    createdAt: new Date(Date.now() - (3 * 24 * 60 * 60 * 1000)).toISOString(),
+    method: "rollout/exec_command/completed",
+    itemId: "item_old",
+    kind: "command",
+    phase: "completed",
+    title: "Command completed",
+    detail: "echo stale",
+    path: "/mnt/f/AI/CodexAgentsOffice",
+    command: "echo stale",
+    action: "ran"
+  });
+
+  await monitor.rebuildSnapshot();
+  const snapshot = monitor.getSnapshot();
+  assert.ok(snapshot);
+  assert.equal(
+    snapshot.events.some((event) => event.id === "evt_old_rollout" || event.detail === "echo stale"),
+    false
+  );
 });
 
 test("explicitly stopped threads leave only after the stop grace window", async () => {
@@ -983,10 +1256,11 @@ test("rollout exec_command hooks become command events", () => {
 });
 
 test("snapshot prefers recent file-change events over trailing summary messages", async () => {
+  const now = Date.now();
   const thread = {
     ...sampleThread(),
     status: { type: "idle" },
-    updatedAt: Math.floor(Date.parse("2026-03-23T19:00:10.000Z") / 1000),
+    updatedAt: Math.floor((now - 10_000) / 1000),
     turns: [
       {
         id: "turn_1",
@@ -1013,7 +1287,7 @@ test("snapshot prefers recent file-change events over trailing summary messages"
         source: "codex",
         confidence: "typed",
         threadId: "thr_123",
-        createdAt: "2026-03-23T19:00:09.000Z",
+        createdAt: new Date(now - 1_000).toISOString(),
         method: "rollout/apply_patch/completed",
         itemId: "call_123",
         kind: "fileChange",
