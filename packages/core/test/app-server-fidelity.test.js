@@ -1188,6 +1188,55 @@ test("live monitor drops stale historical events instead of replaying them on st
   );
 });
 
+test("initial thread hydration does not replay dormant final replies as fresh message events", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/mnt/f/AI/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const threeDaysAgoMs = Date.now() - (3 * 24 * 60 * 60 * 1000);
+  const listedThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor(threeDaysAgoMs / 1000),
+    turns: []
+  };
+  const hydratedThread = {
+    ...listedThread,
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            text: "Dormant final reply",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(listedThread.id, listedThread);
+  monitor.client = {
+    readThread: async () => hydratedThread
+  };
+
+  await monitor.refreshThread(listedThread.id);
+  await monitor.rebuildSnapshot();
+
+  assert.equal(
+    monitor.recentEvents.some((event) => event.method === "thread/read/agentMessage"),
+    false
+  );
+  const snapshot = monitor.getSnapshot();
+  const agent = snapshot.agents.find((entry) => entry.threadId === listedThread.id);
+  assert.ok(agent);
+  assert.equal(agent.detail, "Dormant final reply");
+  assert.equal(agent.isCurrent, false);
+});
+
 test("explicitly stopped threads leave only after the stop grace window", async () => {
   const stoppedThread = {
     ...sampleThread(),

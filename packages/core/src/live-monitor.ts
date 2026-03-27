@@ -432,6 +432,10 @@ export function buildThreadReadAgentMessageEvent(
   };
 }
 
+function hasLoadedThreadHistory(thread: CodexThread | null): boolean {
+  return Boolean(thread && Array.isArray(thread.turns) && thread.turns.length > 0);
+}
+
 function buildEventFromItem(
   context: DashboardEventContext,
   method: string,
@@ -1716,7 +1720,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       const previousMessage = previousThread ? latestThreadAgentMessage(previousThread) : null;
       const nextMessage = latestThreadAgentMessage(thread);
       if (
-        previousThread
+        hasLoadedThreadHistory(previousThread)
         && nextMessage
         && (
           nextMessage.itemId !== previousMessage?.itemId
