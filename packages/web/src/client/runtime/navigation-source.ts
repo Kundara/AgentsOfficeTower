@@ -253,6 +253,17 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
         });
       }
 
+      function sceneFootDepth(y, height, bias = 0) {
+        return (1000 + pixelSnap(y) + pixelSnap(height, 1)) * 10 + (Number.isFinite(bias) ? Number(bias) : 0);
+      }
+
+      function applyFootDepth(node, y, height, bias = 0) {
+        if (!node) {
+          return;
+        }
+        node.zIndex = sceneFootDepth(y, height, bias);
+      }
+
       function syncOfficeRendererScene(renderer, model) {
         if (!renderer || !renderer.root || !window.PIXI) {
           return;
@@ -551,6 +562,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
 
         renderer.updateAutonomousRestingMotion = updateAutonomousRestingMotion;
         renderer.syncHeldItemSprite = syncHeldItemSprite;
+        renderer.syncMotionStateDepth = syncMotionStateDepth;
 
         function addSpriteNode(definition) {
           const sprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(definition.sprite) || definition.sprite);
@@ -606,7 +618,12 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             avatar.scale.x = -Math.abs(avatar.scale.x || 1);
             avatar.x += snappedWidth;
           }
-          avatar.zIndex = zIndex;
+          const fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;
+          if (fixedZ !== null) {
+            avatar.zIndex = fixedZ;
+          } else {
+            applyFootDepth(avatar, avatar.y, snappedHeight, zIndex);
+          }
           renderer.root.addChild(avatar);
           createdNodes.push(avatar);
           let bubbleBox = null;
@@ -621,7 +638,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
               .stroke({ color: 0x1f2e29, width: 2, alpha: 0.8 });
             bubbleBox.x = bubbleX;
             bubbleBox.y = bubbleY;
-            bubbleBox.zIndex = zIndex + 1;
+            bubbleBox.zIndex = fixedZ !== null ? fixedZ + 1 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 1);
             renderer.root.addChild(bubbleBox);
             createdNodes.push(bubbleBox);
             bubbleText = createPixiText(renderer, agent.bubble, {
@@ -632,7 +649,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             });
             bubbleText.x = bubbleX + Math.round((bubbleWidth - bubbleText.width) / 2);
             bubbleText.y = bubbleY + Math.round((12 - bubbleText.height) / 2) - 1;
-            bubbleText.zIndex = zIndex + 2;
+            bubbleText.zIndex = fixedZ !== null ? fixedZ + 2 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 2);
             renderer.root.addChild(bubbleText);
             createdNodes.push(bubbleText);
           }
@@ -640,8 +657,40 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             nodes: createdNodes,
             avatar,
             bubbleBox,
-            bubbleText
+            bubbleText,
+            depthBias: fixedZ !== null ? fixedZ : zIndex
           };
+        }
+
+        function syncMotionStateDepth(motionState) {
+          if (!motionState || !motionState.sprite) {
+            return;
+          }
+          if (Number.isFinite(motionState.fixedZ)) {
+            const fixedZ = Number(motionState.fixedZ);
+            motionState.sprite.zIndex = fixedZ;
+            if (motionState.bubbleBox) {
+              motionState.bubbleBox.zIndex = fixedZ + 1;
+            }
+            if (motionState.bubbleText) {
+              motionState.bubbleText.zIndex = fixedZ + 2;
+            }
+            if (motionState.heldItemSprite) {
+              motionState.heldItemSprite.zIndex = fixedZ + 3;
+            }
+            return;
+          }
+          const depthBias = Number.isFinite(motionState.depthBias) ? motionState.depthBias : 12;
+          applyFootDepth(motionState.sprite, motionState.currentY, motionState.height, depthBias);
+          if (motionState.bubbleBox) {
+            applyFootDepth(motionState.bubbleBox, motionState.currentY, motionState.height, depthBias + 1);
+          }
+          if (motionState.bubbleText) {
+            applyFootDepth(motionState.bubbleText, motionState.currentY, motionState.height, depthBias + 2);
+          }
+          if (motionState.heldItemSprite) {
+            applyFootDepth(motionState.heldItemSprite, motionState.currentY, motionState.height, depthBias + 3);
+          }
         }
 
         function registerAgentMotion(agent, avatarVisual, roomNavigation, reservations, previousMotionState = null, options = {}) {
@@ -686,6 +735,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             previousState.height = agent.height;
             previousState.state = agent.state || "idle";
             previousState.spriteUrl = agent.sprite;
+            previousState.depthBias = avatarVisual.depthBias;
+            previousState.fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;
             previousState.targetFlipX = agent.flipX === true;
             previousState.slotId = agent.slotId || previousState.slotId || null;
             previousState.mirrored = typeof agent.mirrored === "boolean"
@@ -717,11 +768,13 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
                 kind: "bob",
                 sprite: avatarVisual.avatar,
                 baseY: pixelSnap(previousState.currentY),
+                depthBias: avatarVisual.depthBias,
                 phase: stableHash(agent.id || agent.label || "") % 1000
               });
             } else {
               renderer.animatedSprites.push(previousState);
             }
+            syncMotionStateDepth(previousState);
             syncAgentHitNodePosition(renderer, previousState);
             return avatarVisual.nodes;
           }
@@ -774,6 +827,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
               ? agent.mirrored
               : (typeof previousState?.mirrored === "boolean" ? previousState.mirrored : null),
             heldItemSprite: null,
+            depthBias: avatarVisual.depthBias,
+            fixedZ: Number.isFinite(agent.z) ? Number(agent.z) : null,
             autonomy: autonomousResting
               ? (previousState && previousState.autonomy
                 ? {
@@ -811,8 +866,10 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
               kind: "bob",
               sprite: avatarVisual.avatar,
               baseY: pixelSnap(agent.y),
+              depthBias: avatarVisual.depthBias,
               phase: stableHash(agent.id || agent.label || "") % 1000
             });
+            syncMotionStateDepth(motionState);
             syncAgentHitNodePosition(renderer, motionState);
             return avatarVisual.nodes;
           }
@@ -825,11 +882,13 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             if (autonomousResting) {
               renderer.animatedSprites.push(motionState);
             }
+            syncMotionStateDepth(motionState);
             syncAgentHitNodePosition(renderer, motionState);
             return avatarVisual.nodes;
           }
           renderer.motionStates.set(motionState.key, motionState);
           renderer.animatedSprites.push(motionState);
+          syncMotionStateDepth(motionState);
           syncAgentHitNodePosition(renderer, motionState);
           return avatarVisual.nodes;
         }
@@ -979,7 +1038,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             .moveTo(line.x1, line.y1)
             .bezierCurveTo(control1X, control1Y, control2X, control2Y, line.x2, line.y2)
             .stroke({ color: 0xffde73, width: 3, alpha: 0.72, cap: "round", join: "round" });
-          path.zIndex = 13;
+          path.zIndex = 20000;
           path.visible = false;
           renderer.root.addChild(path);
 
@@ -1002,7 +1061,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             )
             .closePath()
             .fill({ color: 0xffde73, alpha: 0.88 });
-          arrowHead.zIndex = 13;
+          arrowHead.zIndex = 20000;
           arrowHead.visible = false;
           renderer.root.addChild(arrowHead);
 

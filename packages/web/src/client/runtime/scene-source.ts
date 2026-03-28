@@ -831,6 +831,9 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 if (typeof renderer.syncHeldItemSprite === "function") {
                   renderer.syncHeldItemSprite(entry);
                 }
+                if (typeof renderer.syncMotionStateDepth === "function") {
+                  renderer.syncMotionStateDepth(entry);
+                }
                 syncAgentHitNodePosition(renderer, entry);
                 if (entry.exiting && entry.routeIndex >= route.length) {
                   entry.sprite.alpha = Math.max(0, entry.sprite.alpha - 0.16);
@@ -865,6 +868,9 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
               }
               if (entry.kind === "bob") {
                 entry.sprite.y = entry.baseY + Math.round(Math.sin((now + entry.phase) / 220) * 1);
+                if (Number.isFinite(entry.depthBias)) {
+                  entry.sprite.zIndex = Number(entry.depthBias);
+                }
                 return;
               }
               if (entry.kind === "thrown-item") {

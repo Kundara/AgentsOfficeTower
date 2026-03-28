@@ -135,6 +135,11 @@ Current browser settings surfaces are:
 - New active agents should take the next available desk slot; they must not steal an already-occupied stable slot from another live agent during an ordinary update.
 - Resting agents in the rec area should keep stable sofa/wall-side seats by agent identity instead of being reassigned purely by sorted array index.
 - Z-order should be explicit and deterministic so floor bands, furniture, agents, effects, and toasts stack consistently.
+- Floor-level depth sorting should use each sprite's ground-contact pivot rather than sprite top or center; for avatars this pivot is the feet.
+- Lower on-screen foot/base position must sort in front of higher on-screen foot/base position.
+- Agents, chairs, desks, workstations, and other floor props that can visually overlap should follow that same foot/base sorting rule so overlap reads spatially correct.
+- If an agent's feet are still above a workstation or desk base on screen, the workstation/desk must render in front of that agent; once the agent's feet move below that base, the agent must render in front.
+- Depth sorting must update continuously during routed movement and idle motion, not only when an agent first spawns or is assigned to a seat.
 - Agent movement in the retained browser scene should follow walkable tile paths instead of straight-line tween resets.
 - Tile pathfinding should avoid occupied cells from furniture, workstation footprints, and already-seated agents.
 - Visual-only updates such as debug overlays, text-scale changes, or scene host rerenders must not be treated as a new placement instruction.

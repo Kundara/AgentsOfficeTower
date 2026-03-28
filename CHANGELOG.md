@@ -78,6 +78,7 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Fixed
 
 - Fixed worktree floor grouping so the default unsplit tower now collapses Codex worktrees onto one repo floor even when a stale worktree snapshot is missing `projectIdentity`, by falling back to stable repo-origin data and keeping split-only floor badges derived from the worktree path when needed.
+- Fixed Pixi office depth sorting so agents and workstation shell sprites now sort from their on-screen foot position instead of fixed layer numbers, preventing walkers from drawing above desks they are still behind.
 - Fixed the remaining `cursor.ts` monolith by moving Cursor cloud-agent loading, repo normalization helpers, and local discovery into focused modules, bringing the file back under the repo size guard.
 - Fixed snapshot activity precedence so a recent typed file-change event can override a trailing summary message without reactivating a completed thread, while fresh command-start events still do not wake a finished desk back into running state.
 - Fixed the browser client tests to assert against the real runtime section modules after the runtime patch-assembler removal, so the suite now validates behavior instead of legacy string-rewrite scaffolding.

@@ -353,6 +353,16 @@ export const MULTIPLAYER_SCRIPT = `
         };
       }
 
+      function notificationFleetView(fleet) {
+        if (!fleet) {
+          return null;
+        }
+        return {
+          ...fleet,
+          projects: mergeWorktreeProjects(Array.isArray(fleet.projects) ? fleet.projects : [])
+        };
+      }
+
       function applyFleet(localFleet) {
         const fleet = buildSharedFleet(localFleet);
         if (!fleet) {
@@ -363,8 +373,10 @@ export const MULTIPLAYER_SCRIPT = `
           return;
         }
         const previousFleet = state.fleet;
-        queueSnapshotEvents(previousFleet, fleet);
-        queueAgentNotifications(previousFleet, fleet);
+        const previousNotificationFleet = notificationFleetView(previousFleet);
+        const nextNotificationFleet = notificationFleetView(fleet);
+        queueSnapshotEvents(previousNotificationFleet, nextNotificationFleet);
+        queueAgentNotifications(previousNotificationFleet, nextNotificationFleet);
         state.fleet = fleet;
         lastFleetSemanticToken = nextFleetSemanticToken;
         if (state.selected !== "all") {

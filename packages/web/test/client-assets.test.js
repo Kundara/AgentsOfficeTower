@@ -156,8 +156,28 @@ test("runtime source preserves workstation entering-reveal flags for the Pixi fl
     navigationSource.includes('if (!screenshotMode && definition.enteringReveal === true) {\n            sprite.visible = false;\n          }')
   );
   assert.ok(
-    navigationSource.includes('renderer.animatedSprites.push({\n              kind: "blink",\n              nodes: enteringRevealNodes,')
+    /renderer\.animatedSprites\.push\(\{\s+kind: "blink",\s+nodes: enteringRevealNodes,/m.test(navigationSource)
   );
+});
+
+test("navigation source depth-sorts agents and desk shell sprites by feet position instead of fixed layers", () => {
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const renderSource = readRuntimeSource("render-source.ts");
+
+  assert.ok(navigationSource.includes("function sceneFootDepth(y, height, bias = 0) {"));
+  assert.ok(navigationSource.includes("function applyFootDepth(node, y, height, bias = 0) {"));
+  assert.ok(navigationSource.includes("sprite.zIndex = definition.z || 5;"));
+  assert.ok(navigationSource.includes("const fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;"));
+  assert.ok(navigationSource.includes("if (fixedZ !== null) {"));
+  assert.ok(navigationSource.includes("applyFootDepth(avatar, avatar.y, snappedHeight, zIndex);"));
+  assert.ok(navigationSource.includes("function syncMotionStateDepth(motionState) {"));
+  assert.ok(sceneSource.includes("syncMotionStateDepth(entry);"));
+  assert.ok(renderSource.includes("buildPixiSpriteDef(deskSprite"));
+  assert.ok(renderSource.includes("buildPixiSpriteDef(chair"));
+  assert.ok(renderSource.includes("buildPixiSpriteDef(computerSprite"));
+  assert.ok(renderSource.includes("z: seatedState ? 12 : null"));
+  assert.ok(renderSource.includes("const seatedState = state === \"editing\""));
 });
 
 test("workspace focus reuses compact scene geometry and grid-snapped desk starts", () => {
@@ -438,6 +458,19 @@ test("typed snapshot events still allow message toasts even when the agent is no
   assert.match(
     toastSource,
     /if \(\n?\s*!agent\.isCurrent\n?\s*&& agent\.state !== "waiting"\n?\s*&& agent\.state !== "blocked"\n?\s*&& event\.kind !== "message"\n?\s*&& !\(event\.kind === "tool" && event\.itemType === "webSearch"\)\n?\s*\) \{/,
+  );
+});
+
+test("toast notifications use the merged worktree view so unsplit floors keep matching scene anchors", () => {
+  const multiplayerSource = readClientSource("multiplayer-source.ts");
+
+  assert.match(
+    multiplayerSource,
+    /function notificationFleetView\(fleet\) {\n\s+if \(!fleet\) {\n\s+return null;\n\s+}\n\s+return {\n\s+\.\.\.fleet,\n\s+projects: mergeWorktreeProjects\(Array\.isArray\(fleet\.projects\) \? fleet\.projects : \[\]\)\n\s+};\n\s+}/
+  );
+  assert.match(
+    multiplayerSource,
+    /const previousNotificationFleet = notificationFleetView\(previousFleet\);\n\s+const nextNotificationFleet = notificationFleetView\(fleet\);\n\s+queueSnapshotEvents\(previousNotificationFleet, nextNotificationFleet\);\n\s+queueAgentNotifications\(previousNotificationFleet, nextNotificationFleet\);/
   );
 });
 

@@ -959,15 +959,31 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         })();
         const absoluteCellX = Math.round(options.absoluteX ?? x);
         const absoluteCellY = Math.round(options.absoluteY ?? y);
+        const seatedState = state === "editing"
+          || state === "thinking"
+          || state === "planning"
+          || state === "scanning"
+          || state === "delegating"
+          || state === "running"
+          || state === "validating";
         const stationBoundsX = absoluteCellX + Math.max(0, Math.round((boothWidth - sceneTile * 3) / 2));
         const stationBoundsY = absoluteCellY + Math.max(0, boothHeight - sceneTile);
         const anchorX = absoluteCellX + Math.round(workstationX + workstationWidth * 0.5);
         const anchorY = absoluteCellY + Math.round(boothHeight * 0.72);
         const visual = {
           shell: [
-            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, { flipX: mirrored, enteringReveal: options.enteringReveal === true }),
-            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, { flipX: mirrored, enteringReveal: options.enteringReveal === true }),
-            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, { flipX: mirrored, enteringReveal: options.enteringReveal === true })
+            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, {
+              flipX: mirrored,
+              enteringReveal: options.enteringReveal === true
+            }),
+            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, {
+              flipX: mirrored,
+              enteringReveal: options.enteringReveal === true
+            }),
+            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, {
+              flipX: mirrored,
+              enteringReveal: options.enteringReveal === true
+            })
           ],
           glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
             ? {
@@ -986,6 +1002,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
                 width: Math.round(avatarWidth),
                 height: Math.round(avatarHeight),
                 flipX: avatarPose.flip === true,
+                z: seatedState ? 12 : null,
                 state,
                 appearance: agent.appearance
               }

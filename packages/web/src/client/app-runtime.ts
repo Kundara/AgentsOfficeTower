@@ -2135,6 +2135,16 @@ export function startClientApp(): void {
         };
       }
 
+      function notificationFleetView(fleet) {
+        if (!fleet) {
+          return null;
+        }
+        return {
+          ...fleet,
+          projects: mergeWorktreeProjects(Array.isArray(fleet.projects) ? fleet.projects : [])
+        };
+      }
+
       function applyFleet(localFleet) {
         const fleet = buildSharedFleet(localFleet);
         if (!fleet) {
@@ -2145,8 +2155,10 @@ export function startClientApp(): void {
           return;
         }
         const previousFleet = state.fleet;
-        queueSnapshotEvents(previousFleet, fleet);
-        queueAgentNotifications(previousFleet, fleet);
+        const previousNotificationFleet = notificationFleetView(previousFleet);
+        const nextNotificationFleet = notificationFleetView(fleet);
+        queueSnapshotEvents(previousNotificationFleet, nextNotificationFleet);
+        queueAgentNotifications(previousNotificationFleet, nextNotificationFleet);
         state.fleet = fleet;
         lastFleetSemanticToken = nextFleetSemanticToken;
         if (state.selected !== "all") {
@@ -4708,15 +4720,31 @@ export function startClientApp(): void {
         })();
         const absoluteCellX = Math.round(options.absoluteX ?? x);
         const absoluteCellY = Math.round(options.absoluteY ?? y);
+        const seatedState = state === "editing"
+          || state === "thinking"
+          || state === "planning"
+          || state === "scanning"
+          || state === "delegating"
+          || state === "running"
+          || state === "validating";
         const stationBoundsX = absoluteCellX + Math.max(0, Math.round((boothWidth - sceneTile * 3) / 2));
         const stationBoundsY = absoluteCellY + Math.max(0, boothHeight - sceneTile);
         const anchorX = absoluteCellX + Math.round(workstationX + workstationWidth * 0.5);
         const anchorY = absoluteCellY + Math.round(boothHeight * 0.72);
         const visual = {
           shell: [
-            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, { flipX: mirrored, enteringReveal: options.enteringReveal === true }),
-            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, { flipX: mirrored, enteringReveal: options.enteringReveal === true }),
-            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, { flipX: mirrored, enteringReveal: options.enteringReveal === true })
+            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, {
+              flipX: mirrored,
+              enteringReveal: options.enteringReveal === true
+            }),
+            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, {
+              flipX: mirrored,
+              enteringReveal: options.enteringReveal === true
+            }),
+            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, {
+              flipX: mirrored,
+              enteringReveal: options.enteringReveal === true
+            })
           ],
           glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
             ? {
@@ -4735,6 +4763,7 @@ export function startClientApp(): void {
                 width: Math.round(avatarWidth),
                 height: Math.round(avatarHeight),
                 flipX: avatarPose.flip === true,
+                z: seatedState ? 12 : null,
                 state,
                 appearance: agent.appearance
               }
@@ -5620,6 +5649,9 @@ export function startClientApp(): void {
                 if (typeof renderer.syncHeldItemSprite === "function") {
                   renderer.syncHeldItemSprite(entry);
                 }
+                if (typeof renderer.syncMotionStateDepth === "function") {
+                  renderer.syncMotionStateDepth(entry);
+                }
                 syncAgentHitNodePosition(renderer, entry);
                 if (entry.exiting && entry.routeIndex >= route.length) {
                   entry.sprite.alpha = Math.max(0, entry.sprite.alpha - 0.16);
@@ -5654,6 +5686,9 @@ export function startClientApp(): void {
               }
               if (entry.kind === "bob") {
                 entry.sprite.y = entry.baseY + Math.round(Math.sin((now + entry.phase) / 220) * 1);
+                if (Number.isFinite(entry.depthBias)) {
+                  entry.sprite.zIndex = Number(entry.depthBias);
+                }
                 return;
               }
               if (entry.kind === "thrown-item") {
@@ -6170,6 +6205,17 @@ function roleTint(role) {
         });
       }
 
+      function sceneFootDepth(y, height, bias = 0) {
+        return (1000 + pixelSnap(y) + pixelSnap(height, 1)) * 10 + (Number.isFinite(bias) ? Number(bias) : 0);
+      }
+
+      function applyFootDepth(node, y, height, bias = 0) {
+        if (!node) {
+          return;
+        }
+        node.zIndex = sceneFootDepth(y, height, bias);
+      }
+
       function syncOfficeRendererScene(renderer, model) {
         if (!renderer || !renderer.root || !window.PIXI) {
           return;
@@ -6468,6 +6514,7 @@ function roleTint(role) {
 
         renderer.updateAutonomousRestingMotion = updateAutonomousRestingMotion;
         renderer.syncHeldItemSprite = syncHeldItemSprite;
+        renderer.syncMotionStateDepth = syncMotionStateDepth;
 
         function addSpriteNode(definition) {
           const sprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(definition.sprite) || definition.sprite);
@@ -6523,7 +6570,12 @@ function roleTint(role) {
             avatar.scale.x = -Math.abs(avatar.scale.x || 1);
             avatar.x += snappedWidth;
           }
-          avatar.zIndex = zIndex;
+          const fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;
+          if (fixedZ !== null) {
+            avatar.zIndex = fixedZ;
+          } else {
+            applyFootDepth(avatar, avatar.y, snappedHeight, zIndex);
+          }
           renderer.root.addChild(avatar);
           createdNodes.push(avatar);
           let bubbleBox = null;
@@ -6538,7 +6590,7 @@ function roleTint(role) {
               .stroke({ color: 0x1f2e29, width: 2, alpha: 0.8 });
             bubbleBox.x = bubbleX;
             bubbleBox.y = bubbleY;
-            bubbleBox.zIndex = zIndex + 1;
+            bubbleBox.zIndex = fixedZ !== null ? fixedZ + 1 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 1);
             renderer.root.addChild(bubbleBox);
             createdNodes.push(bubbleBox);
             bubbleText = createPixiText(renderer, agent.bubble, {
@@ -6549,7 +6601,7 @@ function roleTint(role) {
             });
             bubbleText.x = bubbleX + Math.round((bubbleWidth - bubbleText.width) / 2);
             bubbleText.y = bubbleY + Math.round((12 - bubbleText.height) / 2) - 1;
-            bubbleText.zIndex = zIndex + 2;
+            bubbleText.zIndex = fixedZ !== null ? fixedZ + 2 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 2);
             renderer.root.addChild(bubbleText);
             createdNodes.push(bubbleText);
           }
@@ -6557,8 +6609,40 @@ function roleTint(role) {
             nodes: createdNodes,
             avatar,
             bubbleBox,
-            bubbleText
+            bubbleText,
+            depthBias: fixedZ !== null ? fixedZ : zIndex
           };
+        }
+
+        function syncMotionStateDepth(motionState) {
+          if (!motionState || !motionState.sprite) {
+            return;
+          }
+          if (Number.isFinite(motionState.fixedZ)) {
+            const fixedZ = Number(motionState.fixedZ);
+            motionState.sprite.zIndex = fixedZ;
+            if (motionState.bubbleBox) {
+              motionState.bubbleBox.zIndex = fixedZ + 1;
+            }
+            if (motionState.bubbleText) {
+              motionState.bubbleText.zIndex = fixedZ + 2;
+            }
+            if (motionState.heldItemSprite) {
+              motionState.heldItemSprite.zIndex = fixedZ + 3;
+            }
+            return;
+          }
+          const depthBias = Number.isFinite(motionState.depthBias) ? motionState.depthBias : 12;
+          applyFootDepth(motionState.sprite, motionState.currentY, motionState.height, depthBias);
+          if (motionState.bubbleBox) {
+            applyFootDepth(motionState.bubbleBox, motionState.currentY, motionState.height, depthBias + 1);
+          }
+          if (motionState.bubbleText) {
+            applyFootDepth(motionState.bubbleText, motionState.currentY, motionState.height, depthBias + 2);
+          }
+          if (motionState.heldItemSprite) {
+            applyFootDepth(motionState.heldItemSprite, motionState.currentY, motionState.height, depthBias + 3);
+          }
         }
 
         function registerAgentMotion(agent, avatarVisual, roomNavigation, reservations, previousMotionState = null, options = {}) {
@@ -6603,6 +6687,8 @@ function roleTint(role) {
             previousState.height = agent.height;
             previousState.state = agent.state || "idle";
             previousState.spriteUrl = agent.sprite;
+            previousState.depthBias = avatarVisual.depthBias;
+            previousState.fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;
             previousState.targetFlipX = agent.flipX === true;
             previousState.slotId = agent.slotId || previousState.slotId || null;
             previousState.mirrored = typeof agent.mirrored === "boolean"
@@ -6634,11 +6720,13 @@ function roleTint(role) {
                 kind: "bob",
                 sprite: avatarVisual.avatar,
                 baseY: pixelSnap(previousState.currentY),
+                depthBias: avatarVisual.depthBias,
                 phase: stableHash(agent.id || agent.label || "") % 1000
               });
             } else {
               renderer.animatedSprites.push(previousState);
             }
+            syncMotionStateDepth(previousState);
             syncAgentHitNodePosition(renderer, previousState);
             return avatarVisual.nodes;
           }
@@ -6691,6 +6779,8 @@ function roleTint(role) {
               ? agent.mirrored
               : (typeof previousState?.mirrored === "boolean" ? previousState.mirrored : null),
             heldItemSprite: null,
+            depthBias: avatarVisual.depthBias,
+            fixedZ: Number.isFinite(agent.z) ? Number(agent.z) : null,
             autonomy: autonomousResting
               ? (previousState && previousState.autonomy
                 ? {
@@ -6728,8 +6818,10 @@ function roleTint(role) {
               kind: "bob",
               sprite: avatarVisual.avatar,
               baseY: pixelSnap(agent.y),
+              depthBias: avatarVisual.depthBias,
               phase: stableHash(agent.id || agent.label || "") % 1000
             });
+            syncMotionStateDepth(motionState);
             syncAgentHitNodePosition(renderer, motionState);
             return avatarVisual.nodes;
           }
@@ -6742,11 +6834,13 @@ function roleTint(role) {
             if (autonomousResting) {
               renderer.animatedSprites.push(motionState);
             }
+            syncMotionStateDepth(motionState);
             syncAgentHitNodePosition(renderer, motionState);
             return avatarVisual.nodes;
           }
           renderer.motionStates.set(motionState.key, motionState);
           renderer.animatedSprites.push(motionState);
+          syncMotionStateDepth(motionState);
           syncAgentHitNodePosition(renderer, motionState);
           return avatarVisual.nodes;
         }
@@ -6896,7 +6990,7 @@ function roleTint(role) {
             .moveTo(line.x1, line.y1)
             .bezierCurveTo(control1X, control1Y, control2X, control2Y, line.x2, line.y2)
             .stroke({ color: 0xffde73, width: 3, alpha: 0.72, cap: "round", join: "round" });
-          path.zIndex = 13;
+          path.zIndex = 20000;
           path.visible = false;
           renderer.root.addChild(path);
 
@@ -6919,7 +7013,7 @@ function roleTint(role) {
             )
             .closePath()
             .fill({ color: 0xffde73, alpha: 0.88 });
-          arrowHead.zIndex = 13;
+          arrowHead.zIndex = 20000;
           arrowHead.visible = false;
           renderer.root.addChild(arrowHead);
 
