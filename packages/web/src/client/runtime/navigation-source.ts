@@ -1115,22 +1115,4 @@ function focusKeysIntersect(keys, focusedKeys) {
           const scope = normalizeDisplayText(snapshot.projectRoot, need?.command || need?.reason || need?.grantRoot || agent.detail);
           return \`\${escapeHtml(projectLabel(snapshot.projectRoot))} · \${escapeHtml(agent.label)} · \${escapeHtml(need?.kind || "input")} · \${escapeHtml(scope)}\`;
         }).join("<br />")}</div></section>\`;
-      }
-
-      function renderSessions(snapshot) {
-        if (!snapshot || snapshot.agents.length === 0) {
-          return '<div class="empty">No live or recent lead sessions in the selected workspace right now.</div>';
-        }
-
-        const sorted = [...snapshot.agents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
-          const appearanceAction = agent.network
-            ? ""
-            : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(snapshot.projectRoot)}" data-agent-id="\${escapeHtml(agent.id)}">Cycle look</button>\`;
-          const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
-          const description = normalizeDisplayText(snapshot.projectRoot, agent.detail)
-            || latestAgentMessage(agent)
-            || \`[\${agent.state}]\`;
-          const sourceLabel = agentNetworkLabel(agent);
-          const fullDescription = sourceLabel ? \`\${sourceLabel} · \${description}\` : description;
-`;
+      }`;

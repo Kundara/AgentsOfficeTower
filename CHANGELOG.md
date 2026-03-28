@@ -32,6 +32,8 @@ Entries stay under the active version until an explicit version bump is requeste
 
 - Reworked the core internals so dashboard snapshot assembly now lives in `snapshot-lib`, app-server event and rollout-hook parsing live in `live-monitor-lib`, and Cursor local/cloud helpers live in `cursor-lib` instead of staying stacked inside `snapshot.ts`, `live-monitor.ts`, and `cursor.ts`.
 - Changed the browser runtime composition so `packages/web/src/client/runtime-source.ts` now only joins the final runtime sections; layout, scene, navigation, render, settings, and UI behavior are edited directly in their own section modules instead of being rewritten through string patch helpers.
+- Changed the browser client bootstrap so the shipped app now starts from generated `packages/web/src/client/app-runtime.ts` output instead of evaluating a giant runtime string with `new Function(...)`, while the focused section sources remain the editing surface.
+- Changed the browser runtime section ownership so workstation/current-workload seat rules now live only in `packages/web/src/client/runtime/seating-source.ts`, while `layout-source.ts`, `render-source.ts`, `scene-source.ts`, `navigation-source.ts`, and `ui-source.ts` no longer leak partial function bodies across file boundaries.
 - Changed file-size and import-boundary guards to walk source files with Node filesystem helpers instead of shelling out to `rg`, so the repo rails keep working in restricted environments.
 - Changed Codex app-server event handling so `turn/plan/updated` now summarizes the documented `{ explanation?, plan }` payload, `turn/diff/updated` summarizes the documented `{ diff }` payload, and `item/tool/call` is labeled as a generic tool-call request instead of an MCP-specific event.
 - Changed fleet startup discovery so Codex workspaces configured in `~/.codex/config.toml` now seed the live project set even before any thread has been spawned in this browser session, and fleet refresh now asks for a broad enough discovery window to keep the full configured/discovered workspace list visible.
@@ -50,13 +52,14 @@ Entries stay under the active version until an explicit version bump is requeste
 - Moved scene controls into a toggleable settings popup in the web header, removing the manual refresh and rooms scaffold actions from the main toolbar and hiding the toast preview trigger.
 - Changed the scene text-size slider to apply on release instead of during drag so the settings popup stays stable while adjusting scale.
 - Extracted browser toast queueing, stacking, preview, and DOM rendering from the main client script into a dedicated `toast-script` module.
-- Extracted PartyKit shared-room transport, settings persistence, and remote fleet merge helpers from the main client script into a dedicated `multiplayer-script` module.
+- Extracted PartyKit shared-room transport, settings persistence, and remote fleet merge helpers from the main client script into the dedicated `multiplayer-source` module.
 - Removed the unused DOM office-map renderer path from the web client so the browser map now runs through the retained Pixi scene only.
 - Changed Claude secondary discovery to prefer the official Agent SDK `listSessions()` and `getSessionMessages()` APIs before falling back to raw JSONL transcript sampling.
 
 ### Docs
 
 - Updated the README and architecture/self-development docs to describe the new `snapshot-lib`, `live-monitor-lib`, `cursor-lib`, and browser runtime section boundaries.
+- Updated the README and architecture/integration/self-development docs to describe the generated `app-runtime.ts` bootstrap, the single-owner `seating-source.ts` desk policy, and the cleaned runtime section boundaries.
 - Documented the current official Codex app-server event coverage more precisely, including the dynamic-tool meaning of `item/tool/call` and the documented notifications we still ignore for workload rendering (`thread/tokenUsage/updated`, `fuzzyFileSearch/*`, and `windowsSandbox/setupCompleted`).
 - Updated the README and integration/architecture/reference docs to describe the new Cursor Hooks path, the committed `.cursor/hooks.json`, and the typed `.codex-agents/cursor-hooks` sidecars.
 - Expanded the README with explicit step-by-step instructions for copying the committed Cursor hook files into another repo and verifying that local sidecars are being written.

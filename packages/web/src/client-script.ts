@@ -1,1 +1,1 @@
-export { CLIENT_RUNTIME_SOURCE } from "./client/runtime-source";
+export { startClientApp } from "./client/app-runtime";

@@ -1,4 +1,20 @@
-export const CLIENT_RUNTIME_UI_SOURCE = `          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(agent.label)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(fullDescription)}">\${escapeHtml(fullDescription)}</div></article>\`;
+export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot) {
+        if (!snapshot || snapshot.agents.length === 0) {
+          return '<div class="empty">No live or recent lead sessions in the selected workspace right now.</div>';
+        }
+
+        const sorted = [...snapshot.agents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
+          const appearanceAction = agent.network
+            ? ""
+            : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(snapshot.projectRoot)}" data-agent-id="\${escapeHtml(agent.id)}">Cycle look</button>\`;
+          const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
+          const description = normalizeDisplayText(snapshot.projectRoot, agent.detail)
+            || latestAgentMessage(agent)
+            || \`[\${agent.state}]\`;
+          const sourceLabel = agentNetworkLabel(agent);
+          const fullDescription = sourceLabel ? \`\${sourceLabel} · \${description}\` : description;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(agent.label)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(fullDescription)}">\${escapeHtml(fullDescription)}</div></article>\`;
         }).join("");
       }
 

@@ -30,7 +30,7 @@ A good iteration improves at least one of these:
 3. Increase event-level transparency so visible state is traceable to real Codex signals.
 4. Continue breaking the remaining large source-specific sections into smaller adapter/service/domain helpers.
 5. Preserve enough structure in the scene that busy workspaces still scan quickly.
-6. Keep shrinking the largest browser/runtime section files now that `runtime-source.ts` is only a composition layer.
+6. Keep shrinking the largest browser/runtime section files now that the shipped browser entry runs through generated `app-runtime.ts` output, `runtime-source.ts` is only a composition mirror, and desk policy has been isolated into `seating-source.ts`.
 
 ## Known weak spots
 
@@ -44,7 +44,7 @@ A good iteration improves at least one of these:
 - Live movement is still simpler than the intended office-life simulation.
 - Map and terminal browser views still share some presentation assumptions that should diverge further.
 - The office map now renders through a retained Pixi scene; remaining work is about refining prefab composition, motion, and editor parity rather than migrating off the old HTML map path.
-- The browser runtime is now externally bundled and `runtime-source.ts` is only a composition entry, but large sections such as scene/layout still need continued extraction into smaller browser-native modules.
+- The browser runtime is now externally bundled and executes through generated `app-runtime.ts` output sourced from the focused runtime sections. Ownership is cleaner than before because desk policy lives in `seating-source.ts` and renderer/session boundaries no longer spill partial functions across files, but large sections such as scene/layout still need continued extraction into smaller authored browser-native modules.
 
 ## Acceptance checks for future changes
 
@@ -101,6 +101,7 @@ A good iteration improves at least one of these:
 - keep the retained Pixi scene stable across scene refreshes with predictable entity ids, z-order, and incremental updates
 - keep user-facing scene controls minimal and global, starting with text scale, while prefab sizing and spacing remain internal until furniture editing exists
 - finish translating the previous office look into the tile system so the retained scene feels like the established PixelOffice floor instead of temporary placeholder geometry
+- replace the remaining large runtime section literals with smaller generated fragments or real browser-native modules while preserving the now-clean section ownership boundaries
 - keep the new file-size and import-boundary rails strict enough to block new monoliths while allowing the remaining transitional browser runtime to shrink incrementally
 
 ## Not the goal

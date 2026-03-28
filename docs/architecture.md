@@ -170,11 +170,21 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
 - `packages/web/src/render/render-html.ts`
   Builds the HTML shell and injects the browser assets.
 - `packages/web/src/client/index.ts`
-  Bundled browser entrypoint that loads the external client assets and executes the current runtime source against server-injected bootstrap config.
+  Bundled browser entrypoint that loads the external client assets and starts the generated browser runtime module against server-injected bootstrap config.
+- `packages/web/src/client/app-runtime.ts`
+  Generated browser runtime module emitted at build time from the focused runtime section sources so the shipped client no longer relies on `new Function(...)` evaluation.
 - `packages/web/src/client/runtime-source.ts`
-  Thin browser runtime composition entry that joins the focused runtime section literals instead of rewriting them through string-patch helpers.
+  Thin browser runtime composition entry that still mirrors the focused runtime section order while the generated `app-runtime.ts` output is the actual shipped browser module.
 - `packages/web/src/client/runtime`
-  Holds focused runtime sections such as layout, scene, navigation, render, settings, UI, and seating so browser behavior can be edited by concern instead of by patch order.
+  Holds focused runtime sections so browser behavior can be edited by concern instead of by patch order or by one giant client script.
+  Current ownership is:
+  - `settings-source.ts`: persisted scene settings, furniture overrides, and browser-side settings state bootstrap.
+  - `layout-source.ts`: DOM wiring, fleet/workspace selection state, summary helpers, role grouping, and display-text normalization.
+  - `seating-source.ts`: current-workload workstation policy, local grace windows, and rec-room eligibility.
+  - `render-source.ts`: cubicle/workstation visual models, notification copy shaping, and display-path formatting.
+  - `scene-source.ts`: room-to-scene model assembly, Pixi renderer lifecycle, and retained scene orchestration.
+  - `navigation-source.ts`: navigation grid, avatar routing, scene hit-target focus, terminal/fleet summaries, and the durable "Needs You" queue.
+  - `ui-source.ts`: browser render loop, DOM patching, fleet ingestion, and session-card rendering.
 - `packages/web/src/client/multiplayer-source.ts`
   Holds the browser-side PartyKit room sync overlay, shared-room settings persistence, and remote fleet merge helpers so the realtime room transport stays outside the main renderer script.
 - `packages/party`
@@ -186,7 +196,7 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
 - `packages/web/src/http-helpers.ts`
   Centralizes JSON/body helpers and static/project-file response handling.
 
-This keeps the browser behavior broadly the same, but it stops HTML responses from embedding giant JS/CSS strings, removes brittle runtime string surgery, and gives the repo clearer seams for future adapter and client-runtime work.
+This keeps the browser behavior broadly the same, but it stops HTML responses from embedding giant JS/CSS strings, removes brittle runtime string surgery, moves the shipped browser bootstrap onto a generated real module, and gives the repo clearer ownership seams for future client-runtime work.
 
 ## Room XML
 

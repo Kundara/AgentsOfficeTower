@@ -261,7 +261,8 @@ Current item-to-state mapping:
 Mapped in:
 
 - `packages/core/src/snapshot.ts`
-- `packages/web/src/client/runtime-source.ts`
+- `packages/web/src/client/runtime/render-source.ts`
+- `packages/web/src/client/toast-source.ts`
 
 ### Web search visibility
 
@@ -269,7 +270,8 @@ Mapped in:
 
 - `packages/core/src/live-monitor.ts`
 - `packages/core/src/snapshot.ts`
-- `packages/web/src/client/runtime-source.ts`
+- `packages/web/src/client/runtime/render-source.ts`
+- `packages/web/src/client/toast-source.ts`
 
 Current behavior:
 
@@ -297,7 +299,9 @@ How we use it:
 Mapped in:
 
 - `packages/core/src/snapshot.ts`
-- `packages/web/src/client/runtime-source.ts`
+- `packages/web/src/client/runtime/render-source.ts`
+- `packages/web/src/client/runtime/seating-source.ts`
+- `packages/web/src/client/toast-source.ts`
 
 What we read from Codex:
 
@@ -321,7 +325,9 @@ How we use it:
 Mapped in:
 
 - `packages/web/src/scene-config.ts`
-- `packages/web/src/client/runtime-source.ts`
+- `packages/web/src/client/runtime/layout-source.ts`
+- `packages/web/src/client/runtime/render-source.ts`
+- `packages/web/src/client/runtime/scene-source.ts`
 - `packages/web/src/client/styles.css`
 
 What we define internally:
@@ -353,7 +359,8 @@ Mapped in:
 - `packages/core/src/live-monitor.ts`
 - `packages/core/src/snapshot.ts`
 - `packages/web/src/pixel-office.ts`
-- `packages/web/src/client/runtime-source.ts`
+- `packages/web/src/client/runtime/render-source.ts`
+- `packages/web/src/client/toast-source.ts`
 
 What we read from Codex:
 
@@ -781,7 +788,9 @@ Then it:
 Rendered in:
 
 - `packages/web/src/render-html.ts`
-- `packages/web/src/client/runtime-source.ts`
+- `packages/web/src/client/index.ts`
+- `packages/web/src/client/app-runtime.ts`
+- `packages/web/src/client/runtime/*.ts`
 
 How normalized fields become visuals:
 
@@ -808,7 +817,10 @@ Transport:
 
 - `packages/web/src/fleet-live-service.ts`
 - `packages/web/src/router.ts`
-- `packages/web/src/client/runtime-source.ts`
+- `packages/web/src/client/index.ts`
+- `packages/web/src/client/app-runtime.ts`
+- `packages/web/src/client/runtime/ui-source.ts`
+- `packages/web/src/client/multiplayer-source.ts`
 
 How it works:
 
@@ -817,7 +829,8 @@ How it works:
 - `/api/multiplayer` exposes the current multiplayer transport status; it is currently a disabled placeholder until a secured sync path exists
 - `/api/events` streams live fleet updates over SSE
 - `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
-- browser-side rendering and event reaction live in `client-script.ts`, while optional PartyKit room sync and shared-room settings persistence live in `multiplayer-script.ts`
+- browser-side rendering starts from `client/index.ts`, executes the generated `app-runtime.ts` module, and then delegates behavior across the focused runtime section files
+- optional PartyKit room sync and shared-room settings persistence live in `multiplayer-source.ts`
 
 - server-sent events from `/api/events`
 

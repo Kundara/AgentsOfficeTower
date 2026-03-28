@@ -28,7 +28,9 @@ Browser office view, terminal snapshot, and VS Code panel for current Codex, Cla
 - Current-workload-first scene with subtle recent history.
 - Shared model across all renderers.
 - External bundled browser assets under `packages/web/dist/client` instead of inline HTML script/style payloads.
+- Generated browser bootstrap under `packages/web/src/client/app-runtime.ts` so the shipped client no longer evals one giant runtime string at startup.
 - Split browser runtime sections by responsibility under `packages/web/src/client/runtime/*.ts` instead of assembling behavior through string patch overrides.
+- Isolated workstation and current-workload seating policy into `packages/web/src/client/runtime/seating-source.ts` so desk ownership rules are not duplicated across layout and scene code.
 - Split core snapshot, live-monitor, and Cursor loaders into focused helper modules so local discovery, cloud adapters, event normalization, and thread summarization are no longer stacked in one file.
 
 Browser workload behavior:

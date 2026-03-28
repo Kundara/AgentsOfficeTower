@@ -1,21 +1,4 @@
-export const CLIENT_RUNTIME_RENDER_SOURCE = `          if (!isPathBoundary(previousChar)) {
-            output += plainText.slice(index, next + 5);
-            index = next + 5;
-            continue;
-          }
-          let end = next + 5;
-          while (end < plainText.length && !isPathBoundary(plainText[end])) {
-            end += 1;
-          }
-          const candidate = plainText.slice(next, end);
-          const cleaned = cleanReportedPath(projectRoot, candidate);
-          output += plainText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));
-          index = end;
-        }
-        return output;
-      }
-
-      function cleanReportedPath(projectRoot, location) {
+export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(projectRoot, location) {
         if (!location) {
           return "";
         }
@@ -806,4 +789,70 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `          if (!isPathBoundary(previ
             : clampAvatarX(Math.round(chairX + seatInset));
           if (state === "editing" || state === "thinking" || state === "planning" || state === "scanning" || state === "delegating") {
             return { x: seatedX, y: Math.max(0, baseY - (compact ? 1 : 3)), flip: workstationFlip };
+          }
+          if (state === "running" || state === "validating") {
+            return { x: seatedX, y: Math.max(0, baseY - (compact ? 1 : 3)), flip: workstationFlip };
+          }
+          if (state === "blocked") {
+            const workingX = mirrored
+              ? clampAvatarX(sideX + (compact ? 4 : 6))
+              : clampAvatarX(sideX - (compact ? 4 : 6));
+            return { x: workingX, y: baseY, flip: workstationFlip };
+          }
+          if (state === "idle" || state === "done") {
+            return {
+              x: Math.max(2, Math.round(centerX - avatarWidth / 2)),
+              y: Math.max(0, baseY + (compact ? 1 : 2)),
+              flip: stableHash(agent.id) % 2 === 0
+            };
+          }
+          return { x: sideX, y: baseY, flip: workstationFlip };
+        })();
+        const absoluteCellX = Math.round(options.absoluteX ?? x);
+        const absoluteCellY = Math.round(options.absoluteY ?? y);
+        const stationBoundsX = absoluteCellX + Math.max(0, Math.round((boothWidth - sceneTile * 3) / 2));
+        const stationBoundsY = absoluteCellY + Math.max(0, boothHeight - sceneTile);
+        const anchorX = absoluteCellX + Math.round(workstationX + workstationWidth * 0.5);
+        const anchorY = absoluteCellY + Math.round(boothHeight * 0.72);
+        const visual = {
+          shell: [
+            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, { flipX: mirrored, enteringReveal: options.enteringReveal === true }),
+            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, { flipX: mirrored, enteringReveal: options.enteringReveal === true }),
+            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, { flipX: mirrored, enteringReveal: options.enteringReveal === true })
+          ],
+          glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
+            ? {
+                x: absoluteCellX + Math.round(workstationX + workstationWidth * 0.19),
+                y: absoluteCellY + Math.round(workstationY + workstationHeight * 0.14),
+                width: Math.max(8, Math.round(workstationWidth * 0.36)),
+                height: Math.max(5, Math.round(workstationHeight * 0.16)),
+                enteringReveal: options.enteringReveal === true
+              }
+            : null,
+          avatar: avatar && avatarPose
+            ? {
+                sprite: avatar.url,
+                x: absoluteCellX + Math.round(avatarPose.x),
+                y: absoluteCellY + Math.round(avatarPose.y),
+                width: Math.round(avatarWidth),
+                height: Math.round(avatarHeight),
+                flipX: avatarPose.flip === true,
+                state,
+                appearance: agent.appearance
+              }
+            : null,
+          workstationBounds: {
+            x: stationBoundsX,
+            y: stationBoundsY,
+            width: sceneTile * 3,
+            height: sceneTile,
+            tileWidth: 3,
+            tileHeight: 1
+          },
+          anchorX,
+          anchorY,
+          bubble: state === "waiting" ? "..." : null
+        };
+        return visual;
+      }
 `;
