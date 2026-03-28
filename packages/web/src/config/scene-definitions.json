@@ -3,18 +3,23 @@
     "backdropColor": "#071018",
     "backdropAlpha": 0.96,
     "backdropWidthTiles": 2,
-    "backdropHeightTiles": 1,
+    "backdropHeightTiles": 2,
     "slideOffsetPx": 8,
     "holdOpenMs": 520,
     "openLerp": 0.24,
     "closeLerp": 0.16
   },
   "idleBehavior": {
-    "flipIntervalMs": { "min": 1000, "max": 12000 },
-    "facilityVisitIntervalMs": { "min": 7000, "max": 16000 },
+    "flipIntervalMs": { "min": 4000, "max": 20000 },
+    "facilityVisitIntervalMs": { "min": 30000, "max": 90000 },
+    "restingSpeedScale": 0.6,
     "itemDurationMs": 15000,
     "throwAwayDurationMs": 700,
     "throwAwayJumpPx": 13
+  },
+  "heldItems": {
+    "baseSizePx": 16,
+    "globalScale": 0.75
   },
   "items": {
     "book": {
@@ -22,10 +27,45 @@
       "durationMs": 15000,
       "handOffsetPx": { "x": 7, "y": 10 }
     },
-    "plastic-cup": {
-      "spriteKey": "mug",
+    "water-bottle": {
+      "spriteKey": "waterBottle",
       "durationMs": 15000,
-      "handOffsetPx": { "x": 7, "y": 11 }
+      "handOffsetPx": { "x": 4, "y": 7 }
+    },
+    "soda-coke": {
+      "spriteKey": "sodaCoke",
+      "durationMs": 15000,
+      "handOffsetPx": { "x": 4, "y": 7 }
+    },
+    "soda-fanta": {
+      "spriteKey": "sodaFanta",
+      "durationMs": 15000,
+      "handOffsetPx": { "x": 4, "y": 7 }
+    },
+    "soda-pepsi": {
+      "spriteKey": "sodaPepsi",
+      "durationMs": 15000,
+      "handOffsetPx": { "x": 4, "y": 7 }
+    },
+    "soda-sprite": {
+      "spriteKey": "sodaSprite",
+      "durationMs": 15000,
+      "handOffsetPx": { "x": 4, "y": 7 }
+    },
+    "juice-mango": {
+      "spriteKey": "juiceMango",
+      "durationMs": 15000,
+      "handOffsetPx": { "x": 4, "y": 7 }
+    },
+    "juice-peach": {
+      "spriteKey": "juicePeach",
+      "durationMs": 15000,
+      "handOffsetPx": { "x": 4, "y": 7 }
+    },
+    "juice-strawberry": {
+      "spriteKey": "juiceStrawberry",
+      "durationMs": 15000,
+      "handOffsetPx": { "x": 4, "y": 7 }
     },
     "snack": {
       "spriteKey": "paper",
@@ -41,8 +81,21 @@
       "baseRow": 0,
       "z": 3,
       "facilityProvider": {
-        "items": ["snack"],
-        "serviceTile": { "anchor": "center", "row": 2 }
+        "items": [
+          "snack",
+          "soda-coke",
+          "soda-fanta",
+          "soda-pepsi",
+          "soda-sprite",
+          "juice-mango",
+          "juice-peach",
+          "juice-strawberry"
+        ],
+        "serviceTile": {
+          "anchor": "center",
+          "row": 2,
+          "approachOffsetPx": { "x": 0, "y": -10 }
+        }
       }
     },
     {
@@ -52,8 +105,12 @@
       "baseRow": 0,
       "z": 3,
       "facilityProvider": {
-        "items": ["plastic-cup"],
-        "serviceTile": { "anchor": "center", "row": 2 }
+        "items": ["water-bottle"],
+        "serviceTile": {
+          "anchor": "center",
+          "row": 2,
+          "approachOffsetPx": { "x": 0, "y": -10 }
+        }
       }
     },
     {
@@ -85,7 +142,11 @@
       "z": 3,
       "facilityProvider": {
         "items": ["book"],
-        "serviceTile": { "anchor": "center", "row": 2 }
+        "serviceTile": {
+          "anchor": "center",
+          "row": 2,
+          "approachOffsetPx": { "x": 0, "y": -10 }
+        }
       }
     }
   ]

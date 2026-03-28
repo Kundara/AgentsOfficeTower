@@ -1689,8 +1689,9 @@
         gap: 4px;
         margin-bottom: 2px;
         color: var(--worktree-blue);
-        font-size: 6px;
-        line-height: 1;
+        font-size: 7px;
+        line-height: 1.1;
+        font-weight: 700;
       }
 
       .agent-hover-summary {
@@ -1727,6 +1728,11 @@
         display: inline-block;
         flex: 0 0 auto;
         image-rendering: pixelated;
+      }
+
+      .agent-hover-worktree .worktree-inline-icon {
+        width: 14px;
+        height: 14px;
       }
 
       .room-empty {
@@ -1972,10 +1978,18 @@
       }
 
       .tower-floor-title {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 12px;
         color: var(--text);
         font-size: 22px;
         font-weight: 700;
         line-height: 1;
+      }
+
+      .tower-floor-title-project {
+        color: var(--text);
       }
 
       .tower-floor-title-worktree {
@@ -1983,6 +1997,8 @@
         align-items: center;
         gap: 8px;
         color: var(--worktree-blue);
+        font-size: 18px;
+        font-weight: 700;
       }
 
       .tower-floor-worktree-icon {

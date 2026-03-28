@@ -50,18 +50,18 @@ export const OFFICIAL_CODEX_THREAD_ITEM_TYPES = [
 ] as const;
 
 export const PIXEL_OFFICE_THREAD_ITEM_ICON_URLS = {
-  userMessage: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/userMessage.svg`,
-  agentMessage: PIXEL_OFFICE_EVENT_ICON_URLS["item/agentMessage/delta"],
+  userMessage: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/userMessage.png`,
+  agentMessage: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/agentMessage.png`,
   plan: PIXEL_OFFICE_EVENT_ICON_URLS["item/plan/delta"],
   reasoning: PIXEL_OFFICE_EVENT_ICON_URLS["item/reasoning/summaryTextDelta"],
-  commandExecution: PIXEL_OFFICE_EVENT_ICON_URLS["item/commandExecution/outputDelta"],
+  commandExecution: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/commandExecution.png`,
   fileChange: PIXEL_OFFICE_EVENT_ICON_URLS["item/fileChange/outputDelta"],
   mcpToolCall: PIXEL_OFFICE_EVENT_ICON_URLS["item/tool/call"],
   dynamicToolCall: PIXEL_OFFICE_EVENT_ICON_URLS["item/tool/call"],
   collabToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/collabToolCall.svg`,
   collabAgentToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/collabToolCall.svg`,
-  webSearch: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/webSearch.svg`,
-  imageView: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/imageView.svg`,
+  webSearch: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/webSearch.png`,
+  imageView: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/imageView.png`,
   enteredReviewMode: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/enteredReviewMode.svg`,
   exitedReviewMode: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/exitedReviewMode.svg`,
   contextCompaction: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/contextCompaction.svg`

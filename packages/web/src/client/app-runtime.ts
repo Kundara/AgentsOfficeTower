@@ -379,19 +379,20 @@ export function startClientApp(): void {
         });
       }
 
-      function roomEntranceLayout(roomPixelWidth, compact, floorTop = null) {
-        const doorScale = compact ? 1.42 : 1.7;
+      function roomEntranceLayout(roomPixelWidth, tile, compact, floorTop = null) {
+        const doorScale = compact ? 0.92 : 1;
         const clockScale = compact ? 0.92 : 1.08;
         const doorHeight = pixelOffice.props.boothDoor.h * doorScale;
+        const entryX = Math.round(roomPixelWidth / 2) - tile;
         const centerDoorY = Number.isFinite(floorTop)
           ? Math.round(floorTop - doorHeight)
           : (compact ? 26 : 34);
         return {
           doorScale,
           clockScale,
-          centerDoorX: Math.round(roomPixelWidth / 2 - pixelOffice.props.boothDoor.w * doorScale),
+          centerDoorX: Math.round(entryX - pixelOffice.props.boothDoor.w * doorScale),
           centerDoorY,
-          entryX: Math.round(roomPixelWidth / 2),
+          entryX,
           entryY: Math.round(centerDoorY + doorHeight + (compact ? 2 : 3))
         };
       }
@@ -2663,26 +2664,112 @@ export function startClientApp(): void {
       function worktreeIconUrl() {
         return pixelOffice && pixelOffice.icons && pixelOffice.icons.worktree && pixelOffice.icons.worktree.url
           ? pixelOffice.icons.worktree.url
-          : "/assets/pixel-office/sprites/icons/worktree.svg";
+          : "/assets/pixel-office/sprites/icons/worktree.png";
+      }
+
+      function inferredCodexWorktreeMetadata(projectRoot) {
+        const normalizedRoot = normalizeSharedPathCandidate(projectRoot || "");
+        const marker = "/.codex/worktrees/";
+        const markerIndex = normalizedRoot.lastIndexOf(marker);
+        if (markerIndex < 0) {
+          return null;
+        }
+        const suffix = normalizedRoot.slice(markerIndex + marker.length);
+        const parts = suffix.split("/").filter(Boolean);
+        if (parts.length < 2) {
+          return null;
+        }
+        return {
+          worktreeName: parts[0],
+          projectName: parts[1]
+        };
+      }
+
+      function branchDerivedWorktreeName(branch) {
+        const normalizedBranch = String(branch || "").trim();
+        if (!normalizedBranch || normalizedBranch === "HEAD" || normalizedBranch === "main" || normalizedBranch === "master") {
+          return "";
+        }
+        const parts = normalizedBranch.split("/").map((part) => String(part || "").trim()).filter(Boolean);
+        if (parts.length === 0) {
+          return "";
+        }
+        if (String(parts[0] || "").toLowerCase() === "codex" && parts.length > 1) {
+          return parts.slice(1).join("/");
+        }
+        return normalizedBranch;
       }
 
       function worktreeNameForSnapshot(snapshot) {
-        return String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.worktreeName || "").trim();
+        const explicitName = String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.worktreeName || "").trim();
+        const branchName = branchDerivedWorktreeName(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.branch);
+        if (branchName && (!explicitName || explicitName === inferredCodexWorktreeMetadata(snapshot && snapshot.projectRoot)?.worktreeName)) {
+          return branchName;
+        }
+        if (explicitName) {
+          return explicitName;
+        }
+        return String(inferredCodexWorktreeMetadata(snapshot && snapshot.projectRoot)?.worktreeName || "").trim();
       }
 
       function isWorktreeSnapshot(snapshot) {
         return worktreeNameForSnapshot(snapshot).length > 0;
       }
 
+      function snapshotMatchesProjectRoot(snapshot, projectRoot) {
+        if (!snapshot || !projectRoot) {
+          return false;
+        }
+        if (snapshot.projectRoot === projectRoot) {
+          return true;
+        }
+        return Array.isArray(snapshot.mergedProjectRoots)
+          && snapshot.mergedProjectRoots.includes(projectRoot);
+      }
+
+      function normalizeRepoIdentity(value) {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) {
+          return "";
+        }
+        const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+        const normalized = sshMatch
+          ? "https://" + sshMatch[1] + "/" + sshMatch[2]
+          : trimmed;
+        return normalized
+          .replace(/.git$/i, "")
+          .replace(/[\/]+$/g, "")
+          .toLowerCase();
+      }
+
+      function repoIdentityForSnapshot(snapshot) {
+        const explicitRepoUrl = normalizeRepoIdentity(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.repoUrl || "");
+        if (explicitRepoUrl) {
+          return explicitRepoUrl;
+        }
+        const agents = Array.isArray(snapshot && snapshot.agents) ? snapshot.agents : [];
+        for (const agent of agents) {
+          const repoUrl = normalizeRepoIdentity(agent && agent.git && agent.git.originUrl || "");
+          if (repoUrl) {
+            return repoUrl;
+          }
+        }
+        return "";
+      }
+
       function snapshotGroupKey(snapshot) {
         const identity = snapshot && snapshot.projectIdentity ? snapshot.projectIdentity : null;
-        const commonGitDir = normalizeSharedPathCandidate(identity && identity.commonGitDir || "");
-        if (commonGitDir) {
-          return "git-common:" + commonGitDir;
+        const repoIdentity = repoIdentityForSnapshot(snapshot);
+        if (repoIdentity) {
+          return "git-repo:" + repoIdentity;
         }
         const identityKey = String(identity && identity.key || "").trim();
         if (identityKey) {
           return "git-key:" + identityKey;
+        }
+        const commonGitDir = normalizeSharedPathCandidate(identity && identity.commonGitDir || "");
+        if (commonGitDir) {
+          return "git-common:" + commonGitDir;
         }
         const gitRoot = normalizeSharedPathCandidate(identity && identity.gitRoot || "");
         if (gitRoot) {
@@ -2767,6 +2854,7 @@ export function startClientApp(): void {
             const useSyntheticIds = bucket.snapshots.length > 1;
             return {
               ...representative,
+              mergedProjectRoots: bucket.snapshots.map((snapshot) => snapshot.projectRoot),
               agents: bucket.snapshots.flatMap((snapshot) =>
                 snapshot.agents.map((agent) => cloneAgentForMergedSnapshot(snapshot, representative, agent, useSyntheticIds))
               ),
@@ -4283,9 +4371,18 @@ export function startClientApp(): void {
           return null;
         }
         const handOffset = definition.handOffsetPx || {};
+        const heldItemsConfig = sceneDefinitions && sceneDefinitions.heldItems ? sceneDefinitions.heldItems : {};
+        const baseSizePx = Number.isFinite(heldItemsConfig.baseSizePx) ? Number(heldItemsConfig.baseSizePx) : 16;
+        const globalScale = Number.isFinite(heldItemsConfig.globalScale) ? Number(heldItemsConfig.globalScale) : 1;
+        const sourceWidth = Math.max(1, Number(sprite.w) || baseSizePx);
+        const sourceHeight = Math.max(1, Number(sprite.h) || baseSizePx);
+        const fitScale = Math.min(baseSizePx / sourceWidth, baseSizePx / sourceHeight);
+        const renderScale = Math.max(0.1, fitScale * globalScale);
         return {
           id: itemId,
           sprite,
+          renderWidth: Math.max(1, Math.round(sourceWidth * renderScale)),
+          renderHeight: Math.max(1, Math.round(sourceHeight * renderScale)),
           durationMs: Number.isFinite(definition.durationMs) ? Number(definition.durationMs) : null,
           handOffsetPx: {
             x: Number.isFinite(handOffset.x) ? Number(handOffset.x) : 7,
@@ -4334,12 +4431,17 @@ export function startClientApp(): void {
         const row = Number.isFinite(serviceTile.row)
           ? Number(serviceTile.row)
           : Math.max(1, (Number(item.baseRow) || 0) + Math.max(1, Number(item.heightTiles) || 1));
+        const approachOffset = serviceTile.approachOffsetPx || {};
         return {
           ...provider,
           items: provider.items.slice(),
           serviceTile: {
             column,
-            row
+            row,
+            approachOffsetPx: {
+              x: Number.isFinite(approachOffset.x) ? Number(approachOffset.x) : 0,
+              y: Number.isFinite(approachOffset.y) ? Number(approachOffset.y) : 0
+            }
           }
         };
       }
@@ -4388,12 +4490,12 @@ export function startClientApp(): void {
         const rightSofaColumn = room.width - 7;
         const leftSofaColumn = rightSofaColumn - 3;
         return [
-          { id: "vending", sprite: pixelOffice.props.vending, column: 0, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true, facilityProvider: { items: ["snack"], serviceTile: { anchor: "center", row: 2 } } },
-          { id: "cooler", sprite: pixelOffice.props.cooler, column: 2, baseRow: 0, widthTiles: 1, heightTiles: 1, z: 3, furniture: true, facilityProvider: { items: ["plastic-cup"], serviceTile: { anchor: "center", row: 2 } } },
+          { id: "vending", sprite: pixelOffice.props.vending, column: 0, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true, facilityProvider: { items: ["snack"], serviceTile: { anchor: "center", row: 2, approachOffsetPx: { x: 0, y: -10 } } } },
+          { id: "cooler", sprite: pixelOffice.props.cooler, column: 2, baseRow: 0, widthTiles: 1, heightTiles: 1, z: 3, furniture: true, facilityProvider: { items: ["water-bottle"], serviceTile: { anchor: "center", row: 2, approachOffsetPx: { x: 0, y: -10 } } } },
           { id: "counter", sprite: pixelOffice.props.counter, column: 3, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 3, furniture: true },
           { id: "sofa-left", sprite: sofaSpriteAt(1), column: leftSofaColumn, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 3, furniture: true },
           { id: "sofa-right", sprite: sofaSpriteAt(0), column: rightSofaColumn, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 4, furniture: true },
-          { id: "shelf", sprite: pixelOffice.props.bookshelf, column: room.width - 2, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true, facilityProvider: { items: ["book"], serviceTile: { anchor: "center", row: 2 } } }
+          { id: "shelf", sprite: pixelOffice.props.bookshelf, column: room.width - 2, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true, facilityProvider: { items: ["book"], serviceTile: { anchor: "center", row: 2, approachOffsetPx: { x: 0, y: -10 } } } }
         ];
       }
 
@@ -4456,7 +4558,11 @@ export function startClientApp(): void {
           items: item.facilityProvider.items.slice(),
           serviceTile: {
             column: item.facilityProvider.serviceTile.column,
-            row: item.facilityProvider.serviceTile.row
+            row: item.facilityProvider.serviceTile.row,
+            approachOffsetPx: {
+              x: Number(item.facilityProvider.serviceTile.approachOffsetPx?.x) || 0,
+              y: Number(item.facilityProvider.serviceTile.approachOffsetPx?.y) || 0
+            }
           }
         };
       }
@@ -4876,12 +4982,13 @@ export function startClientApp(): void {
         const counts = countsForSnapshot(snapshot);
         const compact = options.compact === true;
         const titleAttr = escapeHtml(snapshot.projectRoot);
+        const projectTitle = projectLabel(snapshot.projectRoot);
         const worktreeName = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)
           ? worktreeNameForSnapshot(snapshot)
           : "";
         const titleHtml = worktreeName
-          ? `<div class="tower-floor-title tower-floor-title-worktree" title="${titleAttr}"><img class="worktree-inline-icon tower-floor-worktree-icon" src="${escapeHtml(worktreeIconUrl())}" alt="" aria-hidden="true" /><span>${escapeHtml(worktreeName)}</span></div>`
-          : `<div class="tower-floor-title" title="${titleAttr}">${escapeHtml(projectLabel(snapshot.projectRoot))}</div>`;
+          ? `<div class="tower-floor-title" title="${titleAttr}"><span class="tower-floor-title-project">${escapeHtml(projectTitle)}</span><span class="tower-floor-title-worktree"><img class="worktree-inline-icon tower-floor-worktree-icon" src="${escapeHtml(worktreeIconUrl())}" alt="" aria-hidden="true" /><span>${escapeHtml(worktreeName)}</span></span></div>`
+          : `<div class="tower-floor-title" title="${titleAttr}">${escapeHtml(projectTitle)}</div>`;
         const summary = state.view === "map"
           ? (compact ? "Live floor" : "Current workload")
           : `${counts.total} agents · ${counts.active} active · ${counts.waiting} waiting · ${counts.blocked} blocked · ${counts.cloud} cloud`;
@@ -5005,12 +5112,12 @@ export function startClientApp(): void {
             isPrimaryRoom
           });
           const centerColumn = Math.floor(room.width / 2);
-          const entrance = roomEntranceLayout(roomPixelWidth, compact, floorTop);
+          const entrance = roomEntranceLayout(roomPixelWidth, tile, compact, floorTop);
           const doorWidth = Math.round(pixelOffice.props.boothDoor.w * entrance.doorScale);
           const doorHeight = Math.round(pixelOffice.props.boothDoor.h * entrance.doorScale);
           const doorBackdrop = sceneDefinitions && sceneDefinitions.door ? sceneDefinitions.door : {};
           const backdropWidth = Math.max(tile * 2, Math.round((Number(doorBackdrop.backdropWidthTiles) || 2) * tile));
-          const backdropHeight = Math.max(tile, Math.round((Number(doorBackdrop.backdropHeightTiles) || 1) * tile));
+          const backdropHeight = Math.max(tile * 2, Math.round((Number(doorBackdrop.backdropHeightTiles) || 2) * tile));
           model.roomDoors.push({
             id: room.id + "::door",
             roomId: room.id,
@@ -5021,7 +5128,7 @@ export function startClientApp(): void {
             y: roomY + entrance.centerDoorY,
             width: doorWidth,
             height: doorHeight,
-            backdropX: roomX + Math.round(roomPixelWidth / 2 - backdropWidth / 2),
+            backdropX: roomX + Math.round(entrance.entryX - backdropWidth / 2),
             backdropY: floorTop - backdropHeight,
             backdropWidth,
             backdropHeight
@@ -5815,6 +5922,18 @@ function roleTint(role) {
         };
       }
 
+      function officeAvatarPositionForFacility(room, tileSize, serviceTile, width, height) {
+        const position = officeAvatarPositionForTile(room, tileSize, serviceTile, width, height);
+        const approachOffset = serviceTile && serviceTile.approachOffsetPx ? serviceTile.approachOffsetPx : null;
+        if (!approachOffset) {
+          return position;
+        }
+        return {
+          x: position.x + (Number.isFinite(approachOffset.x) ? Number(approachOffset.x) : 0),
+          y: position.y + (Number.isFinite(approachOffset.y) ? Number(approachOffset.y) : 0)
+        };
+      }
+
       function roomDoorTile(room, tileSize) {
         return {
           column: Math.max(0, Math.min(Math.floor(room.width / tileSize) - 1, Math.floor(room.width / tileSize / 2))),
@@ -6123,6 +6242,7 @@ function roleTint(role) {
           return {
             flipIntervalMs: idle.flipIntervalMs || { min: 1000, max: 12000 },
             facilityVisitIntervalMs: idle.facilityVisitIntervalMs || { min: 7000, max: 16000 },
+            restingSpeedScale: Number.isFinite(idle.restingSpeedScale) ? Number(idle.restingSpeedScale) : 1,
             itemDurationMs: Number.isFinite(idle.itemDurationMs) ? Number(idle.itemDurationMs) : 15000,
             throwAwayDurationMs: Number.isFinite(idle.throwAwayDurationMs) ? Number(idle.throwAwayDurationMs) : 700,
             throwAwayJumpPx: Number.isFinite(idle.throwAwayJumpPx) ? Number(idle.throwAwayJumpPx) : 13
@@ -6171,8 +6291,8 @@ function roleTint(role) {
             motionState.heldItemSprite.destroy?.();
           }
           const sprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(itemDefinition.sprite.url) || itemDefinition.sprite.url);
-          sprite.width = itemDefinition.sprite.w;
-          sprite.height = itemDefinition.sprite.h;
+          sprite.width = itemDefinition.renderWidth;
+          sprite.height = itemDefinition.renderHeight;
           sprite.zIndex = (motionState.sprite?.zIndex || 12) + 1;
           sprite.__itemId = itemDefinition.id;
           renderer.root.addChild(sprite);
@@ -6191,7 +6311,7 @@ function roleTint(role) {
           if (!sprite) {
             return;
           }
-          const itemWidth = itemDefinition.sprite.w;
+          const itemWidth = itemDefinition.renderWidth;
           const handX = motionState.flipX
             ? motionState.currentX + motionState.width - itemDefinition.handOffsetPx.x - itemWidth
             : motionState.currentX + itemDefinition.handOffsetPx.x;
@@ -6213,8 +6333,8 @@ function roleTint(role) {
           }
           const idleConfig = sceneIdleBehaviorConfig();
           const thrownSprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(itemDefinition.sprite.url) || itemDefinition.sprite.url);
-          thrownSprite.width = itemDefinition.sprite.w;
-          thrownSprite.height = itemDefinition.sprite.h;
+          thrownSprite.width = itemDefinition.renderWidth;
+          thrownSprite.height = itemDefinition.renderHeight;
           thrownSprite.x = itemSprite.x;
           thrownSprite.y = itemSprite.y;
           thrownSprite.zIndex = itemSprite.zIndex;
@@ -6292,6 +6412,7 @@ function roleTint(role) {
             const itemId = items[Math.floor(Math.random() * items.length)] || null;
             const itemDefinition = itemId ? sceneHeldItemDefinition(itemId) : null;
             const idleConfig = sceneIdleBehaviorConfig();
+            const restingSpeedScale = Math.max(0.1, idleConfig.restingSpeedScale);
             autonomy.carriedItemId = itemDefinition ? itemDefinition.id : null;
             autonomy.holdUntil = itemDefinition
               ? now + (Number.isFinite(itemDefinition.durationMs) ? itemDefinition.durationMs : idleConfig.itemDurationMs)
@@ -6304,7 +6425,7 @@ function roleTint(role) {
               nav,
               homeTile,
               { x: autonomy.homeX, y: autonomy.homeY },
-              176
+              176 * restingSpeedScale
             );
             motionState.targetFlipX = autonomy.homeFlip;
             return;
@@ -6323,6 +6444,8 @@ function roleTint(role) {
             autonomy.nextFlipAt = nextIdleFlipAt(now);
           }
           if (now >= autonomy.nextTripAt) {
+            const idleConfig = sceneIdleBehaviorConfig();
+            const restingSpeedScale = Math.max(0.1, idleConfig.restingSpeedScale);
             const facility = pickFacilityProvider(motionState.roomId);
             if (!facility) {
               autonomy.nextTripAt = nextIdleTripAt(now);
@@ -6336,8 +6459,8 @@ function roleTint(role) {
               room,
               nav,
               serviceTile,
-              officeAvatarPositionForTile(room, model.tile, serviceTile, motionState.width, motionState.height),
-              164
+              officeAvatarPositionForFacility(room, model.tile, serviceTile, motionState.width, motionState.height),
+              164 * restingSpeedScale
             );
             autonomy.nextTripAt = nextIdleTripAt(now);
           }
@@ -7597,10 +7720,11 @@ function focusKeysIntersect(keys, focusedKeys) {
         return true;
       }
 
-      function currentSnapshot() {
+      function currentSnapshot(projects = null) {
         if (!state.fleet) return null;
         if (state.selected === "all") return null;
-        return state.fleet.projects.find((snapshot) => snapshot.projectRoot === state.selected) || null;
+        const availableProjects = Array.isArray(projects) ? projects : mergeWorktreeProjects(visibleProjects(state.fleet));
+        return availableProjects.find((snapshot) => snapshotMatchesProjectRoot(snapshot, state.selected)) || null;
       }
 
       function renderHeroSummary(counts) {
@@ -7627,22 +7751,33 @@ function focusKeysIntersect(keys, focusedKeys) {
         const fleet = state.fleet;
         const rawProjects = visibleProjects(fleet);
         const floorProjects = mergeWorktreeProjects(rawProjects);
-        const towerProjects = state.selected === "all" ? floorProjects : rawProjects;
+        const selectableProjects = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)
+          ? rawProjects
+          : floorProjects;
+        const selectedSnapshot = currentSnapshot(selectableProjects);
+        if (
+          selectedSnapshot
+          && state.selected !== "all"
+          && state.selected !== selectedSnapshot.projectRoot
+        ) {
+          state.selected = selectedSnapshot.projectRoot;
+          syncUrl();
+        }
+        const towerProjects = state.selected === "all" ? floorProjects : selectableProjects;
         updateRecentLeadReservations(towerProjects);
         const displayedProjects = towerProjects.map((project) => viewSnapshot(project, SCENE_RECENT_LEAD_LIMIT));
         const sessionProjects = towerProjects.map((project) => viewSessionSnapshot(project, SESSION_RECENT_LEAD_LIMIT));
-        const selectedRawSnapshot = currentSnapshot();
-        const snapshot = selectedRawSnapshot
-          ? viewSnapshot(selectedRawSnapshot, SCENE_RECENT_LEAD_LIMIT, rawProjects)
+        const snapshot = selectedSnapshot
+          ? viewSnapshot(selectedSnapshot, SCENE_RECENT_LEAD_LIMIT, selectableProjects)
           : null;
-        const sessionSnapshot = selectedRawSnapshot
-          ? viewSessionSnapshot(selectedRawSnapshot, SESSION_RECENT_LEAD_LIMIT, rawProjects)
+        const sessionSnapshot = selectedSnapshot
+          ? viewSessionSnapshot(selectedSnapshot, SESSION_RECENT_LEAD_LIMIT, selectableProjects)
           : null;
         if (!snapshot && state.workspaceFullscreen) {
           state.workspaceFullscreen = false;
           syncUrl();
         }
-        syncLiveAgentState(state.selected === "all" ? towerProjects : rawProjects);
+        syncLiveAgentState(snapshot ? [snapshot] : displayedProjects);
         sceneStateDraft = null;
         const counts = fleetCounts({ projects: sessionProjects });
         const nextSceneToken = state.view === "map"
@@ -7670,9 +7805,9 @@ function focusKeysIntersect(keys, focusedKeys) {
 
         setHtmlIfChanged(projectTabs, [
           `<button class="project-tab${state.selected === "all" ? " active" : ""}" data-action="select-project" data-project-root="all">All</button>`,
-          ...rawProjects.map((project) => {
+          ...selectableProjects.map((project) => {
             const counts = countsForSnapshot(project);
-            const activeClass = project.projectRoot === state.selected ? " active" : "";
+            const activeClass = snapshotMatchesProjectRoot(project, state.selected) ? " active" : "";
             const badge = counts.active;
             return `<button class="project-tab${activeClass}" data-action="select-project" data-project-root="${escapeHtml(project.projectRoot)}" title="${escapeHtml(project.projectRoot)}">${escapeHtml(projectLabel(project.projectRoot))} <span class="muted">${badge}</span></button>`;
           })

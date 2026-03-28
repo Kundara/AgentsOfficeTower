@@ -298,26 +298,112 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
       function worktreeIconUrl() {
         return pixelOffice && pixelOffice.icons && pixelOffice.icons.worktree && pixelOffice.icons.worktree.url
           ? pixelOffice.icons.worktree.url
-          : "/assets/pixel-office/sprites/icons/worktree.svg";
+          : "/assets/pixel-office/sprites/icons/worktree.png";
+      }
+
+      function inferredCodexWorktreeMetadata(projectRoot) {
+        const normalizedRoot = normalizeSharedPathCandidate(projectRoot || "");
+        const marker = "/.codex/worktrees/";
+        const markerIndex = normalizedRoot.lastIndexOf(marker);
+        if (markerIndex < 0) {
+          return null;
+        }
+        const suffix = normalizedRoot.slice(markerIndex + marker.length);
+        const parts = suffix.split("/").filter(Boolean);
+        if (parts.length < 2) {
+          return null;
+        }
+        return {
+          worktreeName: parts[0],
+          projectName: parts[1]
+        };
+      }
+
+      function branchDerivedWorktreeName(branch) {
+        const normalizedBranch = String(branch || "").trim();
+        if (!normalizedBranch || normalizedBranch === "HEAD" || normalizedBranch === "main" || normalizedBranch === "master") {
+          return "";
+        }
+        const parts = normalizedBranch.split("/").map((part) => String(part || "").trim()).filter(Boolean);
+        if (parts.length === 0) {
+          return "";
+        }
+        if (String(parts[0] || "").toLowerCase() === "codex" && parts.length > 1) {
+          return parts.slice(1).join("/");
+        }
+        return normalizedBranch;
       }
 
       function worktreeNameForSnapshot(snapshot) {
-        return String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.worktreeName || "").trim();
+        const explicitName = String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.worktreeName || "").trim();
+        const branchName = branchDerivedWorktreeName(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.branch);
+        if (branchName && (!explicitName || explicitName === inferredCodexWorktreeMetadata(snapshot && snapshot.projectRoot)?.worktreeName)) {
+          return branchName;
+        }
+        if (explicitName) {
+          return explicitName;
+        }
+        return String(inferredCodexWorktreeMetadata(snapshot && snapshot.projectRoot)?.worktreeName || "").trim();
       }
 
       function isWorktreeSnapshot(snapshot) {
         return worktreeNameForSnapshot(snapshot).length > 0;
       }
 
+      function snapshotMatchesProjectRoot(snapshot, projectRoot) {
+        if (!snapshot || !projectRoot) {
+          return false;
+        }
+        if (snapshot.projectRoot === projectRoot) {
+          return true;
+        }
+        return Array.isArray(snapshot.mergedProjectRoots)
+          && snapshot.mergedProjectRoots.includes(projectRoot);
+      }
+
+      function normalizeRepoIdentity(value) {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) {
+          return "";
+        }
+        const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+        const normalized = sshMatch
+          ? "https://" + sshMatch[1] + "/" + sshMatch[2]
+          : trimmed;
+        return normalized
+          .replace(/\.git$/i, "")
+          .replace(/[\\/]+$/g, "")
+          .toLowerCase();
+      }
+
+      function repoIdentityForSnapshot(snapshot) {
+        const explicitRepoUrl = normalizeRepoIdentity(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.repoUrl || "");
+        if (explicitRepoUrl) {
+          return explicitRepoUrl;
+        }
+        const agents = Array.isArray(snapshot && snapshot.agents) ? snapshot.agents : [];
+        for (const agent of agents) {
+          const repoUrl = normalizeRepoIdentity(agent && agent.git && agent.git.originUrl || "");
+          if (repoUrl) {
+            return repoUrl;
+          }
+        }
+        return "";
+      }
+
       function snapshotGroupKey(snapshot) {
         const identity = snapshot && snapshot.projectIdentity ? snapshot.projectIdentity : null;
-        const commonGitDir = normalizeSharedPathCandidate(identity && identity.commonGitDir || "");
-        if (commonGitDir) {
-          return "git-common:" + commonGitDir;
+        const repoIdentity = repoIdentityForSnapshot(snapshot);
+        if (repoIdentity) {
+          return "git-repo:" + repoIdentity;
         }
         const identityKey = String(identity && identity.key || "").trim();
         if (identityKey) {
           return "git-key:" + identityKey;
+        }
+        const commonGitDir = normalizeSharedPathCandidate(identity && identity.commonGitDir || "");
+        if (commonGitDir) {
+          return "git-common:" + commonGitDir;
         }
         const gitRoot = normalizeSharedPathCandidate(identity && identity.gitRoot || "");
         if (gitRoot) {
@@ -402,6 +488,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
             const useSyntheticIds = bucket.snapshots.length > 1;
             return {
               ...representative,
+              mergedProjectRoots: bucket.snapshots.map((snapshot) => snapshot.projectRoot),
               agents: bucket.snapshots.flatMap((snapshot) =>
                 snapshot.agents.map((agent) => cloneAgentForMergedSnapshot(snapshot, representative, agent, useSyntheticIds))
               ),

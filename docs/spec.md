@@ -253,8 +253,10 @@ Worktree identity rules:
 ### Idle rec-area behavior
 
 - Resting lead avatars in the rec area should occasionally mirror their facing direction while seated.
-- Idle seated flips should happen on a randomized interval between 1 and 12 seconds.
+- Idle seated flips should happen on a randomized interval between 4 and 20 seconds.
 - Resting lead avatars may autonomously stand up, walk to a rec-area facility provider, collect one serviced item, and return to their sofa seat with that item held in-hand.
+- Resting lead avatars should visit providers relatively rarely instead of pacing constantly; the current default trip interval is a randomized 30 to 90 seconds.
+- Resting lead autonomous walks should read as leisurely movement, at about 60% of the regular avatar travel speed.
 - After returning to the sofa, the held item should follow the avatar hand position until its per-item hold duration expires.
 - The first implementation uses a default hold duration of 15 seconds per item, while still allowing duration overrides per serviced item in configuration.
 - If a resting lead stops being idle/done and becomes active again before the hold duration ends, the held item should be discarded immediately with a small jump-plus-fade animation and must stop following the avatar.
@@ -265,14 +267,16 @@ Worktree identity rules:
 - A facility provider definition should live on the furniture item itself and contain:
   - a randomizable list of serviced item ids
   - a live service tile definition derived from the placed furniture position
+  - an optional visual approach offset so the avatar can keep its 1x1 foot collider on the walkable tile while reaching closer to the furniture sprite
 - A held-item definition should live in startup-loaded scene config and contain:
   - the sprite key to render
   - the default hold duration
   - the hand offset for where it should follow the avatar sprite
+- Held-item rendering should treat source sprites as base 16px pixel art by default, then apply one global held-item scale from scene config so all carried items can be made smaller together without editing each item entry.
 - Initial provider/item mappings:
   - bookshelf provides `book`
-  - water machine / cooler provides `plastic-cup`
-  - snack machine / vending provides `snack`
+  - water machine / cooler provides `water-bottle`
+  - snack machine / vending provides a randomizable pool including `snack` plus soda and juice variants
 - The runtime should make it easy to add new providers and new serviced items without editing the core routing logic.
 
 ## State and workload rules

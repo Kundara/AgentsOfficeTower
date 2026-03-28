@@ -9,6 +9,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added extra vending-machine drink variants for idle rec-room visits, including soda and juice held items sourced from Alex's CC BY 4.0 `100 pixel food icons pack`, with README attribution for the new asset library.
 - Added a shared adapter contract in `packages/core` with a static built-in registry for Codex local/cloud, Claude, Cursor local/cloud, OpenClaw, and presence sources.
 - Added a shared snapshot assembler plus refresh-scheduler/domain helper layers so snapshot assembly, room mapping, and workload-currentness policy are no longer spread across several source-specific call sites.
 - Added a bundled external browser client build under `packages/web/dist/client`, replacing inline HTML delivery of the main browser JS/CSS payloads.
@@ -30,8 +31,11 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed rec-room idle behavior so seated flip timing is slower, provider trips are much rarer, resting avatars walk at 60% speed, provider approach points can visually reach closer to furniture, held items now render from a shared 16px base with a global scale control, the cooler serves `water-bottle`, and the vending machine serves a mixed snack/soda/juice pool.
 - Changed fleet floor grouping so Git worktrees now merge onto one repo floor by default across Codex, Claude, and Cursor snapshots, with a persisted global `Split Worktrees` toggle to restore one-floor-per-worktree layout when needed.
 - Changed worktree rendering so split worktree floors now use a bright blue worktree title treatment, and agent hover cards expose the source worktree name to keep duplicate repo clones distinguishable.
+- Changed Codex worktree naming so split floors now prefer readable branch-derived labels such as `worktree-floor-merge` over opaque `.codex/worktrees/<id>` folder ids when Git worktree metadata is available.
+- Changed several browser icon mappings to use the new RPGIAB pixel pack where the semantics were clearly stronger, including worktree, message, command execution, web search, and image-view icons.
 - Reworked the core internals so dashboard snapshot assembly now lives in `snapshot-lib`, app-server event and rollout-hook parsing live in `live-monitor-lib`, and Cursor local/cloud helpers live in `cursor-lib` instead of staying stacked inside `snapshot.ts`, `live-monitor.ts`, and `cursor.ts`.
 - Changed the browser runtime composition so `packages/web/src/client/runtime-source.ts` now only joins the final runtime sections; layout, scene, navigation, render, settings, and UI behavior are edited directly in their own section modules instead of being rewritten through string patch helpers.
 - Changed the browser client bootstrap so the shipped app now starts from generated `packages/web/src/client/app-runtime.ts` output instead of evaluating a giant runtime string with `new Function(...)`, while the focused section sources remain the editing surface.
@@ -73,6 +77,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed worktree floor grouping so the default unsplit tower now collapses Codex worktrees onto one repo floor even when a stale worktree snapshot is missing `projectIdentity`, by falling back to stable repo-origin data and keeping split-only floor badges derived from the worktree path when needed.
 - Fixed the remaining `cursor.ts` monolith by moving Cursor cloud-agent loading, repo normalization helpers, and local discovery into focused modules, bringing the file back under the repo size guard.
 - Fixed snapshot activity precedence so a recent typed file-change event can override a trailing summary message without reactivating a completed thread, while fresh command-start events still do not wake a finished desk back into running state.
 - Fixed the browser client tests to assert against the real runtime section modules after the runtime patch-assembler removal, so the suite now validates behavior instead of legacy string-rewrite scaffolding.

@@ -67,6 +67,10 @@ A good iteration improves at least one of these:
 - verify a newly active agent takes a free desk instead of stealing an already-occupied stable seat from another live agent
 - verify resting/rec agents do not reshuffle seats on ordinary live updates
 - verify visual-only updates such as debug overlays do not trigger desk/recside movement
+- verify resting rec-area provider trips stay relatively rare instead of firing every few seconds
+- verify resting rec-area walks visibly read slower than active desk-work travel
+- verify provider approach offsets let resting avatars visually reach vending/cooler/shelf furniture while their foot collider still stays on the walkable row
+- verify held items render from the shared 16px-base sizing rule plus the global held-item scale, instead of inheriting arbitrary raw source image dimensions
 - verify selected-workspace and focused single-workspace map views keep the same compact avatar/workstation/pod geometry as the tower overview instead of swapping to a separate scale profile
 - verify a restarted fleet server eventually recovers the current desktop thread to `liveSubscription = subscribed` instead of leaving it stuck in `readOnly`
 - verify rec-strip furniture starts on the first floor-grid row and does not exceed 2 tiles of depth from the top band

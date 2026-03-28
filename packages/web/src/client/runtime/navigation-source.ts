@@ -5,6 +5,18 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
         };
       }
 
+      function officeAvatarPositionForFacility(room, tileSize, serviceTile, width, height) {
+        const position = officeAvatarPositionForTile(room, tileSize, serviceTile, width, height);
+        const approachOffset = serviceTile && serviceTile.approachOffsetPx ? serviceTile.approachOffsetPx : null;
+        if (!approachOffset) {
+          return position;
+        }
+        return {
+          x: position.x + (Number.isFinite(approachOffset.x) ? Number(approachOffset.x) : 0),
+          y: position.y + (Number.isFinite(approachOffset.y) ? Number(approachOffset.y) : 0)
+        };
+      }
+
       function roomDoorTile(room, tileSize) {
         return {
           column: Math.max(0, Math.min(Math.floor(room.width / tileSize) - 1, Math.floor(room.width / tileSize / 2))),
@@ -313,6 +325,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           return {
             flipIntervalMs: idle.flipIntervalMs || { min: 1000, max: 12000 },
             facilityVisitIntervalMs: idle.facilityVisitIntervalMs || { min: 7000, max: 16000 },
+            restingSpeedScale: Number.isFinite(idle.restingSpeedScale) ? Number(idle.restingSpeedScale) : 1,
             itemDurationMs: Number.isFinite(idle.itemDurationMs) ? Number(idle.itemDurationMs) : 15000,
             throwAwayDurationMs: Number.isFinite(idle.throwAwayDurationMs) ? Number(idle.throwAwayDurationMs) : 700,
             throwAwayJumpPx: Number.isFinite(idle.throwAwayJumpPx) ? Number(idle.throwAwayJumpPx) : 13
@@ -361,8 +374,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             motionState.heldItemSprite.destroy?.();
           }
           const sprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(itemDefinition.sprite.url) || itemDefinition.sprite.url);
-          sprite.width = itemDefinition.sprite.w;
-          sprite.height = itemDefinition.sprite.h;
+          sprite.width = itemDefinition.renderWidth;
+          sprite.height = itemDefinition.renderHeight;
           sprite.zIndex = (motionState.sprite?.zIndex || 12) + 1;
           sprite.__itemId = itemDefinition.id;
           renderer.root.addChild(sprite);
@@ -381,7 +394,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           if (!sprite) {
             return;
           }
-          const itemWidth = itemDefinition.sprite.w;
+          const itemWidth = itemDefinition.renderWidth;
           const handX = motionState.flipX
             ? motionState.currentX + motionState.width - itemDefinition.handOffsetPx.x - itemWidth
             : motionState.currentX + itemDefinition.handOffsetPx.x;
@@ -403,8 +416,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           }
           const idleConfig = sceneIdleBehaviorConfig();
           const thrownSprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(itemDefinition.sprite.url) || itemDefinition.sprite.url);
-          thrownSprite.width = itemDefinition.sprite.w;
-          thrownSprite.height = itemDefinition.sprite.h;
+          thrownSprite.width = itemDefinition.renderWidth;
+          thrownSprite.height = itemDefinition.renderHeight;
           thrownSprite.x = itemSprite.x;
           thrownSprite.y = itemSprite.y;
           thrownSprite.zIndex = itemSprite.zIndex;
@@ -482,6 +495,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             const itemId = items[Math.floor(Math.random() * items.length)] || null;
             const itemDefinition = itemId ? sceneHeldItemDefinition(itemId) : null;
             const idleConfig = sceneIdleBehaviorConfig();
+            const restingSpeedScale = Math.max(0.1, idleConfig.restingSpeedScale);
             autonomy.carriedItemId = itemDefinition ? itemDefinition.id : null;
             autonomy.holdUntil = itemDefinition
               ? now + (Number.isFinite(itemDefinition.durationMs) ? itemDefinition.durationMs : idleConfig.itemDurationMs)
@@ -494,7 +508,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
               nav,
               homeTile,
               { x: autonomy.homeX, y: autonomy.homeY },
-              176
+              176 * restingSpeedScale
             );
             motionState.targetFlipX = autonomy.homeFlip;
             return;
@@ -513,6 +527,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             autonomy.nextFlipAt = nextIdleFlipAt(now);
           }
           if (now >= autonomy.nextTripAt) {
+            const idleConfig = sceneIdleBehaviorConfig();
+            const restingSpeedScale = Math.max(0.1, idleConfig.restingSpeedScale);
             const facility = pickFacilityProvider(motionState.roomId);
             if (!facility) {
               autonomy.nextTripAt = nextIdleTripAt(now);
@@ -526,8 +542,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
               room,
               nav,
               serviceTile,
-              officeAvatarPositionForTile(room, model.tile, serviceTile, motionState.width, motionState.height),
-              164
+              officeAvatarPositionForFacility(room, model.tile, serviceTile, motionState.width, motionState.height),
+              164 * restingSpeedScale
             );
             autonomy.nextTripAt = nextIdleTripAt(now);
           }

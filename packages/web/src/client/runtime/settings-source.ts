@@ -320,19 +320,20 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
         });
       }
 
-      function roomEntranceLayout(roomPixelWidth, compact, floorTop = null) {
-        const doorScale = compact ? 1.42 : 1.7;
+      function roomEntranceLayout(roomPixelWidth, tile, compact, floorTop = null) {
+        const doorScale = compact ? 0.92 : 1;
         const clockScale = compact ? 0.92 : 1.08;
         const doorHeight = pixelOffice.props.boothDoor.h * doorScale;
+        const entryX = Math.round(roomPixelWidth / 2) - tile;
         const centerDoorY = Number.isFinite(floorTop)
           ? Math.round(floorTop - doorHeight)
           : (compact ? 26 : 34);
         return {
           doorScale,
           clockScale,
-          centerDoorX: Math.round(roomPixelWidth / 2 - pixelOffice.props.boothDoor.w * doorScale),
+          centerDoorX: Math.round(entryX - pixelOffice.props.boothDoor.w * doorScale),
           centerDoorY,
-          entryX: Math.round(roomPixelWidth / 2),
+          entryX,
           entryY: Math.round(centerDoorY + doorHeight + (compact ? 2 : 3))
         };
       }

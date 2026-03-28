@@ -40,16 +40,40 @@ function resolveGitPath(projectRoot: string, value: string | null): string | nul
   return canonicalizeProjectPath(absolute);
 }
 
+function branchDerivedWorktreeName(branch: string | null): string | null {
+  const normalizedBranch = String(branch ?? "").trim();
+  if (!normalizedBranch || normalizedBranch === "HEAD" || normalizedBranch === "main" || normalizedBranch === "master") {
+    return null;
+  }
+
+  const parts = normalizedBranch.split("/").map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) {
+    return null;
+  }
+
+  if (parts[0]?.toLowerCase() === "codex" && parts.length > 1) {
+    return parts.slice(1).join("/");
+  }
+
+  return normalizedBranch;
+}
+
 function deriveWorktreeName(input: {
   projectRoot: string;
   gitRoot: string;
   commonGitDir: string | null;
   absoluteGitDir: string | null;
+  branch: string | null;
 }): string | null {
   const commonGitDir = canonicalizeProjectPath(input.commonGitDir);
   const absoluteGitDir = canonicalizeProjectPath(input.absoluteGitDir);
   if (!commonGitDir || !absoluteGitDir || commonGitDir === absoluteGitDir) {
     return null;
+  }
+
+  const branchName = branchDerivedWorktreeName(input.branch);
+  if (branchName) {
+    return branchName;
   }
 
   const repoBase = basename(input.gitRoot) || basename(input.projectRoot) || "repo";
@@ -92,7 +116,8 @@ export async function resolveProjectIdentity(projectRoot: string): Promise<Proje
     projectRoot,
     gitRoot,
     commonGitDir,
-    absoluteGitDir
+    absoluteGitDir,
+    branch
   });
 
   return {

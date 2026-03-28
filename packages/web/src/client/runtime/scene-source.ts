@@ -193,12 +193,13 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const counts = countsForSnapshot(snapshot);
         const compact = options.compact === true;
         const titleAttr = escapeHtml(snapshot.projectRoot);
+        const projectTitle = projectLabel(snapshot.projectRoot);
         const worktreeName = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)
           ? worktreeNameForSnapshot(snapshot)
           : "";
         const titleHtml = worktreeName
-          ? \`<div class="tower-floor-title tower-floor-title-worktree" title="\${titleAttr}"><img class="worktree-inline-icon tower-floor-worktree-icon" src="\${escapeHtml(worktreeIconUrl())}" alt="" aria-hidden="true" /><span>\${escapeHtml(worktreeName)}</span></div>\`
-          : \`<div class="tower-floor-title" title="\${titleAttr}">\${escapeHtml(projectLabel(snapshot.projectRoot))}</div>\`;
+          ? \`<div class="tower-floor-title" title="\${titleAttr}"><span class="tower-floor-title-project">\${escapeHtml(projectTitle)}</span><span class="tower-floor-title-worktree"><img class="worktree-inline-icon tower-floor-worktree-icon" src="\${escapeHtml(worktreeIconUrl())}" alt="" aria-hidden="true" /><span>\${escapeHtml(worktreeName)}</span></span></div>\`
+          : \`<div class="tower-floor-title" title="\${titleAttr}">\${escapeHtml(projectTitle)}</div>\`;
         const summary = state.view === "map"
           ? (compact ? "Live floor" : "Current workload")
           : \`\${counts.total} agents · \${counts.active} active · \${counts.waiting} waiting · \${counts.blocked} blocked · \${counts.cloud} cloud\`;
@@ -322,12 +323,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             isPrimaryRoom
           });
           const centerColumn = Math.floor(room.width / 2);
-          const entrance = roomEntranceLayout(roomPixelWidth, compact, floorTop);
+          const entrance = roomEntranceLayout(roomPixelWidth, tile, compact, floorTop);
           const doorWidth = Math.round(pixelOffice.props.boothDoor.w * entrance.doorScale);
           const doorHeight = Math.round(pixelOffice.props.boothDoor.h * entrance.doorScale);
           const doorBackdrop = sceneDefinitions && sceneDefinitions.door ? sceneDefinitions.door : {};
           const backdropWidth = Math.max(tile * 2, Math.round((Number(doorBackdrop.backdropWidthTiles) || 2) * tile));
-          const backdropHeight = Math.max(tile, Math.round((Number(doorBackdrop.backdropHeightTiles) || 1) * tile));
+          const backdropHeight = Math.max(tile * 2, Math.round((Number(doorBackdrop.backdropHeightTiles) || 2) * tile));
           model.roomDoors.push({
             id: room.id + "::door",
             roomId: room.id,
@@ -338,7 +339,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             y: roomY + entrance.centerDoorY,
             width: doorWidth,
             height: doorHeight,
-            backdropX: roomX + Math.round(roomPixelWidth / 2 - backdropWidth / 2),
+            backdropX: roomX + Math.round(entrance.entryX - backdropWidth / 2),
             backdropY: floorTop - backdropHeight,
             backdropWidth,
             backdropHeight

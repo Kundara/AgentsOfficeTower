@@ -1655,6 +1655,17 @@ export const CLIENT_STYLES = `
         line-height: 1.05;
       }
 
+      .agent-hover-worktree {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-bottom: 2px;
+        color: var(--worktree-blue);
+        font-size: 7px;
+        line-height: 1.1;
+        font-weight: 700;
+      }
+
       .agent-hover-summary {
         font-size: 6px;
         line-height: 1;
@@ -1681,6 +1692,11 @@ export const CLIENT_STYLES = `
       .agent-hover-peer {
         color: #ff38d1;
         font-weight: 700;
+      }
+
+      .agent-hover-worktree .worktree-inline-icon {
+        width: 14px;
+        height: 14px;
       }
 
       .room-empty {

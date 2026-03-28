@@ -223,14 +223,23 @@ test("runtime source merges worktrees by repo and renders worktree badges in hov
   const layoutSource = readRuntimeSource("layout-source.ts");
   const renderSource = readRuntimeSource("render-source.ts");
   const sceneSource = readRuntimeSource("scene-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
   const settingsSource = readRuntimeSource("settings-source.ts");
 
   assert.ok(layoutSource.includes("function mergeWorktreeProjects(projects) {"));
+  assert.ok(layoutSource.includes("function inferredCodexWorktreeMetadata(projectRoot) {"));
+  assert.ok(layoutSource.includes("function snapshotMatchesProjectRoot(snapshot, projectRoot) {"));
+  assert.ok(layoutSource.includes("function repoIdentityForSnapshot(snapshot) {"));
+  assert.ok(layoutSource.includes('return "git-repo:" + repoIdentity;'));
   assert.ok(layoutSource.includes('return "git-common:" + commonGitDir;'));
+  assert.ok(layoutSource.includes("mergedProjectRoots: bucket.snapshots.map((snapshot) => snapshot.projectRoot),"));
   assert.ok(layoutSource.includes("sourceProjectRoot,"));
   assert.ok(renderSource.includes('const worktreeHtml = worktreeName'));
   assert.ok(renderSource.includes('class="agent-hover-worktree"'));
-  assert.ok(sceneSource.includes('tower-floor-title tower-floor-title-worktree'));
+  assert.ok(sceneSource.includes('tower-floor-title-project'));
+  assert.ok(sceneSource.includes('tower-floor-title-worktree'));
+  assert.ok(uiSource.includes('const selectableProjects = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)'));
+  assert.ok(uiSource.includes('...selectableProjects.map((project) => {'));
   assert.ok(settingsSource.includes("splitWorktrees: Boolean(parsed && parsed.splitWorktrees)"));
 });
 

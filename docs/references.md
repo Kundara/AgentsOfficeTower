@@ -70,6 +70,8 @@
 
 - [PixelOffice asset pack](https://2dpig.itch.io/)
   Source style reference for the office visuals used in this repo.
+- [Justin's 16x16 Icon Pack](https://zeromatrix.itch.io/rpgiab-icons)
+  Source for the branch/message/search/image/command pixel icons now shipped in the browser asset set; released by Justin Arnold under CC BY 4.0.
 - Local source assets are intentionally not listed here with machine-specific paths.
   Keep any downloaded PixelOffice source files outside the repo and document them with repo-relative notes only if they become part of the shipped workflow.
 

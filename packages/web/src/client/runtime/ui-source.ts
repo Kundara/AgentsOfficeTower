@@ -304,10 +304,11 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         return true;
       }
 
-      function currentSnapshot() {
+      function currentSnapshot(projects = null) {
         if (!state.fleet) return null;
         if (state.selected === "all") return null;
-        return state.fleet.projects.find((snapshot) => snapshot.projectRoot === state.selected) || null;
+        const availableProjects = Array.isArray(projects) ? projects : mergeWorktreeProjects(visibleProjects(state.fleet));
+        return availableProjects.find((snapshot) => snapshotMatchesProjectRoot(snapshot, state.selected)) || null;
       }
 
       function renderHeroSummary(counts) {
@@ -334,22 +335,33 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         const fleet = state.fleet;
         const rawProjects = visibleProjects(fleet);
         const floorProjects = mergeWorktreeProjects(rawProjects);
-        const towerProjects = state.selected === "all" ? floorProjects : rawProjects;
+        const selectableProjects = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)
+          ? rawProjects
+          : floorProjects;
+        const selectedSnapshot = currentSnapshot(selectableProjects);
+        if (
+          selectedSnapshot
+          && state.selected !== "all"
+          && state.selected !== selectedSnapshot.projectRoot
+        ) {
+          state.selected = selectedSnapshot.projectRoot;
+          syncUrl();
+        }
+        const towerProjects = state.selected === "all" ? floorProjects : selectableProjects;
         updateRecentLeadReservations(towerProjects);
         const displayedProjects = towerProjects.map((project) => viewSnapshot(project, SCENE_RECENT_LEAD_LIMIT));
         const sessionProjects = towerProjects.map((project) => viewSessionSnapshot(project, SESSION_RECENT_LEAD_LIMIT));
-        const selectedRawSnapshot = currentSnapshot();
-        const snapshot = selectedRawSnapshot
-          ? viewSnapshot(selectedRawSnapshot, SCENE_RECENT_LEAD_LIMIT, rawProjects)
+        const snapshot = selectedSnapshot
+          ? viewSnapshot(selectedSnapshot, SCENE_RECENT_LEAD_LIMIT, selectableProjects)
           : null;
-        const sessionSnapshot = selectedRawSnapshot
-          ? viewSessionSnapshot(selectedRawSnapshot, SESSION_RECENT_LEAD_LIMIT, rawProjects)
+        const sessionSnapshot = selectedSnapshot
+          ? viewSessionSnapshot(selectedSnapshot, SESSION_RECENT_LEAD_LIMIT, selectableProjects)
           : null;
         if (!snapshot && state.workspaceFullscreen) {
           state.workspaceFullscreen = false;
           syncUrl();
         }
-        syncLiveAgentState(state.selected === "all" ? towerProjects : rawProjects);
+        syncLiveAgentState(snapshot ? [snapshot] : displayedProjects);
         sceneStateDraft = null;
         const counts = fleetCounts({ projects: sessionProjects });
         const nextSceneToken = state.view === "map"
@@ -377,9 +389,9 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
 
         setHtmlIfChanged(projectTabs, [
           \`<button class="project-tab\${state.selected === "all" ? " active" : ""}" data-action="select-project" data-project-root="all">All</button>\`,
-          ...rawProjects.map((project) => {
+          ...selectableProjects.map((project) => {
             const counts = countsForSnapshot(project);
-            const activeClass = project.projectRoot === state.selected ? " active" : "";
+            const activeClass = snapshotMatchesProjectRoot(project, state.selected) ? " active" : "";
             const badge = counts.active;
             return \`<button class="project-tab\${activeClass}" data-action="select-project" data-project-root="\${escapeHtml(project.projectRoot)}" title="\${escapeHtml(project.projectRoot)}">\${escapeHtml(projectLabel(project.projectRoot))} <span class="muted">\${badge}</span></button>\`;
           })

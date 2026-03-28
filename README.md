@@ -218,6 +218,12 @@ Important product rule:
 
 - Codex is still the strongest integration surface today.
 - Codex CLI is the preferred runtime. The desktop app is a fallback, not a requirement.
+
+## Asset Credits
+
+- Pixel food/drink held-item icons in `packages/web/public/pixel-office/sprites/props/drinks/` come from Alex's `100 pixel food icons pack`, licensed under CC BY 4.0.
+- Source pack note: `C:\Users\kunda\Downloads\Free_pixel_food_16x16\Free_pixel_food_16x16\Note from the artist.txt`
+- License: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 - Claude, Cursor, and OpenClaw are useful secondary sources.
 - Provenance and confidence stay visible so inferred state does not look like typed state.
 

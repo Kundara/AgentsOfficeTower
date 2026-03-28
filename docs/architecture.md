@@ -134,6 +134,9 @@ Sources:
 - global browser settings currently expose text scale plus a persisted worktree split toggle; text scale still applies to hover/toast/map text without changing room or prefab geometry
 - the retained browser map path now uses a persistent Pixi scene host plus HTML anchor overlays for toast positioning, so map updates can mutate scene entities without replacing the scene shell
 - routed avatar movement in the Pixi scene now uses a lightweight grid pathfinder against room occupancy instead of direct straight-line scene tweens
+- rec-area idle behavior is scene-config-driven: seated flip cadence, provider-trip rarity, resting walk speed, held-item base size, and global held-item scale all come from `packages/web/src/config/scene-definitions.json`
+- provider furniture definitions now also carry optional visual approach offsets so resting avatars can keep their 1x1 foot tile on the walkable row while still reaching close to the vending machine, cooler, or shelf sprite
+- the current default rec-provider mapping is bookshelf -> `book`, cooler -> `water-bottle`, and vending -> a mixed snack/soda/juice pool
 
 ### Web package composition
 

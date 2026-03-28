@@ -622,9 +622,18 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           return null;
         }
         const handOffset = definition.handOffsetPx || {};
+        const heldItemsConfig = sceneDefinitions && sceneDefinitions.heldItems ? sceneDefinitions.heldItems : {};
+        const baseSizePx = Number.isFinite(heldItemsConfig.baseSizePx) ? Number(heldItemsConfig.baseSizePx) : 16;
+        const globalScale = Number.isFinite(heldItemsConfig.globalScale) ? Number(heldItemsConfig.globalScale) : 1;
+        const sourceWidth = Math.max(1, Number(sprite.w) || baseSizePx);
+        const sourceHeight = Math.max(1, Number(sprite.h) || baseSizePx);
+        const fitScale = Math.min(baseSizePx / sourceWidth, baseSizePx / sourceHeight);
+        const renderScale = Math.max(0.1, fitScale * globalScale);
         return {
           id: itemId,
           sprite,
+          renderWidth: Math.max(1, Math.round(sourceWidth * renderScale)),
+          renderHeight: Math.max(1, Math.round(sourceHeight * renderScale)),
           durationMs: Number.isFinite(definition.durationMs) ? Number(definition.durationMs) : null,
           handOffsetPx: {
             x: Number.isFinite(handOffset.x) ? Number(handOffset.x) : 7,
@@ -673,12 +682,17 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const row = Number.isFinite(serviceTile.row)
           ? Number(serviceTile.row)
           : Math.max(1, (Number(item.baseRow) || 0) + Math.max(1, Number(item.heightTiles) || 1));
+        const approachOffset = serviceTile.approachOffsetPx || {};
         return {
           ...provider,
           items: provider.items.slice(),
           serviceTile: {
             column,
-            row
+            row,
+            approachOffsetPx: {
+              x: Number.isFinite(approachOffset.x) ? Number(approachOffset.x) : 0,
+              y: Number.isFinite(approachOffset.y) ? Number(approachOffset.y) : 0
+            }
           }
         };
       }
@@ -727,12 +741,12 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const rightSofaColumn = room.width - 7;
         const leftSofaColumn = rightSofaColumn - 3;
         return [
-          { id: "vending", sprite: pixelOffice.props.vending, column: 0, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true, facilityProvider: { items: ["snack"], serviceTile: { anchor: "center", row: 2 } } },
-          { id: "cooler", sprite: pixelOffice.props.cooler, column: 2, baseRow: 0, widthTiles: 1, heightTiles: 1, z: 3, furniture: true, facilityProvider: { items: ["plastic-cup"], serviceTile: { anchor: "center", row: 2 } } },
+          { id: "vending", sprite: pixelOffice.props.vending, column: 0, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true, facilityProvider: { items: ["snack"], serviceTile: { anchor: "center", row: 2, approachOffsetPx: { x: 0, y: -10 } } } },
+          { id: "cooler", sprite: pixelOffice.props.cooler, column: 2, baseRow: 0, widthTiles: 1, heightTiles: 1, z: 3, furniture: true, facilityProvider: { items: ["water-bottle"], serviceTile: { anchor: "center", row: 2, approachOffsetPx: { x: 0, y: -10 } } } },
           { id: "counter", sprite: pixelOffice.props.counter, column: 3, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 3, furniture: true },
           { id: "sofa-left", sprite: sofaSpriteAt(1), column: leftSofaColumn, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 3, furniture: true },
           { id: "sofa-right", sprite: sofaSpriteAt(0), column: rightSofaColumn, baseRow: 0, widthTiles: 2, heightTiles: 1, z: 4, furniture: true },
-          { id: "shelf", sprite: pixelOffice.props.bookshelf, column: room.width - 2, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true, facilityProvider: { items: ["book"], serviceTile: { anchor: "center", row: 2 } } }
+          { id: "shelf", sprite: pixelOffice.props.bookshelf, column: room.width - 2, baseRow: 0, widthTiles: 1, heightTiles: 2, z: 3, furniture: true, facilityProvider: { items: ["book"], serviceTile: { anchor: "center", row: 2, approachOffsetPx: { x: 0, y: -10 } } } }
         ];
       }
 
@@ -795,7 +809,11 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           items: item.facilityProvider.items.slice(),
           serviceTile: {
             column: item.facilityProvider.serviceTile.column,
-            row: item.facilityProvider.serviceTile.row
+            row: item.facilityProvider.serviceTile.row,
+            approachOffsetPx: {
+              x: Number(item.facilityProvider.serviceTile.approachOffsetPx?.x) || 0,
+              y: Number(item.facilityProvider.serviceTile.approachOffsetPx?.y) || 0
+            }
           }
         };
       }
