@@ -501,7 +501,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
       }
 
       function isBusyAgent(agent) {
-        return agent.isCurrent === true;
+        return agent.isCurrent === true || isRuntimeActiveLocalAgent(agent);
       }
 
       function parseAgentUpdatedAt(value) {
@@ -576,8 +576,28 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         }
       }
 
+      const SUBAGENT_RECENT_SESSION_GRACE_MS = 12000;
+
+      function keepFinishedSubagentSession(agent) {
+        if (!agent || !agent.parentThreadId) {
+          return false;
+        }
+        if (agent.isCurrent === true || agent.isOngoing === true) {
+          return true;
+        }
+        const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
+        return Number.isFinite(updatedAt)
+          && Date.now() - updatedAt <= SUBAGENT_RECENT_SESSION_GRACE_MS;
+      }
+
       function isRecentSessionCandidate(agent) {
-        return agent.source !== "cloud" && agent.source !== "presence";
+        if (agent.source === "cloud" || agent.source === "presence") {
+          return false;
+        }
+        if (!agent.parentThreadId) {
+          return true;
+        }
+        return keepFinishedSubagentSession(agent);
       }
 
       function recentLeadAgents(snapshot, limit = SCENE_RECENT_LEAD_LIMIT) {
@@ -715,10 +735,10 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
 
       function cloneRecentFallbackAgent(sourceSnapshot, agent) {
         const summary = normalizeDisplayText(sourceSnapshot.projectRoot, agent.detail)
-          || latestAgentMessage(agent)
+          || latestAgentMessage(sourceSnapshot.projectRoot, agent)
           || "[" + String(agent.state || "idle") + "]";
         const projectPrefix = projectLabel(sourceSnapshot.projectRoot);
-        const latestMessage = latestAgentMessage(agent);
+        const latestMessage = latestAgentMessage(sourceSnapshot.projectRoot, agent);
         return {
           ...agent,
           isCurrent: false,
@@ -820,6 +840,37 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           .filter(Boolean)
           .map((word) => word[0] ? word[0].toUpperCase() + word.slice(1) : word)
           .join(" ");
+      }
+
+      function compactPathyLabel(snapshot, label) {
+        const normalized = normalizeDisplayText(snapshot && snapshot.projectRoot, label);
+        if (!normalized) {
+          return "";
+        }
+        const match = normalized.match(/^(Read|Review|Explore|Search)\\s+(.+)$/);
+        if (!match) {
+          return normalized;
+        }
+        const [, verb, subject] = match;
+        if (!/[\\\\/]/.test(subject)) {
+          return normalized;
+        }
+        const fileLabel = notificationFileName(snapshot && snapshot.projectRoot, subject, subject);
+        return fileLabel ? verb + " " + fileLabel : normalized;
+      }
+
+      function displayAgentLabel(snapshot, agent) {
+        if (!agent) {
+          return "Agent";
+        }
+        const preferred = typeof agent.nickname === "string" && agent.nickname.trim().length > 0
+          ? agent.nickname
+          : agent.label;
+        const compact = compactPathyLabel(snapshot, preferred);
+        if (compact) {
+          return compact;
+        }
+        return normalizeDisplayText(snapshot && snapshot.projectRoot, preferred) || preferred || "Agent";
       }
 
       function pluralizeWord(word, count) {

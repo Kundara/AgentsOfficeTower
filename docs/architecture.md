@@ -305,8 +305,8 @@ The active office view currently favors an open station language over enclosed c
 - avatars themselves no longer flash on enter or exit; only the workstation reveal animates, and removals disappear immediately once the thread leaves current workload
 - left and right seats face opposite directions inside each pod
 - seated agents flip with the workstation direction and align to the desk/chair reach point
-- lead-session arrivals and all departures use the center-top room entrance as the path anchor so workers visibly leave through the doorway
-- entering subagents split off from a nearby position around their parent, blink briefly in place, then move to their assigned desk or wall-side slot
+- lead-session arrivals, subagent arrivals, and all departures use the center-top room entrance as the path anchor so workers visibly enter and leave through the doorway
+- finished subagents now keep a longer readable desk cooldown before they walk back out through that doorway instead of vanishing immediately
 - lead sessions with active subagents move into a dedicated left-side boss-office column; the column starts one floor tile below the floor start and uses contiguous 3-tile-tall office slots so four bosses can stack in a standard room while still reading as offices instead of rounded placeholder frames
 - hovering a boss reveals arrow lines from that office to the related spawned subagents
 - chairs and seated reach points sit slightly outward from the desk so the monitor relationship reads cleanly

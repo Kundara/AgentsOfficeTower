@@ -1,7 +1,14 @@
 export const CLIENT_RUNTIME_SEATING_SOURCE = `
       const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;
-      const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 1200;
+      const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;
       const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
+
+      function isRuntimeActiveLocalAgent(agent) {
+        return agent
+          && agent.source === "local"
+          && agent.statusText === "active"
+          && agent.state !== "waiting";
+      }
 
       function workstationDoneGraceMs(agent) {
         return agent && agent.parentThreadId
@@ -47,6 +54,9 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
             if (agent.state === "waiting") {
               return false;
             }
+            if (isRuntimeActiveLocalAgent(agent)) {
+              return true;
+            }
             if ((agent.state === "idle" || agent.state === "done") && hasCurrentLocalSeatCooldown(agent)) {
               return true;
             }
@@ -83,6 +93,6 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
         if (!agent || agent.source === "cloud" || agent.source === "presence") {
           return false;
         }
-        return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;
+        return shouldSeatAtWorkstation(agent) || agent.isCurrent === true || isRuntimeActiveLocalAgent(agent);
       }
 `;

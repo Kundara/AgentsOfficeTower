@@ -110,7 +110,18 @@ test("client runtime keeps active local desks live, leaves waiting in the rec ar
   );
   assert.match(
     seatingSource,
-    /if \(agent\.statusText === "active"\) {\n\s+if \(agent\.state === "waiting"\) {\n\s+return false;\n\s+}\n\s+if \(\(agent\.state === "idle" \|\| agent\.state === "done"\) && hasCurrentLocalSeatCooldown\(agent\)\) {\n\s+return true;\n\s+}\n\s+return agent\.isCurrent === true\n\s+&& agent\.state !== "idle"\n\s+&& agent\.state !== "done";/
+    /if \(agent\.statusText === "active"\) {\n\s+if \(agent\.state === "waiting"\) {\n\s+return false;\n\s+}\n\s+if \(isRuntimeActiveLocalAgent\(agent\)\) {\n\s+return true;\n\s+}\n\s+if \(\(agent\.state === "idle" \|\| agent\.state === "done"\) && hasCurrentLocalSeatCooldown\(agent\)\) {\n\s+return true;\n\s+}\n\s+return agent\.isCurrent === true\n\s+&& agent\.state !== "idle"\n\s+&& agent\.state !== "done";/
+  );
+});
+
+test("client runtime gives finished subagents a longer workstation cooldown than leads", () => {
+  const seatingSource = readRuntimeSource("seating-source.ts");
+
+  assert.match(seatingSource, /const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;/);
+  assert.match(seatingSource, /const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;/);
+  assert.match(
+    seatingSource,
+    /return agent && agent\.parentThreadId\s+\? SUBAGENT_DONE_WORKSTATION_GRACE_MS\s+\: TOP_LEVEL_DONE_WORKSTATION_GRACE_MS;/
   );
 });
 
@@ -167,16 +178,17 @@ test("navigation source depth-sorts agents and desk shell sprites by feet positi
 
   assert.ok(navigationSource.includes("function sceneFootDepth(y, height, bias = 0) {"));
   assert.ok(navigationSource.includes("function applyFootDepth(node, y, height, bias = 0) {"));
-  assert.ok(navigationSource.includes("sprite.zIndex = definition.z || 5;"));
+  assert.ok(navigationSource.includes("if (Number.isFinite(definition.depthFootY)) {"));
+  assert.ok(navigationSource.includes("Number(definition.depthFootY) - snappedHeight,"));
   assert.ok(navigationSource.includes("const fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;"));
   assert.ok(navigationSource.includes("if (fixedZ !== null) {"));
   assert.ok(navigationSource.includes("applyFootDepth(avatar, avatar.y, snappedHeight, zIndex);"));
   assert.ok(navigationSource.includes("function syncMotionStateDepth(motionState) {"));
-  assert.ok(sceneSource.includes("syncMotionStateDepth(entry);"));
-  assert.ok(renderSource.includes("buildPixiSpriteDef(deskSprite"));
-  assert.ok(renderSource.includes("buildPixiSpriteDef(chair"));
-  assert.ok(renderSource.includes("buildPixiSpriteDef(computerSprite"));
-  assert.ok(renderSource.includes("z: seatedState ? 12 : null"));
+  assert.ok(sceneSource.includes("renderer.syncMotionStateDepth(entry);"));
+  assert.ok(renderSource.includes("const deskDepthFootY = absoluteCellY + deskY + deskHeight;"));
+  assert.ok(renderSource.includes("depthBias: -10"));
+  assert.ok(renderSource.includes("depthBias: 10"));
+  assert.ok(renderSource.includes("depthBias: seatedState ? -5 : null"));
   assert.ok(renderSource.includes("const seatedState = state === \"editing\""));
 });
 
@@ -229,6 +241,30 @@ test("runtime source strips markdown formatting markers from display text", () =
   assert.ok(layoutSource.includes("const plainText = stripDisplayMarkdown(normalized);"));
   assert.ok(layoutSource.includes('const next = plainText.indexOf("/mnt/", index);'));
   assert.ok(layoutSource.includes("output += plainText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));"));
+});
+
+test("runtime source sanitizes path-heavy labels and latest messages with the project root", () => {
+  const layoutSource = readRuntimeSource("layout-source.ts");
+  const renderSource = readRuntimeSource("render-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+
+  assert.ok(layoutSource.includes("function compactPathyLabel(snapshot, label) {"));
+  assert.ok(layoutSource.includes("return normalizeDisplayText(snapshot && snapshot.projectRoot, preferred) || preferred || \"Agent\";"));
+  assert.ok(renderSource.includes("function latestAgentMessage(projectRoot, agent) {"));
+  assert.ok(renderSource.includes("const message = latestAgentMessage(snapshot.projectRoot, agent);"));
+  assert.ok(renderSource.includes("const hoverTitle = displayAgentLabel(snapshot, agent);"));
+  assert.ok(uiSource.includes("latestAgentMessage(snapshot.projectRoot, agent)"));
+});
+
+test("runtime source only keeps finished subagents in recent sessions during the child grace window", () => {
+  const layoutSource = readRuntimeSource("layout-source.ts");
+  const settingsSource = readRuntimeSource("settings-source.ts");
+
+  assert.ok(layoutSource.includes("const SUBAGENT_RECENT_SESSION_GRACE_MS = 12000;"));
+  assert.ok(layoutSource.includes("function keepFinishedSubagentSession(agent) {"));
+  assert.ok(layoutSource.includes("return keepFinishedSubagentSession(agent);"));
+  assert.ok(settingsSource.includes("const SUBAGENT_DEPARTING_AGENT_TTL_MS = 3200;"));
+  assert.ok(settingsSource.includes("function departingAgentTtlMs(agent) {"));
 });
 
 test("runtime source section files now start on function boundaries instead of continuing previous functions", () => {
@@ -517,5 +553,5 @@ test("runtime source only animates exit ghosts for explicit departures and dedup
   assert.ok(navigationSource.includes("const departingAgentKeys = new Set(departingAgents.map((agent) => agent.key));"));
   assert.ok(navigationSource.includes("!motionState || currentAgentKeys.has(key) || motionState.exiting || !departingAgentKeys.has(key)"));
   assert.ok(uiSource.includes("const existingGhost = departingAgents.find((ghost) => ghost.key === key) || null;"));
-  assert.ok(uiSource.includes("existingGhost.expiresAt = now + DEPARTING_AGENT_TTL_MS;"));
+  assert.ok(uiSource.includes("existingGhost.expiresAt = now + departingAgentTtlMs(entry.agent);"));
 });

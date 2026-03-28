@@ -110,6 +110,7 @@ Current browser settings surfaces are:
 - Use current workload by default.
 - Active local Codex work should occupy desks.
 - A local Codex session should stay on a desk whenever app-server still reports `status.type = "active"`, even if its active flags currently mean waiting for approval or user input, or the latest visible item has already reached a recent `done` summary.
+- Active local subagents should remain visible from that same runtime-active signal even if the transient `isCurrent` flag has already moved to a sibling update or the parent thread.
 - Waiting/resting lead sessions belong in the rec area only after the session is no longer active at the app-server/runtime level.
 - A local thread that is still truly ongoing may keep its workstation through short-lived freshness/current signal dips between polls, but stale `notLoaded` locals must not hold desks just because they were recently current.
 - Workstation release should be conservative. Ordinary poll jitter, UI rerenders, debug toggles, or temporary freshness gaps must not pull a still-working agent off a desk.
@@ -118,6 +119,8 @@ Current browser settings surfaces are:
   it may show fewer while one of those visible resting leads is back at work.
 - If one of those visible resting leads becomes active again, older hidden leads should not pop back into the rec area just to fill that seat for a moment.
 - Finished subagents should despawn instead of taking rec-area slots.
+- Finished subagents should keep a visibly readable post-finish desk cooldown before exiting, and that cooldown should be longer than the top-level lead cooldown so child completion is easier to observe in-scene.
+- Finished subagents should then walk out through the room door instead of blinking away.
 - Empty rooms should read as quiet space, not as errors.
 
 ### Scene layout and tiles
@@ -144,6 +147,7 @@ Current browser settings surfaces are:
 - Tile pathfinding should avoid occupied cells from furniture, workstation footprints, and already-seated agents.
 - Visual-only updates such as debug overlays, text-scale changes, or scene host rerenders must not be treated as a new placement instruction.
 - A newly visible active agent should enter from the room door and walk to its assigned workstation.
+- That same door-entry behavior applies to subagents, not just top-level leads.
 - If a resting lead becomes active again, it should leave its rec-area seat and walk to its newly assigned workstation instead of despawning and respawning.
 - When an agent truly leaves the visible scene, it should walk back out through the room door.
 - Each room door should render as a two-part sliding door with a dark recess behind it.
@@ -206,6 +210,8 @@ Worktree identity rules:
 - Shared repo/worktree grouping should work across Codex, Claude, and Cursor-backed snapshots; it must not rely on one source family alone.
 - Shared worktree grouping should prefer actual Git common-dir identity when available, then fall back to other stable repo identity fields only when necessary.
 - Agent hover cards should expose the source worktree name with the same worktree icon so duplicate repo clones remain distinguishable even when the tower floor is merged.
+- Agent labels, hover titles, and session-card titles should normalize repo-local paths into readable relative labels and must not surface raw WSL mount paths like `/mnt/f/...` as the primary visible title.
+- Agent-facing labels in the scene and session list should normalize repo-local paths so raw `/mnt/...` WSL paths do not appear as the primary visible title.
 
 ### Shared-room behavior
 

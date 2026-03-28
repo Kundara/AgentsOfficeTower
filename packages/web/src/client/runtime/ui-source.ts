@@ -7,16 +7,17 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
           const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
           const appearanceAgentId = agent.sourceAgentId || agent.id;
+          const title = displayAgentLabel(snapshot, agent);
           const appearanceAction = agent.network
             ? ""
             : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
           const description = normalizeDisplayText(snapshot.projectRoot, agent.detail)
-            || latestAgentMessage(agent)
+            || latestAgentMessage(snapshot.projectRoot, agent)
             || \`[\${agent.state}]\`;
           const sourceLabel = agentNetworkLabel(agent);
           const fullDescription = sourceLabel ? \`\${sourceLabel} · \${description}\` : description;
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(agent.label)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(fullDescription)}">\${escapeHtml(fullDescription)}</div></article>\`;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(title)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(fullDescription)}">\${escapeHtml(fullDescription)}</div></article>\`;
         }).join("");
       }
 
@@ -33,16 +34,17 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         return renderNeedsAttention(projects) + entries.map(({ snapshot, agent }) => {
           const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
           const appearanceAgentId = agent.sourceAgentId || agent.id;
+          const title = displayAgentLabel(snapshot, agent);
           const appearanceAction = agent.network
             ? ""
             : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
           const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail)
-            || latestAgentMessage(agent)
+            || latestAgentMessage(snapshot.projectRoot, agent)
             || \`[\${agent.state}]\`;
           const sourceLabel = agentNetworkLabel(agent);
           const description = projectLabel(snapshot.projectRoot) + " · " + (sourceLabel ? sourceLabel + " · " : "") + detail;
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(agent.label)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div></article>\`;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(title)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div></article>\`;
         }).join("");
       }
 
@@ -154,13 +156,13 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
               existingGhost.roomId = entry.roomId;
               existingGhost.agent = entry.agent;
               existingGhost.sceneState = sceneState;
-              existingGhost.expiresAt = now + DEPARTING_AGENT_TTL_MS;
+              existingGhost.expiresAt = now + departingAgentTtlMs(entry.agent);
               continue;
             }
             departingAgents.push({
               ...entry,
               sceneState,
-              expiresAt: now + DEPARTING_AGENT_TTL_MS
+              expiresAt: now + departingAgentTtlMs(entry.agent)
             });
           }
         }

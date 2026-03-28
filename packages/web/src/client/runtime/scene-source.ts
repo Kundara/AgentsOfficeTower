@@ -868,8 +868,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
               }
               if (entry.kind === "bob") {
                 entry.sprite.y = entry.baseY + Math.round(Math.sin((now + entry.phase) / 220) * 1);
-                if (Number.isFinite(entry.depthBias)) {
-                  entry.sprite.zIndex = Number(entry.depthBias);
+                if (typeof renderer.syncMotionStateDepth === "function") {
+                  renderer.syncMotionStateDepth(entry);
                 }
                 return;
               }

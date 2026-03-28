@@ -29,8 +29,21 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added committed project-level Cursor hooks in `.cursor/hooks.json` plus a repo hook recorder script that writes typed local Cursor sidecars into `.codex-agents/cursor-hooks/<conversation-id>.jsonl`.
 - Added a root `npm start` bootstrap flow that installs if needed, rebuilds the workspace, and launches the web server on `4181`.
 
+### Fixed
+
+- Fixed hover cards and session labels so path-heavy Codex titles/messages are normalized instead of surfacing raw `/mnt/...` workspace paths as the primary visible title.
+- Fixed finished subagent visibility so child sessions keep a longer readable cooldown, take the door-exit path, and then fall out of recent-session UI instead of lingering like ordinary history.
+
+### Fixed
+
+- Fixed scene/session title display so path-heavy helper labels such as `Read /mnt/...` now normalize into repo-local file labels instead of leaking raw WSL mount paths into hover cards and session titles.
+- Fixed departing scene retention so finished agents keep enough ghost lifetime for the room-door exit walk to render reliably, with subagents holding that exit state longer than top-level leads.
+
 ### Changed
 
+- Changed browser workload visibility so runtime-active local subagents stay seated/visible even when `isCurrent` momentarily shifts to another related thread update, matching the scene's current-workload-first rules more closely.
+- Changed subagent post-finish handling so finished subagents keep a longer in-scene cooldown before they walk out through the room door, making boss/subagent completion easier to read in the office view.
+- Changed browser agent/session title rendering to normalize repo-local path-heavy labels instead of surfacing raw WSL-style `/mnt/...` paths as the primary visible title.
 - Changed rec-room idle behavior so seated flip timing is slower, provider trips are much rarer, resting avatars walk at 60% speed, provider approach points can visually reach closer to furniture, held items now render from a shared 16px base with a global scale control, the cooler serves `water-bottle`, and the vending machine serves a mixed snack/soda/juice pool.
 - Changed fleet floor grouping so Git worktrees now merge onto one repo floor by default across Codex, Claude, and Cursor snapshots, with a persisted global `Split Worktrees` toggle to restore one-floor-per-worktree layout when needed.
 - Changed worktree rendering so split worktree floors now use a bright blue worktree title treatment, and agent hover cards expose the source worktree name to keep duplicate repo clones distinguishable.

@@ -581,7 +581,16 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             sprite.scale.x = -Math.abs(sprite.scale.x || 1);
             sprite.x += snappedWidth;
           }
-          sprite.zIndex = definition.z || 5;
+          if (Number.isFinite(definition.depthFootY)) {
+            applyFootDepth(
+              sprite,
+              Number(definition.depthFootY) - snappedHeight,
+              snappedHeight,
+              Number.isFinite(definition.depthBias) ? Number(definition.depthBias) : 0
+            );
+          } else {
+            sprite.zIndex = definition.z || 5;
+          }
           if (!screenshotMode && definition.enteringReveal === true) {
             sprite.visible = false;
           }
@@ -619,7 +628,14 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             avatar.x += snappedWidth;
           }
           const fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;
-          if (fixedZ !== null) {
+          if (Number.isFinite(agent.depthFootY)) {
+            applyFootDepth(
+              avatar,
+              Number(agent.depthFootY) - snappedHeight,
+              snappedHeight,
+              Number.isFinite(agent.depthBias) ? Number(agent.depthBias) : zIndex
+            );
+          } else if (fixedZ !== null) {
             avatar.zIndex = fixedZ;
           } else {
             applyFootDepth(avatar, avatar.y, snappedHeight, zIndex);
@@ -638,7 +654,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
               .stroke({ color: 0x1f2e29, width: 2, alpha: 0.8 });
             bubbleBox.x = bubbleX;
             bubbleBox.y = bubbleY;
-            bubbleBox.zIndex = fixedZ !== null ? fixedZ + 1 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 1);
+            bubbleBox.zIndex = Number.isFinite(agent.depthFootY)
+              ? sceneFootDepth(Number(agent.depthFootY) - snappedHeight, snappedHeight, (Number(agent.depthBias) || zIndex) + 1)
+              : (fixedZ !== null ? fixedZ + 1 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 1));
             renderer.root.addChild(bubbleBox);
             createdNodes.push(bubbleBox);
             bubbleText = createPixiText(renderer, agent.bubble, {
@@ -649,7 +667,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             });
             bubbleText.x = bubbleX + Math.round((bubbleWidth - bubbleText.width) / 2);
             bubbleText.y = bubbleY + Math.round((12 - bubbleText.height) / 2) - 1;
-            bubbleText.zIndex = fixedZ !== null ? fixedZ + 2 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 2);
+            bubbleText.zIndex = Number.isFinite(agent.depthFootY)
+              ? sceneFootDepth(Number(agent.depthFootY) - snappedHeight, snappedHeight, (Number(agent.depthBias) || zIndex) + 2)
+              : (fixedZ !== null ? fixedZ + 2 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 2));
             renderer.root.addChild(bubbleText);
             createdNodes.push(bubbleText);
           }
@@ -658,12 +678,43 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             avatar,
             bubbleBox,
             bubbleText,
-            depthBias: fixedZ !== null ? fixedZ : zIndex
+            depthBias: Number.isFinite(agent.depthBias) ? Number(agent.depthBias) : (fixedZ !== null ? fixedZ : zIndex),
+            depthFootY: Number.isFinite(agent.depthFootY) ? Number(agent.depthFootY) : null
           };
         }
 
         function syncMotionStateDepth(motionState) {
           if (!motionState || !motionState.sprite) {
+            return;
+          }
+          if (Number.isFinite(motionState.depthFootY)) {
+            applyFootDepth(
+              motionState.sprite,
+              Number(motionState.depthFootY) - motionState.height,
+              motionState.height,
+              Number.isFinite(motionState.depthBias) ? Number(motionState.depthBias) : 0
+            );
+            if (motionState.bubbleBox) {
+              motionState.bubbleBox.zIndex = sceneFootDepth(
+                Number(motionState.depthFootY) - motionState.height,
+                motionState.height,
+                (Number(motionState.depthBias) || 0) + 1
+              );
+            }
+            if (motionState.bubbleText) {
+              motionState.bubbleText.zIndex = sceneFootDepth(
+                Number(motionState.depthFootY) - motionState.height,
+                motionState.height,
+                (Number(motionState.depthBias) || 0) + 2
+              );
+            }
+            if (motionState.heldItemSprite) {
+              motionState.heldItemSprite.zIndex = sceneFootDepth(
+                Number(motionState.depthFootY) - motionState.height,
+                motionState.height,
+                (Number(motionState.depthBias) || 0) + 3
+              );
+            }
             return;
           }
           if (Number.isFinite(motionState.fixedZ)) {
@@ -736,6 +787,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             previousState.state = agent.state || "idle";
             previousState.spriteUrl = agent.sprite;
             previousState.depthBias = avatarVisual.depthBias;
+            previousState.depthFootY = avatarVisual.depthFootY;
             previousState.fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;
             previousState.targetFlipX = agent.flipX === true;
             previousState.slotId = agent.slotId || previousState.slotId || null;
@@ -828,6 +880,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
               : (typeof previousState?.mirrored === "boolean" ? previousState.mirrored : null),
             heldItemSprite: null,
             depthBias: avatarVisual.depthBias,
+            depthFootY: avatarVisual.depthFootY,
             fixedZ: Number.isFinite(agent.z) ? Number(agent.z) : null,
             autonomy: autonomousResting
               ? (previousState && previousState.autonomy

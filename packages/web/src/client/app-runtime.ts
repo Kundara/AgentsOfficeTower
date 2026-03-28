@@ -117,7 +117,8 @@ export function startClientApp(): void {
       const SCENE_RECENT_LEAD_LIMIT = 4;
       const SESSION_RECENT_LEAD_LIMIT = 10;
       const RESTING_DORMANT_MS = 15 * 60 * 1000;
-      const DEPARTING_AGENT_TTL_MS = 520;
+      const DEPARTING_AGENT_TTL_MS = 900;
+      const SUBAGENT_DEPARTING_AGENT_TTL_MS = 3200;
       let lastSceneRenderToken = null;
       let lastFleetSemanticToken = null;
       const recentLeadDisplayMemory = new Map();
@@ -308,6 +309,12 @@ export function startClientApp(): void {
         }
         const target = sceneStateDraft || renderedAgentSceneState;
         target.set(agentKey(snapshot.projectRoot, agent), sceneState);
+      }
+
+      function departingAgentTtlMs(agent) {
+        return agent && agent.parentThreadId
+          ? SUBAGENT_DEPARTING_AGENT_TTL_MS
+          : DEPARTING_AGENT_TTL_MS;
       }
 
       function triggerWorkstationFileChangeEffect(entry) {
@@ -2879,7 +2886,7 @@ export function startClientApp(): void {
       }
 
       function isBusyAgent(agent) {
-        return agent.isCurrent === true;
+        return agent.isCurrent === true || isRuntimeActiveLocalAgent(agent);
       }
 
       function parseAgentUpdatedAt(value) {
@@ -2954,8 +2961,28 @@ export function startClientApp(): void {
         }
       }
 
+      const SUBAGENT_RECENT_SESSION_GRACE_MS = 12000;
+
+      function keepFinishedSubagentSession(agent) {
+        if (!agent || !agent.parentThreadId) {
+          return false;
+        }
+        if (agent.isCurrent === true || agent.isOngoing === true) {
+          return true;
+        }
+        const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
+        return Number.isFinite(updatedAt)
+          && Date.now() - updatedAt <= SUBAGENT_RECENT_SESSION_GRACE_MS;
+      }
+
       function isRecentSessionCandidate(agent) {
-        return agent.source !== "cloud" && agent.source !== "presence";
+        if (agent.source === "cloud" || agent.source === "presence") {
+          return false;
+        }
+        if (!agent.parentThreadId) {
+          return true;
+        }
+        return keepFinishedSubagentSession(agent);
       }
 
       function recentLeadAgents(snapshot, limit = SCENE_RECENT_LEAD_LIMIT) {
@@ -3093,10 +3120,10 @@ export function startClientApp(): void {
 
       function cloneRecentFallbackAgent(sourceSnapshot, agent) {
         const summary = normalizeDisplayText(sourceSnapshot.projectRoot, agent.detail)
-          || latestAgentMessage(agent)
+          || latestAgentMessage(sourceSnapshot.projectRoot, agent)
           || "[" + String(agent.state || "idle") + "]";
         const projectPrefix = projectLabel(sourceSnapshot.projectRoot);
-        const latestMessage = latestAgentMessage(agent);
+        const latestMessage = latestAgentMessage(sourceSnapshot.projectRoot, agent);
         return {
           ...agent,
           isCurrent: false,
@@ -3198,6 +3225,37 @@ export function startClientApp(): void {
           .filter(Boolean)
           .map((word) => word[0] ? word[0].toUpperCase() + word.slice(1) : word)
           .join(" ");
+      }
+
+      function compactPathyLabel(snapshot, label) {
+        const normalized = normalizeDisplayText(snapshot && snapshot.projectRoot, label);
+        if (!normalized) {
+          return "";
+        }
+        const match = normalized.match(/^(Read|Review|Explore|Search)\s+(.+)$/);
+        if (!match) {
+          return normalized;
+        }
+        const [, verb, subject] = match;
+        if (!/[\\/]/.test(subject)) {
+          return normalized;
+        }
+        const fileLabel = notificationFileName(snapshot && snapshot.projectRoot, subject, subject);
+        return fileLabel ? verb + " " + fileLabel : normalized;
+      }
+
+      function displayAgentLabel(snapshot, agent) {
+        if (!agent) {
+          return "Agent";
+        }
+        const preferred = typeof agent.nickname === "string" && agent.nickname.trim().length > 0
+          ? agent.nickname
+          : agent.label;
+        const compact = compactPathyLabel(snapshot, preferred);
+        if (compact) {
+          return compact;
+        }
+        return normalizeDisplayText(snapshot && snapshot.projectRoot, preferred) || preferred || "Agent";
       }
 
       function pluralizeWord(word, count) {
@@ -3671,8 +3729,15 @@ export function startClientApp(): void {
   // src/client/runtime/seating-source.ts
 
       const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;
-      const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 1200;
+      const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;
       const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
+
+      function isRuntimeActiveLocalAgent(agent) {
+        return agent
+          && agent.source === "local"
+          && agent.statusText === "active"
+          && agent.state !== "waiting";
+      }
 
       function workstationDoneGraceMs(agent) {
         return agent && agent.parentThreadId
@@ -3718,6 +3783,9 @@ export function startClientApp(): void {
             if (agent.state === "waiting") {
               return false;
             }
+            if (isRuntimeActiveLocalAgent(agent)) {
+              return true;
+            }
             if ((agent.state === "idle" || agent.state === "done") && hasCurrentLocalSeatCooldown(agent)) {
               return true;
             }
@@ -3754,7 +3822,7 @@ export function startClientApp(): void {
         if (!agent || agent.source === "cloud" || agent.source === "presence") {
           return false;
         }
-        return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;
+        return shouldSeatAtWorkstation(agent) || agent.isCurrent === true || isRuntimeActiveLocalAgent(agent);
       }
 
 
@@ -3862,13 +3930,13 @@ export function startClientApp(): void {
         return agentProvenanceLabel(agent);
       }
 
-      function latestAgentMessage(agent) {
-        const text = normalizeDisplayText("", agent && agent.latestMessage ? agent.latestMessage : "");
+      function latestAgentMessage(projectRoot, agent) {
+        const text = normalizeDisplayText(projectRoot, agent && agent.latestMessage ? agent.latestMessage : "");
         return text || "";
       }
 
       function agentHoverSummary(snapshot, agent) {
-        const message = latestAgentMessage(agent);
+        const message = latestAgentMessage(snapshot.projectRoot, agent);
         if (message) {
           return { text: message, source: "agent" };
         }
@@ -4300,7 +4368,7 @@ export function startClientApp(): void {
       function renderAgentHover(snapshot, agent, options = {}) {
         const lead = parentLabelFor(snapshot, agent);
         const summary = agentHoverSummary(snapshot, agent);
-        const hoverTitle = agent.nickname || agent.label;
+        const hoverTitle = displayAgentLabel(snapshot, agent);
         const className = options.className || "agent-hover";
         const styleAttr = options.style ? ` style="${escapeHtml(options.style)}"` : "";
         const summaryClass = summary.source === "user"
@@ -4628,6 +4696,8 @@ export function startClientApp(): void {
           height: Math.round(sprite.h * scale),
           flipX: options.flipX === true,
           alpha: options.alpha ?? 1,
+          depthFootY: Number.isFinite(options.depthFootY) ? Math.round(options.depthFootY) : null,
+          depthBias: Number.isFinite(options.depthBias) ? Number(options.depthBias) : null,
           z
         };
       }
@@ -4720,6 +4790,7 @@ export function startClientApp(): void {
         })();
         const absoluteCellX = Math.round(options.absoluteX ?? x);
         const absoluteCellY = Math.round(options.absoluteY ?? y);
+        const deskDepthFootY = absoluteCellY + deskY + deskHeight;
         const seatedState = state === "editing"
           || state === "thinking"
           || state === "planning"
@@ -4735,15 +4806,21 @@ export function startClientApp(): void {
           shell: [
             buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, {
               flipX: mirrored,
-              enteringReveal: options.enteringReveal === true
+              enteringReveal: options.enteringReveal === true,
+              depthFootY: deskDepthFootY,
+              depthBias: 0
             }),
             buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, {
               flipX: mirrored,
-              enteringReveal: options.enteringReveal === true
+              enteringReveal: options.enteringReveal === true,
+              depthFootY: deskDepthFootY,
+              depthBias: -10
             }),
             buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, {
               flipX: mirrored,
-              enteringReveal: options.enteringReveal === true
+              enteringReveal: options.enteringReveal === true,
+              depthFootY: deskDepthFootY,
+              depthBias: 10
             })
           ],
           glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
@@ -4763,7 +4840,8 @@ export function startClientApp(): void {
                 width: Math.round(avatarWidth),
                 height: Math.round(avatarHeight),
                 flipX: avatarPose.flip === true,
-                z: seatedState ? 12 : null,
+                depthFootY: seatedState ? deskDepthFootY : null,
+                depthBias: seatedState ? -5 : null,
                 state,
                 appearance: agent.appearance
               }
@@ -5686,8 +5764,8 @@ export function startClientApp(): void {
               }
               if (entry.kind === "bob") {
                 entry.sprite.y = entry.baseY + Math.round(Math.sin((now + entry.phase) / 220) * 1);
-                if (Number.isFinite(entry.depthBias)) {
-                  entry.sprite.zIndex = Number(entry.depthBias);
+                if (typeof renderer.syncMotionStateDepth === "function") {
+                  renderer.syncMotionStateDepth(entry);
                 }
                 return;
               }
@@ -6533,7 +6611,16 @@ function roleTint(role) {
             sprite.scale.x = -Math.abs(sprite.scale.x || 1);
             sprite.x += snappedWidth;
           }
-          sprite.zIndex = definition.z || 5;
+          if (Number.isFinite(definition.depthFootY)) {
+            applyFootDepth(
+              sprite,
+              Number(definition.depthFootY) - snappedHeight,
+              snappedHeight,
+              Number.isFinite(definition.depthBias) ? Number(definition.depthBias) : 0
+            );
+          } else {
+            sprite.zIndex = definition.z || 5;
+          }
           if (!screenshotMode && definition.enteringReveal === true) {
             sprite.visible = false;
           }
@@ -6571,7 +6658,14 @@ function roleTint(role) {
             avatar.x += snappedWidth;
           }
           const fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;
-          if (fixedZ !== null) {
+          if (Number.isFinite(agent.depthFootY)) {
+            applyFootDepth(
+              avatar,
+              Number(agent.depthFootY) - snappedHeight,
+              snappedHeight,
+              Number.isFinite(agent.depthBias) ? Number(agent.depthBias) : zIndex
+            );
+          } else if (fixedZ !== null) {
             avatar.zIndex = fixedZ;
           } else {
             applyFootDepth(avatar, avatar.y, snappedHeight, zIndex);
@@ -6590,7 +6684,9 @@ function roleTint(role) {
               .stroke({ color: 0x1f2e29, width: 2, alpha: 0.8 });
             bubbleBox.x = bubbleX;
             bubbleBox.y = bubbleY;
-            bubbleBox.zIndex = fixedZ !== null ? fixedZ + 1 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 1);
+            bubbleBox.zIndex = Number.isFinite(agent.depthFootY)
+              ? sceneFootDepth(Number(agent.depthFootY) - snappedHeight, snappedHeight, (Number(agent.depthBias) || zIndex) + 1)
+              : (fixedZ !== null ? fixedZ + 1 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 1));
             renderer.root.addChild(bubbleBox);
             createdNodes.push(bubbleBox);
             bubbleText = createPixiText(renderer, agent.bubble, {
@@ -6601,7 +6697,9 @@ function roleTint(role) {
             });
             bubbleText.x = bubbleX + Math.round((bubbleWidth - bubbleText.width) / 2);
             bubbleText.y = bubbleY + Math.round((12 - bubbleText.height) / 2) - 1;
-            bubbleText.zIndex = fixedZ !== null ? fixedZ + 2 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 2);
+            bubbleText.zIndex = Number.isFinite(agent.depthFootY)
+              ? sceneFootDepth(Number(agent.depthFootY) - snappedHeight, snappedHeight, (Number(agent.depthBias) || zIndex) + 2)
+              : (fixedZ !== null ? fixedZ + 2 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 2));
             renderer.root.addChild(bubbleText);
             createdNodes.push(bubbleText);
           }
@@ -6610,12 +6708,43 @@ function roleTint(role) {
             avatar,
             bubbleBox,
             bubbleText,
-            depthBias: fixedZ !== null ? fixedZ : zIndex
+            depthBias: Number.isFinite(agent.depthBias) ? Number(agent.depthBias) : (fixedZ !== null ? fixedZ : zIndex),
+            depthFootY: Number.isFinite(agent.depthFootY) ? Number(agent.depthFootY) : null
           };
         }
 
         function syncMotionStateDepth(motionState) {
           if (!motionState || !motionState.sprite) {
+            return;
+          }
+          if (Number.isFinite(motionState.depthFootY)) {
+            applyFootDepth(
+              motionState.sprite,
+              Number(motionState.depthFootY) - motionState.height,
+              motionState.height,
+              Number.isFinite(motionState.depthBias) ? Number(motionState.depthBias) : 0
+            );
+            if (motionState.bubbleBox) {
+              motionState.bubbleBox.zIndex = sceneFootDepth(
+                Number(motionState.depthFootY) - motionState.height,
+                motionState.height,
+                (Number(motionState.depthBias) || 0) + 1
+              );
+            }
+            if (motionState.bubbleText) {
+              motionState.bubbleText.zIndex = sceneFootDepth(
+                Number(motionState.depthFootY) - motionState.height,
+                motionState.height,
+                (Number(motionState.depthBias) || 0) + 2
+              );
+            }
+            if (motionState.heldItemSprite) {
+              motionState.heldItemSprite.zIndex = sceneFootDepth(
+                Number(motionState.depthFootY) - motionState.height,
+                motionState.height,
+                (Number(motionState.depthBias) || 0) + 3
+              );
+            }
             return;
           }
           if (Number.isFinite(motionState.fixedZ)) {
@@ -6688,6 +6817,7 @@ function roleTint(role) {
             previousState.state = agent.state || "idle";
             previousState.spriteUrl = agent.sprite;
             previousState.depthBias = avatarVisual.depthBias;
+            previousState.depthFootY = avatarVisual.depthFootY;
             previousState.fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;
             previousState.targetFlipX = agent.flipX === true;
             previousState.slotId = agent.slotId || previousState.slotId || null;
@@ -6780,6 +6910,7 @@ function roleTint(role) {
               : (typeof previousState?.mirrored === "boolean" ? previousState.mirrored : null),
             heldItemSprite: null,
             depthBias: avatarVisual.depthBias,
+            depthFootY: avatarVisual.depthFootY,
             fixedZ: Number.isFinite(agent.z) ? Number(agent.z) : null,
             autonomy: autonomousResting
               ? (previousState && previousState.autonomy
@@ -7517,16 +7648,17 @@ function focusKeysIntersect(keys, focusedKeys) {
         return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
           const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
           const appearanceAgentId = agent.sourceAgentId || agent.id;
+          const title = displayAgentLabel(snapshot, agent);
           const appearanceAction = agent.network
             ? ""
             : `<button data-action="cycle-look" data-project-root="${escapeHtml(appearanceProjectRoot)}" data-agent-id="${escapeHtml(appearanceAgentId)}">Cycle look</button>`;
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
           const description = normalizeDisplayText(snapshot.projectRoot, agent.detail)
-            || latestAgentMessage(agent)
+            || latestAgentMessage(snapshot.projectRoot, agent)
             || `[${agent.state}]`;
           const sourceLabel = agentNetworkLabel(agent);
           const fullDescription = sourceLabel ? `${sourceLabel} · ${description}` : description;
-          return `<article class="session-card" tabindex="0" data-focus-keys="${focusKeys}"><div class="session-card-header"><strong class="session-card-title">${escapeHtml(agent.label)}</strong><div class="card-actions">${appearanceAction}</div></div><div class="muted session-card-description" title="${escapeHtml(fullDescription)}">${escapeHtml(fullDescription)}</div></article>`;
+          return `<article class="session-card" tabindex="0" data-focus-keys="${focusKeys}"><div class="session-card-header"><strong class="session-card-title">${escapeHtml(title)}</strong><div class="card-actions">${appearanceAction}</div></div><div class="muted session-card-description" title="${escapeHtml(fullDescription)}">${escapeHtml(fullDescription)}</div></article>`;
         }).join("");
       }
 
@@ -7543,16 +7675,17 @@ function focusKeysIntersect(keys, focusedKeys) {
         return renderNeedsAttention(projects) + entries.map(({ snapshot, agent }) => {
           const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
           const appearanceAgentId = agent.sourceAgentId || agent.id;
+          const title = displayAgentLabel(snapshot, agent);
           const appearanceAction = agent.network
             ? ""
             : `<button data-action="cycle-look" data-project-root="${escapeHtml(appearanceProjectRoot)}" data-agent-id="${escapeHtml(appearanceAgentId)}">Cycle look</button>`;
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
           const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail)
-            || latestAgentMessage(agent)
+            || latestAgentMessage(snapshot.projectRoot, agent)
             || `[${agent.state}]`;
           const sourceLabel = agentNetworkLabel(agent);
           const description = projectLabel(snapshot.projectRoot) + " · " + (sourceLabel ? sourceLabel + " · " : "") + detail;
-          return `<article class="session-card" tabindex="0" data-focus-keys="${focusKeys}"><div class="session-card-header"><strong class="session-card-title">${escapeHtml(agent.label)}</strong><div class="card-actions">${appearanceAction}</div></div><div class="muted session-card-description" title="${escapeHtml(description)}">${escapeHtml(description)}</div></article>`;
+          return `<article class="session-card" tabindex="0" data-focus-keys="${focusKeys}"><div class="session-card-header"><strong class="session-card-title">${escapeHtml(title)}</strong><div class="card-actions">${appearanceAction}</div></div><div class="muted session-card-description" title="${escapeHtml(description)}">${escapeHtml(description)}</div></article>`;
         }).join("");
       }
 
@@ -7664,13 +7797,13 @@ function focusKeysIntersect(keys, focusedKeys) {
               existingGhost.roomId = entry.roomId;
               existingGhost.agent = entry.agent;
               existingGhost.sceneState = sceneState;
-              existingGhost.expiresAt = now + DEPARTING_AGENT_TTL_MS;
+              existingGhost.expiresAt = now + departingAgentTtlMs(entry.agent);
               continue;
             }
             departingAgents.push({
               ...entry,
               sceneState,
-              expiresAt: now + DEPARTING_AGENT_TTL_MS
+              expiresAt: now + departingAgentTtlMs(entry.agent)
             });
           }
         }

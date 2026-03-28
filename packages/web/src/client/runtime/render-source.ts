@@ -101,13 +101,13 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return agentProvenanceLabel(agent);
       }
 
-      function latestAgentMessage(agent) {
-        const text = normalizeDisplayText("", agent && agent.latestMessage ? agent.latestMessage : "");
+      function latestAgentMessage(projectRoot, agent) {
+        const text = normalizeDisplayText(projectRoot, agent && agent.latestMessage ? agent.latestMessage : "");
         return text || "";
       }
 
       function agentHoverSummary(snapshot, agent) {
-        const message = latestAgentMessage(agent);
+        const message = latestAgentMessage(snapshot.projectRoot, agent);
         if (message) {
           return { text: message, source: "agent" };
         }
@@ -539,7 +539,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
       function renderAgentHover(snapshot, agent, options = {}) {
         const lead = parentLabelFor(snapshot, agent);
         const summary = agentHoverSummary(snapshot, agent);
-        const hoverTitle = agent.nickname || agent.label;
+        const hoverTitle = displayAgentLabel(snapshot, agent);
         const className = options.className || "agent-hover";
         const styleAttr = options.style ? \` style="\${escapeHtml(options.style)}"\` : "";
         const summaryClass = summary.source === "user"
@@ -867,6 +867,8 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           height: Math.round(sprite.h * scale),
           flipX: options.flipX === true,
           alpha: options.alpha ?? 1,
+          depthFootY: Number.isFinite(options.depthFootY) ? Math.round(options.depthFootY) : null,
+          depthBias: Number.isFinite(options.depthBias) ? Number(options.depthBias) : null,
           z
         };
       }
@@ -959,6 +961,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         })();
         const absoluteCellX = Math.round(options.absoluteX ?? x);
         const absoluteCellY = Math.round(options.absoluteY ?? y);
+        const deskDepthFootY = absoluteCellY + deskY + deskHeight;
         const seatedState = state === "editing"
           || state === "thinking"
           || state === "planning"
@@ -974,15 +977,21 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           shell: [
             buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, {
               flipX: mirrored,
-              enteringReveal: options.enteringReveal === true
+              enteringReveal: options.enteringReveal === true,
+              depthFootY: deskDepthFootY,
+              depthBias: 0
             }),
             buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, {
               flipX: mirrored,
-              enteringReveal: options.enteringReveal === true
+              enteringReveal: options.enteringReveal === true,
+              depthFootY: deskDepthFootY,
+              depthBias: -10
             }),
             buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, {
               flipX: mirrored,
-              enteringReveal: options.enteringReveal === true
+              enteringReveal: options.enteringReveal === true,
+              depthFootY: deskDepthFootY,
+              depthBias: 10
             })
           ],
           glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
@@ -1002,7 +1011,8 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
                 width: Math.round(avatarWidth),
                 height: Math.round(avatarHeight),
                 flipX: avatarPose.flip === true,
-                z: seatedState ? 12 : null,
+                depthFootY: seatedState ? deskDepthFootY : null,
+                depthBias: seatedState ? -5 : null,
                 state,
                 appearance: agent.appearance
               }

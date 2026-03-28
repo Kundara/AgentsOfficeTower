@@ -58,7 +58,8 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       const SCENE_RECENT_LEAD_LIMIT = 4;
       const SESSION_RECENT_LEAD_LIMIT = 10;
       const RESTING_DORMANT_MS = 15 * 60 * 1000;
-      const DEPARTING_AGENT_TTL_MS = 520;
+      const DEPARTING_AGENT_TTL_MS = 900;
+      const SUBAGENT_DEPARTING_AGENT_TTL_MS = 3200;
       let lastSceneRenderToken = null;
       let lastFleetSemanticToken = null;
       const recentLeadDisplayMemory = new Map();
@@ -249,6 +250,12 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
         }
         const target = sceneStateDraft || renderedAgentSceneState;
         target.set(agentKey(snapshot.projectRoot, agent), sceneState);
+      }
+
+      function departingAgentTtlMs(agent) {
+        return agent && agent.parentThreadId
+          ? SUBAGENT_DEPARTING_AGENT_TTL_MS
+          : DEPARTING_AGENT_TTL_MS;
       }
 
       function triggerWorkstationFileChangeEffect(entry) {
