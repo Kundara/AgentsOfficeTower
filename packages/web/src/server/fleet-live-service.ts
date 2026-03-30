@@ -7,6 +7,7 @@ import {
   describeStoredMultiplayerSettings,
   discoverProjects,
   listCloudTasks,
+  projectPathIdentityKey,
   ProjectLiveMonitor,
   scaffoldRoomsFile,
   setStoredCursorApiKey,
@@ -94,6 +95,10 @@ export class FleetLiveService {
       peerCount: 0,
       note: "Multiplayer transport not configured."
     };
+  }
+
+  getCurrentProjects(): ProjectDescriptor[] {
+    return [...(this.projects.length > 0 ? this.projects : this.seedProjects)];
   }
 
   async getProjects(): Promise<ProjectDescriptor[]> {
@@ -204,15 +209,26 @@ export class FleetLiveService {
     const normalizedSeeds = this.seedProjects
       .map((project) => {
         const root = canonicalizeProjectPath(project.root);
-        return root ? { root, label: project.label } : null;
+        const identityKey = projectPathIdentityKey(root);
+        return root && identityKey ? { root, label: project.label, identityKey } : null;
       })
-      .filter((project): project is ProjectDescriptor => Boolean(project));
+      .filter((project): project is ProjectDescriptor & { identityKey: string } => Boolean(project));
+    const preferredRootsByIdentity = new Map(normalizedSeeds.map((project) => [project.identityKey, project.root]));
 
+    const discoveredRoots = discoveredProjects
+      .map((project) => {
+        const identityKey = projectPathIdentityKey(project.root);
+        if (!identityKey) {
+          return null;
+        }
+        return preferredRootsByIdentity.get(identityKey) ?? project.root;
+      })
+      .filter((root): root is string => Boolean(root));
     const nextProjectRoots = this.explicitProjects
       ? normalizedSeeds.map((project) => project.root)
       : (
         rawDiscoveredProjects.length > 0
-          ? discoveredProjects.map((project) => project.root)
+          ? discoveredRoots
           : normalizedSeeds.map((project) => project.root)
       );
     const nextProjects = buildProjectDescriptors(nextProjectRoots);

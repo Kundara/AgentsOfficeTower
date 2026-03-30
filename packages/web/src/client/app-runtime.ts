@@ -4051,6 +4051,7 @@ export function startClientApp(): void {
       const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;
       const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;
       const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
+      const QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS = 3 * 60 * 1000;
 
       function isRuntimeActiveLocalAgent(agent) {
         return agent
@@ -4064,12 +4065,12 @@ export function startClientApp(): void {
           : TOP_LEVEL_DONE_WORKSTATION_GRACE_MS;
       }
 
-      function hasCurrentLocalDeskGrace(agent) {
+      function hasCurrentLocalDeskGrace(agent, maxAgeMs = CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS) {
         const updatedAt = parseAgentUpdatedAt(agent && agent.updatedAt);
         return agent && agent.isCurrent === true
           && isDeskLiveLocalState(agent.state)
           && Number.isFinite(updatedAt)
-          && Date.now() - updatedAt <= CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS;
+          && Date.now() - updatedAt <= maxAgeMs;
       }
 
       function hasCurrentLocalSeatCooldown(agent) {
@@ -4096,7 +4097,8 @@ export function startClientApp(): void {
                 && Number.isFinite(updatedAt)
                 && Date.now() - updatedAt <= workstationDoneGraceMs(agent);
             }
-            return agent.isOngoing === true || hasCurrentLocalDeskGrace(agent);
+            return agent.isOngoing === true
+              || hasCurrentLocalDeskGrace(agent, QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS);
           }
           if (agent.statusText === "active") {
             if (isRuntimeActiveLocalAgent(agent)) {

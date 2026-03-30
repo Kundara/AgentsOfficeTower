@@ -47,7 +47,6 @@ export function buildCodexCommandCandidates(input: {
   };
 
   pushCandidate(input.codexCliPath, "CODEX_CLI_PATH override");
-  pushCandidate(input.platform === "win32" ? "codex.cmd" : "codex", "Codex CLI on PATH");
   if (input.platform === "win32") {
     const windowsWslCommand = input.windowsWslCommand ?? null;
     pushCandidate(
@@ -55,7 +54,13 @@ export function buildCodexCommandCandidates(input: {
       "Codex CLI via WSL",
       windowsWslCommand
     );
+    pushCandidate(
+      Array.isArray(windowsWslCommand) ? "C:\\Windows\\System32\\wsl.exe" : null,
+      "Codex CLI via WSL",
+      windowsWslCommand
+    );
   }
+  pushCandidate(input.platform === "win32" ? "codex.cmd" : "codex", "Codex CLI on PATH");
 
   if (input.platform === "darwin") {
     for (const bundlePath of input.macAppBundlePaths ?? []) {
@@ -135,8 +140,19 @@ export async function listCodexCommandCandidates(): Promise<CodexCommandCandidat
 }
 
 async function resolveWindowsWslCodexCommand(): Promise<string[] | null> {
-  await execFileAsync("wsl.exe", ["--exec", "sh", "-lc", "command -v codex >/dev/null 2>&1"]);
-  return ["--exec", "codex"];
+  const candidates = [
+    "wsl.exe",
+    "C:\\Windows\\System32\\wsl.exe"
+  ];
+  for (const candidate of candidates) {
+    try {
+      await execFileAsync(candidate, ["--exec", "sh", "-lc", "command -v codex >/dev/null 2>&1"]);
+      return ["--exec", "codex"];
+    } catch {
+      // Try next candidate.
+    }
+  }
+  return null;
 }
 
 async function resolveWindowsAppCodexPath(): Promise<string | null> {

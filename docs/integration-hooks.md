@@ -95,6 +95,7 @@ Resolution details:
 - on Windows and Windows+WSL, fall back to the Microsoft Store Codex app by copying its packaged `app/resources` bundle into `%LOCALAPPDATA%\\CodexAgentsOffice\\cache\\windows-store\\<version>` and spawning the cached `codex.exe`
 - when both a native Windows CLI and a WSL-side Codex CLI exist, `codex` on `PATH` still wins unless `CODEX_CLI_PATH` overrides it
 - when both a WSL-side Codex CLI and the Windows app exist, the WSL CLI now wins before the app fallback unless `CODEX_CLI_PATH` overrides it
+- the VS Code embedded server on Windows now launches the WSL runtime through a login shell so `CODEX_HOME` and related environment defaults are preserved
 
 ### `thread/list`
 
@@ -160,6 +161,7 @@ How we use it:
 - infer current state from the last relevant turn item
 - infer ongoing-ness from the latest turn as well as runtime thread status, because `thread/list` / `thread/read` can still report `status.type = notLoaded` for persisted threads that have a current in-progress turn payload
 - debounce `thread/status/changed -> notLoaded` for about 3 seconds and confirm it with a reread before clearing ongoing local work
+- keep quiet desk-live local work current for about 3 minutes when it is still subscribed or sitting in a transient `notLoaded` transport state
 - infer subagent parentage and depth
 - generate `resumeCommand`
 - map the session into project rooms using extracted paths
@@ -179,7 +181,7 @@ How we use it:
 - active threads and threads updated in the last 10 minutes are resumed on the observer connection
 - active threads are included in that tracked set even when they fall outside the normal recent-thread limit, so startup discovery does not wait for a fresh delta before subscribing them
 - the observer keeps at most 8 project threads subscribed at once
-- subscription sync now runs in the background so the web server can render before slow desktop thread attaches finish
+- subscription sync now runs in the background so the web server can render and publish its first snapshot before slow desktop thread attaches finish
 - desktop-backed `thread/resume` attaches can take tens of seconds in practice, so the observer now gives subscription sync a 60-second timeout budget before degrading that thread back to `readOnly`
 - stale observer-owned subscriptions are unsubscribed
 - subscribed threads surface as `liveSubscription = subscribed`; older threads stay `readOnly`
@@ -221,6 +223,7 @@ Current-workload occupancy rules on top of that state:
 - browser desk seating now treats local `status = active` as authoritative for occupancy, so active Codex sessions remain on desks even when the summarized state currently reads `waiting`, `blocked`, or recent `done`
 - a `notLoaded` thread still stays `isCurrent` when `thread/read` shows its latest turn is `inProgress`
 - observer-owned unload/runtime-idle transitions such as `thread/closed` or `thread/status/changed -> notLoaded` are not treated as immediate stop signals by themselves; `notLoaded` now waits about 3 seconds and a reread confirmation before the monitor clears ongoing local state
+- subscribed or transiently `notLoaded` desk-live local states now keep currentness and workstation eligibility for about 3 minutes between updates before settling to rest
 - local desk occupancy no longer uses a generic freshness fallback for non-idle summaries; if a thread is not ongoing, not waiting on the user, and not inside the stop grace window, it is no longer `isCurrent`
 - once a top-level thread actually stops, it remains current and workstation-seated for about 5 seconds so final reply text can still surface before the lead cools into rec-area visibility
 - stale local `notLoaded` threads no longer keep a workstation just because they are still recent or subscribed; desk seating now requires actual ongoing work or the explicit stop grace
@@ -861,6 +864,8 @@ That keeps:
 - state naming consistent
 - room mapping consistent
 - Claude/Codex coexistence consistent
+
+The VS Code panel now hosts the same office renderer used by the browser surface through an embedded local web server for the current workspace, rather than a separate hand-built room-grid webview.
 
 ## Hooks We Are Not Fully Riding Yet
 

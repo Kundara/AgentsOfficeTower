@@ -110,7 +110,11 @@ test("client runtime keeps current local desk-live work on a workstation through
   );
   assert.match(
     seatingSource,
-    /function hasCurrentLocalDeskGrace\(agent\) {\n\s+const updatedAt = parseAgentUpdatedAt\(agent && agent\.updatedAt\);/
+    /const QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS = 3 \* 60 \* 1000;/
+  );
+  assert.match(
+    seatingSource,
+    /function hasCurrentLocalDeskGrace\(agent, maxAgeMs = CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS\) {\n\s+const updatedAt = parseAgentUpdatedAt\(agent && agent\.updatedAt\);/
   );
   assert.match(
     seatingSource,
@@ -122,7 +126,7 @@ test("client runtime keeps current local desk-live work on a workstation through
   );
   assert.match(
     seatingSource,
-    /return agent\.isOngoing === true \|\| hasCurrentLocalDeskGrace\(agent\);/
+    /return agent\.isOngoing === true\n\s+\|\| hasCurrentLocalDeskGrace\(agent, QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS\);/
   );
 });
 

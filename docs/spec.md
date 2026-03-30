@@ -136,6 +136,7 @@ Current browser settings surfaces are:
 - Active local subagents should remain visible from that same runtime-active signal even if the transient `isCurrent` flag has already moved to a sibling update or the parent thread.
 - Waiting sessions stay on-desk; only resting lead sessions belong in the rec area after the session is no longer active at the app-server/runtime level.
 - A local thread that is still truly ongoing may keep its workstation through short-lived freshness/current signal dips between polls, and `notLoaded` locals now get a short 3-second confirmation cooldown before the monitor accepts that unload as real.
+- Quiet local desk-live work now gets a longer about-3-minute stay-on-desk window after its last update when it is still subscribed or sitting in a transient `notLoaded` state, so Codex does not walk to the rec area between slow reply chunks.
 - Workstation release should be conservative. Ordinary poll jitter, UI rerenders, debug toggles, or temporary freshness gaps must not pull a still-working agent off a desk.
 - A workstation should only be released when the thread has actually settled into a resting/finished state according to the browser placement rules, with the explicit post-stop cooldown described below.
 - The rec area should keep at most the 4 most recent lead sessions visible;
@@ -347,6 +348,7 @@ Current-workload rules:
 - local threads stay current while the live monitor still considers them ongoing
 - `notLoaded` threads still stay current when `thread/read` shows an in-progress turn
 - observer-owned unload/runtime-idle transitions do not count as an immediate stop by themselves; `thread/status/changed -> notLoaded` now waits about 3 seconds and a reread confirmation before the monitor drops the thread out of ongoing work
+- subscribed or transiently `notLoaded` local desk-live states can stay current for about 3 minutes between updates before they settle into rest
 - once a local top-level thread actually stops, it should keep its workstation for about 5 seconds so the last reply can still be read before cooling into rec-area idle visibility
 - stale local `notLoaded` threads that are no longer ongoing must not keep a workstation just because freshness/currentness still marks them recent
 - completed process-only items such as `plan`, `reasoning`, and `contextCompaction` should settle to `done` while recent, then age to `idle`; they must not leave a finished thread stuck in synthetic `thinking`

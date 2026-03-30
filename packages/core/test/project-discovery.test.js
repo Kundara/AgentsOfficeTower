@@ -9,7 +9,8 @@ const {
   discoverCodexConfiguredProjects,
   extractCodexConfiguredProjectRoots,
   humanizeProjectLabel,
-  projectLabelFromRoot
+  projectLabelFromRoot,
+  sameProjectPath
 } = require("../dist/project-paths.js");
 
 test("project discovery scans a wider thread window than the requested project count", () => {
@@ -45,6 +46,17 @@ trust_level = "trusted"
       "/mnt/f/AI/CodexAgentsOffice",
       "/mnt/c/Users/kunda/Back Button Sensation"
     ]
+  );
+});
+
+test("sameProjectPath treats Windows-backed WSL paths as case-insensitive", () => {
+  assert.equal(
+    sameProjectPath("/mnt/f/AI/CodexAgentsOffice", "/mnt/f/ai/codexagentsoffice"),
+    true
+  );
+  assert.equal(
+    sameProjectPath("/workspaces/CodexAgentsOffice", "/workspaces/codexagentsoffice"),
+    false
   );
 });
 

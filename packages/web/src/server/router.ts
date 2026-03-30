@@ -59,7 +59,7 @@ async function handleHomeRoute(context: RequestContext): Promise<boolean> {
     return true;
   }
 
-  sendHtml(context.response, renderHtml(context.options, await context.service.getProjects()));
+  sendHtml(context.response, renderHtml(context.options, context.service.getCurrentProjects()));
   return true;
 }
 
@@ -156,7 +156,11 @@ async function handleServerMetaRoute(context: RequestContext): Promise<boolean> 
     return false;
   }
 
-  sendJson(context.response, 200, buildServerMeta(context.options, await context.service.getProjects(), context.service.getMultiplayerStatus()));
+  sendJson(
+    context.response,
+    200,
+    buildServerMeta(context.options, context.service.getCurrentProjects(), context.service.getMultiplayerStatus())
+  );
   return true;
 }
 

@@ -42,6 +42,10 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/[\\/]+$/, "");
 }
 
+function isWindowsBackedWslPath(value: string): boolean {
+  return /^\/mnt\/[a-z]\//i.test(value);
+}
+
 export function canonicalizeProjectPath(input: string | null | undefined): string | null {
   if (typeof input !== "string") {
     return null;
@@ -64,6 +68,17 @@ export function canonicalizeProjectPath(input: string | null | undefined): strin
   }
 
   return trimTrailingSlash(raw.replace(/\\/g, "/"));
+}
+
+export function projectPathIdentityKey(input: string | null | undefined): string | null {
+  const canonical = canonicalizeProjectPath(input);
+  if (!canonical) {
+    return null;
+  }
+
+  return isWindowsBackedWslPath(canonical)
+    ? canonical.toLowerCase()
+    : canonical;
 }
 
 export function projectLabelFromRoot(projectRoot: string): string {
@@ -108,10 +123,11 @@ export function extractCodexConfiguredProjectRoots(configText: string): string[]
   for (const match of configText.matchAll(matcher)) {
     const decodedRoot = decodeTomlBasicString(match[1] ?? "");
     const root = canonicalizeProjectPath(decodedRoot);
-    if (!root || seenRoots.has(root)) {
+    const identityKey = projectPathIdentityKey(root);
+    if (!root || !identityKey || seenRoots.has(identityKey)) {
       continue;
     }
-    seenRoots.add(root);
+    seenRoots.add(identityKey);
     roots.push(root);
   }
 
@@ -119,9 +135,9 @@ export function extractCodexConfiguredProjectRoots(configText: string): string[]
 }
 
 export function sameProjectPath(left: string | null | undefined, right: string | null | undefined): boolean {
-  const leftCanonical = canonicalizeProjectPath(left);
-  const rightCanonical = canonicalizeProjectPath(right);
-  return Boolean(leftCanonical && rightCanonical && leftCanonical === rightCanonical);
+  const leftKey = projectPathIdentityKey(left);
+  const rightKey = projectPathIdentityKey(right);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
 }
 
 export function filterThreadsForProject(projectRoot: string, threads: CodexThread[]): CodexThread[] {
@@ -204,14 +220,19 @@ export async function discoverCodexProjects(limit = 20): Promise<DiscoveredProje
         continue;
       }
 
-      const existing = projects.get(root);
+      const identityKey = projectPathIdentityKey(root);
+      if (!identityKey) {
+        continue;
+      }
+
+      const existing = projects.get(identityKey);
       if (existing) {
         existing.updatedAt = Math.max(existing.updatedAt, thread.updatedAt);
         existing.count += 1;
         continue;
       }
 
-      projects.set(root, {
+      projects.set(identityKey, {
         root,
         label: projectLabelFromRoot(root),
         updatedAt: thread.updatedAt,
@@ -235,7 +256,12 @@ export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]>
   ]);
 
   for (const project of discoveredProjectLists.flat()) {
-    const existing = merged.get(project.root);
+    const identityKey = projectPathIdentityKey(project.root);
+    if (!identityKey) {
+      continue;
+    }
+
+    const existing = merged.get(identityKey);
     if (existing) {
       if (project.count > 0 || existing.count === 0) {
         existing.updatedAt = Math.max(existing.updatedAt, project.updatedAt);
@@ -244,7 +270,7 @@ export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]>
       continue;
     }
 
-    merged.set(project.root, { ...project });
+    merged.set(identityKey, { ...project });
   }
 
   return [...merged.values()]

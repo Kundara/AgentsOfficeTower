@@ -32,3 +32,13 @@ test("project descriptors humanize camel-case workspace names", () => {
     ["Codex Agents Office", "Project Atlas"]
   );
 });
+
+test("server args dedupe Windows-backed WSL project roots by identity", () => {
+  const options = parseArgs([
+    "--seed-project", "/mnt/f/AI/CodexAgentsOffice",
+    "--seed-project", "/mnt/f/ai/codexagentsoffice"
+  ]);
+
+  assert.equal(options.projects.length, 1);
+  assert.equal(options.projects[0].root, "/mnt/f/AI/CodexAgentsOffice");
+});

@@ -268,6 +268,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     try {
       const allThreads = await this.client.listThreads({
+        cwd: this.projectRoot,
         limit: Math.max(this.localLimit * 4, 40)
       });
       const projectThreads = filterThreadsForProject(this.projectRoot, allThreads);
@@ -338,11 +339,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         }
       }
 
-      if (this.snapshot === null) {
-        await this.syncThreadSubscriptions();
-      } else {
-        this.scheduleThreadSubscriptions();
-      }
+      this.scheduleThreadSubscriptions();
       this.scheduleSnapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

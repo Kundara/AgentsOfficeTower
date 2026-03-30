@@ -1,7 +1,7 @@
 import { basename, resolve } from "node:path";
 import { cwd, env } from "node:process";
 
-import { humanizeProjectLabel } from "@codex-agents-office/core";
+import { humanizeProjectLabel, projectPathIdentityKey } from "@codex-agents-office/core";
 
 import type { ProjectDescriptor, ServerOptions } from "./server-types";
 
@@ -31,6 +31,7 @@ export function buildProjectDescriptors(projectRoots: string[]): ProjectDescript
 
 export function parseArgs(argv: string[]): ServerOptions {
   const projects: string[] = [];
+  const seedProjects: string[] = [];
   let port = Number.parseInt(env.CODEX_AGENTS_OFFICE_PORT ?? "4181", 10);
   let host = env.CODEX_AGENTS_OFFICE_HOST ?? "127.0.0.1";
 
@@ -38,6 +39,12 @@ export function parseArgs(argv: string[]): ServerOptions {
     const arg = argv[index];
     if (arg === "--project" && argv[index + 1]) {
       projects.push(resolve(argv[index + 1]));
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--seed-project" && argv[index + 1]) {
+      seedProjects.push(resolve(argv[index + 1]));
       index += 1;
       continue;
     }
@@ -60,7 +67,21 @@ export function parseArgs(argv: string[]): ServerOptions {
   }
 
   const explicitProjects = projects.length > 0;
-  const uniqueProjects = Array.from(new Set(projects.length > 0 ? projects : [cwd()]));
+  const rawProjects = projects.length > 0
+    ? projects
+    : seedProjects.length > 0
+      ? seedProjects
+      : [cwd()];
+  const uniqueProjects: string[] = [];
+  const seenProjects = new Set<string>();
+  for (const projectRoot of rawProjects) {
+    const identityKey = projectPathIdentityKey(projectRoot) ?? projectRoot;
+    if (seenProjects.has(identityKey)) {
+      continue;
+    }
+    seenProjects.add(identityKey);
+    uniqueProjects.push(projectRoot);
+  }
   return {
     host,
     port: Number.isFinite(port) ? port : 4181,

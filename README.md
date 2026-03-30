@@ -89,6 +89,7 @@ npm run typecheck
 - The browser exposes a global `Split Worktrees` toggle when you want one floor per worktree instead.
 - Single-project focus uses the same compact scene geometry as the tower view.
 - Desk behavior follows normalized modes: working and waiting sessions stay on-desk, blocked failures stand at the desk, done/idle sessions cool into resting visibility, and cloud work stays separate.
+- Quiet subscribed or transiently `notLoaded` Codex desk-live work now stays current and workstation-seated for about 3 minutes between reply chunks so slow thinking gaps do not bounce into the rec area.
 - The office view uses smaller above-head state markers for needs-user waits, planning, pre-message typed thinking moments, and blocked-error states in addition to the toast layer.
 
 ## Optional Integrations
@@ -161,7 +162,9 @@ Build the extension:
 npm run build -w packages/vscode
 ```
 
-Then open the repo in VS Code and press `F5`.
+The VS Code activity-bar panel embeds the real office renderer by starting a local Agents Office web server.
+
+After building, reload VS Code or press `F5` in extension development. The activity-bar container title is `Agents Office Tower`.
 
 ## Repo Layout
 

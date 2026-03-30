@@ -7,6 +7,20 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ## [0.1.0] - 2026-03-25
 
+### Changed
+
+- Changed the VS Code activity-bar surface to embed the real Agents Office renderer for the current workspace through a local web server, replacing the older simplified placeholder room-grid view.
+- Changed the VS Code activity-bar container title from `Codex Office` to `Agents Office Tower` so the panel label matches the product name and installed extension display name.
+- Changed the web server startup order so it binds the HTTP listener before fleet warmup, letting UI clients connect immediately while monitors finish warming in the background.
+
+### Fixed
+
+- Fixed Windows-hosted Codex runtime selection so mixed Windows+WSL setups prefer the WSL-backed Codex CLI when available, keeping the VS Code panel aligned with browser-visible WSL Codex activity instead of silently falling back to a narrower Windows-local view.
+- Fixed Windows-backed WSL project identity matching so the VS Code embedded office no longer splits the same repo across mixed-case `/mnt/...` paths, which had been hiding Codex activity on a duplicate floor and could make local Cursor sessions appear twice.
+- Fixed the VS Code embedded server launch on Windows+WSL so it runs inside a login shell with `CODEX_HOME` preserved, restoring Codex session visibility in the activity-bar panel.
+- Fixed `/api/server-meta` and home-route startup timing so those endpoints return immediately from the in-memory project list instead of blocking on project discovery.
+- Fixed live monitor startup so the first snapshot is no longer blocked on thread subscription sync, reducing empty-office warmup stalls.
+
 ### Added
 
 - Added extra vending-machine drink variants for idle rec-room visits, including soda and juice held items sourced from Alex's CC BY 4.0 `100 pixel food icons pack`, with README attribution for the new asset library.
@@ -126,6 +140,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed typed Codex `Needs You` handling so approval waits surface as blocked desk work, input waits surface as waiting work, and browser workstation seating now respects those visible states instead of treating every `status.type = active` thread as desk-active.
 - Fixed browser desk motion so `running` and `validating` workers stay in the seated workstation pose, and current local desk-live work now gets a short grace window through transient `status.type = notLoaded` gaps instead of bouncing into the rec area between live updates.
 - Fixed Codex local live-monitor stop detection so `thread/status/changed -> notLoaded` now waits about 3 seconds and confirms with a reread before clearing ongoing desk work, reducing brief unload/reload desk bounce between live messages.
+- Fixed long quiet Codex pauses between reply chunks so subscribed or transiently `notLoaded` desk-live local agents now remain current and workstation-seated for about 3 minutes before they cool into rec-room behavior.
 - Fixed Pixi workstation reveal flicker so newly occupied desks once again carry their `enteringReveal` flags through the assembled scene runtime, and desk returns now blink based on workstation slot transitions instead of only firing for brand-new agent keys.
 - Fixed browser scene continuity so current local threads remain visible in the map while they transition between desk and rec-area placement, and active local `idle`/`done` wobbles now get a short desk settle window instead of making the agent and workstation pop out between updates.
 - Fixed rec-room rendering so only the 4 most recent top-level resting lead sessions occupy the rec seats, preventing older hidden resters and subagents from wrapping onto duplicate sofa coordinates.

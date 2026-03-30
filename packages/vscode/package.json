@@ -1,11 +1,11 @@
 {
-  "name": "@codex-agents-office/vscode",
+  "name": "codex-agents-office",
   "displayName": "Agents Office Tower",
   "description": "Room-based activity view for Codex local sessions and cloud tasks.",
   "version": "0.1.0",
   "publisher": "local",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.97.0"
   },
   "categories": [
     "Other"
@@ -22,7 +22,7 @@
       "activitybar": [
         {
           "id": "codexAgentsOffice",
-          "title": "Codex Office",
+          "title": "Agents Office Tower",
           "icon": "media/icon.svg"
         }
       ]
@@ -31,7 +31,7 @@
       "codexAgentsOffice": [
         {
           "id": "codexAgentsOffice.view",
-          "name": "Agents Office",
+          "name": "Agents Office Tower",
           "type": "webview"
         }
       ]

@@ -61,6 +61,7 @@ The live browser path now uses a hybrid approach:
 - active `thread/list` rows are always retained in the tracked local-thread set even when they are older than the normal recent-thread cutoff, so a live desktop session is subscribed on startup before its next visible delta
 - active and recent threads are resumed on the observer connection so the app can receive live `turn/*`, `item/*`, approval, input, and `serverRequest/resolved` events
 - observer runtime unload notifications such as `thread/closed` or `thread/status/changed -> notLoaded` are treated as subscription state, not as proof that the underlying thread resolved; `notLoaded` now gets a short 3-second confirmation cooldown before the monitor clears ongoing occupancy
+- quiet desk-live local work can remain current for about 3 minutes when it is still on a live subscription or sitting in a transient `notLoaded` transport state, so slow Codex thinking gaps do not bounce the avatar into rest
 - slow desktop `thread/resume` attaches now happen in the background so the web server does not block initial rendering on them
 - desktop-backed `thread/resume` can still take tens of seconds, so the observer keeps a wider 60-second attach budget before it marks that live path degraded and falls back to read-only behavior
 - watched thread JSONL paths trigger quick re-reads when a local session changes
@@ -84,9 +85,10 @@ Sources:
 ## UI shape
 
 - VS Code tab
-  - left: room map
-  - right: session inspector
-  - actions: refresh, open/scaffold room XML, resume local thread, open cloud task, cycle appearance
+  - embeds the real browser office renderer inside a webview instead of maintaining a separate simplified room-map implementation
+  - starts a local Agents Office web server in fleet mode, seeded from the active workspace, so the panel matches the browser view
+  - on Windows with WSL, launches the embedded server via a WSL login shell so Codex picks up `CODEX_HOME` and other expected defaults
+  - actions: reload embedded renderer, open embedded office in browser, open/scaffold room XML
 
 - Terminal watcher
   - grouped by room
@@ -114,6 +116,7 @@ Sources:
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
 - local threads remain seated while the thread is still ongoing, even if they pause between visible events or the latest turn already looks done
 - transient `status.type = notLoaded` unloads now wait about 3 seconds for a confirming reread before a local thread is allowed to lose ongoing occupancy
+- subscribed or transiently `notLoaded` desk-live locals now also keep their workstation for about 3 minutes after the last update before the browser lets them cool into rec-room behavior
 - once a top-level thread actually stops, it keeps its workstation for a short 5-second cooldown so the final reply remains readable before it cools into rec-area visibility
 - stale local `notLoaded` sessions no longer occupy desks just because they are still recent; workstation seating now requires true ongoing work or the explicit stop cooldown
 - after that grace window, only recent top-level lead sessions cool down into the rec area; finished subagents despawn instead of idling there
@@ -167,7 +170,7 @@ The web package now separates transport, lifecycle, rendering, and client delive
 Snapshot assembly now happens in one place through `SnapshotAssembler`, which merges cached adapter snapshots, applies room mapping once, and evaluates workload currentness against the snapshot start time so slow secondary adapters do not incorrectly evict freshly finished local work.
 
 - `packages/web/src/server/server.ts`
-  Starts the HTTP server, wires shutdown, and delegates everything else.
+  Starts the HTTP server, wires shutdown, binds before fleet warmup, and delegates everything else.
 - `packages/web/src/server/server-options.ts`
   Parses CLI args and normalizes project descriptors.
 - `packages/web/src/server/server-metadata.ts`
@@ -175,7 +178,7 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
 - `packages/web/src/server/fleet-live-service.ts`
   Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, exposes disabled multiplayer status for future secured sync work, and fans snapshots out over SSE. Fleet-wide cloud task polling still lives here so `codex cloud list` runs once per fleet refresh cycle instead of once per project monitor, with shared backoff when the upstream cloud surface rate-limits. Startup now publishes a placeholder fleet immediately and warms project monitors in the background.
 - `packages/web/src/server/router.ts`
-  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, and room scaffolding. In fleet mode, the meta route now reports the live project set from `FleetLiveService`, not just the startup seed options.
+  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, and room scaffolding. Fleet meta and home routes now answer immediately from the current in-memory project list instead of blocking on project discovery.
 - `packages/web/src/render/render-html.ts`
   Builds the HTML shell and injects the browser assets.
 - `packages/web/src/client/index.ts`

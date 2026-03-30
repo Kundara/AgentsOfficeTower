@@ -4,8 +4,8 @@ const ACTIVE_LOCAL_WINDOW_MS = 20 * 60 * 1000;
 const WAITING_LOCAL_WINDOW_MS = 45 * 60 * 1000;
 const ACTIVE_PRESENCE_WINDOW_MS = 3 * 60 * 1000;
 const ACTIVE_CLOUD_WINDOW_MS = 8 * 60 * 60 * 1000;
-const ACTIVE_SUBSCRIBED_LOCAL_WINDOW_MS = 90 * 1000;
 const ACTIVE_FRESH_LOCAL_WINDOW_MS = 30 * 1000;
+const QUIET_LIVE_LOCAL_WINDOW_MS = 3 * 60 * 1000;
 export const RECENT_DONE_GRACE_MS = 5 * 1000;
 const SUBAGENT_DONE_GRACE_MS = 1200;
 const FUTURE_TIMESTAMP_TOLERANCE_MS = 5 * 1000;
@@ -149,9 +149,12 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
       return true;
     }
     if (
-      agent.liveSubscription === "subscribed"
-      && isLiveLocalState(agent.state)
-      && updatedAtAgeMs <= ACTIVE_SUBSCRIBED_LOCAL_WINDOW_MS
+      isLiveLocalState(agent.state)
+      && updatedAtAgeMs <= QUIET_LIVE_LOCAL_WINDOW_MS
+      && (
+        agent.liveSubscription === "subscribed"
+        || agent.statusText === "notLoaded"
+      )
     ) {
       return true;
     }

@@ -786,7 +786,7 @@ test("fresh read-only local planning agents remain current for a short lag windo
   assert.equal(isCurrentWorkloadAgent(agent, now), true);
 });
 
-test("fresh subscribed local thinking agents remain current for a short live window", () => {
+test("quiet subscribed local thinking agents remain current through a longer Codex pause", () => {
   const now = Date.parse("2026-03-24T00:00:00.000Z");
   const agent = {
     id: "thr_live",
@@ -806,7 +806,7 @@ test("fresh subscribed local thinking agents remain current for a short live win
     cwd: "/tmp/ProjectAtlas",
     roomId: "root",
     appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
-    updatedAt: "2026-03-23T23:59:45.000Z",
+    updatedAt: "2026-03-23T23:57:30.000Z",
     stoppedAt: null,
     paths: ["/tmp/ProjectAtlas"],
     activityEvent: null,
@@ -823,6 +823,45 @@ test("fresh subscribed local thinking agents remain current for a short live win
   };
 
   assert.equal(isCurrentWorkloadAgent(agent, now), true);
+});
+
+test("quiet subscribed local desk-live work still settles after the longer pause window", () => {
+  const now = Date.parse("2026-03-24T00:00:00.000Z");
+  const agent = {
+    id: "thr_live_stale",
+    label: "Quiet subscribed worker",
+    source: "local",
+    sourceKind: "vscode",
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "idle",
+    role: null,
+    nickname: null,
+    isSubagent: false,
+    state: "thinking",
+    detail: "Reply updated",
+    cwd: "/tmp/ProjectAtlas",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-23T23:56:59.000Z",
+    stoppedAt: null,
+    paths: ["/tmp/ProjectAtlas"],
+    activityEvent: null,
+    latestMessage: "Still working",
+    threadId: "thr_live_stale",
+    taskId: null,
+    resumeCommand: "codex resume thr_live_stale",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "subscribed"
+  };
+
+  assert.equal(isCurrentWorkloadAgent(agent, now), false);
 });
 
 test("parentThreadIdForThread extracts ancestor ids from subagent metadata", () => {
@@ -2127,6 +2166,39 @@ test("initial discovery still subscribes active older threads before their first
   assert.equal(agent.liveSubscription, "subscribed");
   assert.equal(agent.isCurrent, true);
   assert.equal(agent.detail, "Still working before the next delta lands.");
+});
+
+test("discoverThreads scopes app-server thread listing to the current project root", async () => {
+  const projectRoot = "/tmp/CodexAgentsOffice";
+  const monitor = new ProjectLiveMonitor({
+    projectRoot,
+    includeCloud: false,
+    localLimit: 1
+  });
+  const listedThread = {
+    ...sampleThread(),
+    cwd: projectRoot
+  };
+
+  const listThreadCalls = [];
+  monitor.client = {
+    listThreads: async (params) => {
+      listThreadCalls.push(params);
+      return [listedThread];
+    },
+    listLoadedThreads: async () => [],
+    resumeThread: async () => {},
+    readThread: async () => listedThread
+  };
+
+  await monitor.discoverThreads();
+
+  assert.deepEqual(listThreadCalls, [
+    {
+      cwd: projectRoot,
+      limit: 40
+    }
+  ]);
 });
 
 test("hydrated thread rereads do not synthesize assistant replies as fresh events", async () => {
