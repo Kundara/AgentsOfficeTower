@@ -90,7 +90,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         if (!agent || !agent.network) {
           return "";
         }
-        const location = agent.network.peerHost ? \` @ \${agent.network.peerHost}\` : "";
+        const location = agent.network.peerRoom ? \` @ \${agent.network.peerRoom}\` : "";
         return \`\${agent.network.peerLabel}\${location}\`;
       }
 
@@ -611,7 +611,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           \`<span>\${escapeHtml(titleCaseWords(agentKindLabel(snapshot, agent)))}</span>\`,
           \`<span>\${escapeHtml(agentHoverSourceLabel(agent, summary.source))}</span>\`,
           agent.network
-            ? \`<span class="agent-hover-peer">\${escapeHtml(agent.network.peerLabel)}</span>\${agent.network.peerHost ? \`<span>\${escapeHtml(" @ " + agent.network.peerHost)}</span>\` : ""}\`
+            ? \`<span class="agent-hover-peer">\${escapeHtml(agent.network.peerLabel + (agent.network.peerRoom ? " @ " + agent.network.peerRoom : ""))}</span>\`
             : "",
           lead ? \`<span>\${escapeHtml("with " + lead)}</span>\` : "",
           \`<span>\${escapeHtml(formatUpdatedAt(agent.updatedAt))}</span>\`

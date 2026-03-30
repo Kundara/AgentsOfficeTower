@@ -16,7 +16,9 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
         integrationSettings: defaultIntegrationSettings(),
         integrationSettingsPending: false,
         integrationSettingsError: null,
-        multiplayerSettings: loadMultiplayerSettings(),
+        multiplayerSettings: { ...defaultIntegrationSettings().multiplayer },
+        multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },
+        multiplayerDraftDirty: false,
         multiplayerProjectShares: loadMultiplayerProjectShares(),
         multiplayerStatus: {
           state: "disabled",

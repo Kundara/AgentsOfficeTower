@@ -19,9 +19,11 @@ const {
 } = require("../dist/claude-agent-sdk.js");
 const {
   describeCursorIntegrationSettings,
+  describeStoredMultiplayerSettings,
   getAppSettingsFilePath,
   resetAppSettingsCacheForTest,
-  setStoredCursorApiKey
+  setStoredCursorApiKey,
+  setStoredMultiplayerSettings
 } = require("../dist/app-settings.js");
 const {
   describeCursorAgentAvailability,
@@ -1340,6 +1342,54 @@ test("stored cursor api key enables cursor integration without CURSOR_API_KEY", 
     } else {
       delete process.env.CURSOR_API_KEY;
     }
+    if (typeof previousXdgConfigHome === "string") {
+      process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+    } else {
+      delete process.env.XDG_CONFIG_HOME;
+    }
+    if (typeof previousCodexHome === "string") {
+      process.env.CODEX_HOME = previousCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
+    }
+    resetAppSettingsCacheForTest();
+  }
+});
+
+test("stored multiplayer settings persist host, room, nickname, and enabled state in user data", { concurrency: false }, async () => {
+  const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.XDG_CONFIG_HOME = await mkdtemp(path.join(os.tmpdir(), "multiplayer-settings-stored-"));
+  delete process.env.CODEX_HOME;
+  resetAppSettingsCacheForTest();
+
+  try {
+    await setStoredMultiplayerSettings({
+      enabled: true,
+      host: "team-sync.partykit.dev",
+      room: "design/review",
+      nickname: "kaki"
+    });
+    assert.deepEqual(describeStoredMultiplayerSettings(), {
+      enabled: true,
+      host: "team-sync.partykit.dev",
+      room: "design/review",
+      nickname: "kaki",
+      configured: true
+    });
+    const savedSettings = await readFile(getAppSettingsFilePath(), "utf8");
+    assert.match(savedSettings, /team-sync\.partykit\.dev/);
+    assert.match(savedSettings, /design\/review/);
+    assert.match(savedSettings, /kaki/);
+    await setStoredCursorApiKey("cursor_test_12345678");
+    assert.deepEqual(describeStoredMultiplayerSettings(), {
+      enabled: true,
+      host: "team-sync.partykit.dev",
+      room: "design/review",
+      nickname: "kaki",
+      configured: true
+    });
+  } finally {
     if (typeof previousXdgConfigHome === "string") {
       process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
     } else {

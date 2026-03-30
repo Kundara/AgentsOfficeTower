@@ -27,31 +27,17 @@ export const MULTIPLAYER_SCRIPT = `
         );
       }
 
-      function loadMultiplayerSettings() {
-        try {
-          const raw = window.localStorage.getItem(multiplayerSettingsStorageKey);
-          if (!raw) {
-            return { enabled: false, host: "", room: "", nickname: "" };
-          }
-          const parsed = JSON.parse(raw);
-          const host = sanitizeMultiplayerField(parsed && parsed.host);
-          const room = sanitizeMultiplayerField(parsed && parsed.room);
-          const hasCredentials = Boolean(host && room);
-          return {
-            enabled: typeof (parsed && parsed.enabled) === "boolean" ? Boolean(parsed && parsed.enabled) : hasCredentials,
-            host,
-            room,
-            nickname: sanitizeMultiplayerNickname(parsed && parsed.nickname)
-          };
-        } catch {
-          return { enabled: false, host: "", room: "", nickname: "" };
-        }
-      }
-
-      function saveMultiplayerSettings() {
-        try {
-          window.localStorage.setItem(multiplayerSettingsStorageKey, JSON.stringify(state.multiplayerSettings));
-        } catch {}
+      function normalizeMultiplayerSettings(settings) {
+        const host = sanitizeMultiplayerField(settings && settings.host);
+        const room = sanitizeMultiplayerField(settings && settings.room);
+        const hasCredentials = Boolean(host && room);
+        return {
+          enabled: Boolean(settings && settings.enabled) && hasCredentials,
+          host,
+          room,
+          nickname: sanitizeMultiplayerNickname(settings && settings.nickname),
+          configured: hasCredentials
+        };
       }
 
       function loadMultiplayerProjectShares() {
@@ -329,21 +315,44 @@ export const MULTIPLAYER_SCRIPT = `
         syncMultiplayerSettingsUi();
       }
 
+      function syncStoredMultiplayerSettings(settings) {
+        const normalized = normalizeMultiplayerSettings(settings);
+        state.multiplayerSettings = normalized;
+        if (state.multiplayerDraftDirty !== true) {
+          state.multiplayerDraft = {
+            enabled: normalized.enabled,
+            host: normalized.host,
+            room: normalized.room,
+            nickname: normalized.nickname,
+            configured: normalized.configured
+          };
+        }
+        syncMultiplayerSettingsUi();
+        void refreshMultiplayerConnection();
+      }
+
       function syncMultiplayerSettingsUi() {
+        const draft = normalizeMultiplayerSettings(state.multiplayerDraft || state.multiplayerSettings);
         if (multiplayerEnabledButton instanceof HTMLButtonElement) {
           const enabled = state.multiplayerSettings.enabled === true;
           multiplayerEnabledButton.classList.toggle("active", enabled);
           multiplayerEnabledButton.setAttribute("aria-pressed", enabled ? "true" : "false");
           multiplayerEnabledButton.textContent = enabled ? "Sharing On" : "Sharing Off";
         }
-        if (multiplayerHostInput instanceof HTMLInputElement && multiplayerHostInput.value !== state.multiplayerSettings.host) {
-          multiplayerHostInput.value = state.multiplayerSettings.host;
+        if (multiplayerHostInput instanceof HTMLInputElement && multiplayerHostInput.value !== draft.host) {
+          multiplayerHostInput.value = draft.host;
         }
-        if (multiplayerRoomInput instanceof HTMLInputElement && multiplayerRoomInput.value !== state.multiplayerSettings.room) {
-          multiplayerRoomInput.value = state.multiplayerSettings.room;
+        if (multiplayerRoomInput instanceof HTMLInputElement && multiplayerRoomInput.value !== draft.room) {
+          multiplayerRoomInput.value = draft.room;
         }
-        if (multiplayerNicknameInput instanceof HTMLInputElement && multiplayerNicknameInput.value !== state.multiplayerSettings.nickname) {
-          multiplayerNicknameInput.value = state.multiplayerSettings.nickname;
+        if (multiplayerNicknameInput instanceof HTMLInputElement && multiplayerNicknameInput.value !== draft.nickname) {
+          multiplayerNicknameInput.value = draft.nickname;
+        }
+        if (multiplayerSaveButton instanceof HTMLButtonElement) {
+          multiplayerSaveButton.disabled = state.integrationSettingsPending === true;
+        }
+        if (multiplayerClearButton instanceof HTMLButtonElement) {
+          multiplayerClearButton.disabled = state.integrationSettingsPending === true || !state.multiplayerSettings.configured;
         }
         if (multiplayerStatus instanceof HTMLElement) {
           multiplayerStatus.textContent = state.multiplayerStatus.detail;
@@ -381,7 +390,8 @@ export const MULTIPLAYER_SCRIPT = `
             transport: "partykit",
             peerId: peer.peerId,
             peerLabel: peer.peerLabel,
-            peerHost: state.multiplayerSettings.host || null
+            peerHost: state.multiplayerSettings.host || null,
+            peerRoom: state.multiplayerSettings.room || null
           }
         };
       }
@@ -796,25 +806,15 @@ export const MULTIPLAYER_SCRIPT = `
       }
 
       function commitMultiplayerSettings(nextSettings) {
-        const nextHost = sanitizeMultiplayerField(nextSettings && nextSettings.host);
-        const nextRoom = sanitizeMultiplayerField(nextSettings && nextSettings.room);
-        const nextNickname = sanitizeMultiplayerNickname(nextSettings && nextSettings.nickname);
-        const nextHasCredentials = Boolean(nextHost && nextRoom);
-        const previousHadCredentials = hasMultiplayerCredentials(state.multiplayerSettings);
-        const nextEnabled =
-          typeof (nextSettings && nextSettings.enabled) === "boolean"
-            ? Boolean(nextSettings && nextSettings.enabled) && nextHasCredentials
-            : nextHasCredentials
-              ? (!previousHadCredentials ? true : state.multiplayerSettings.enabled === true)
-              : false;
-        state.multiplayerSettings = {
-          enabled: nextEnabled,
-          host: nextHost,
-          room: nextRoom,
-          nickname: nextNickname
+        const normalized = normalizeMultiplayerSettings(nextSettings);
+        state.multiplayerDraft = {
+          enabled: normalized.enabled,
+          host: normalized.host,
+          room: normalized.room,
+          nickname: normalized.nickname,
+          configured: normalized.configured
         };
-        saveMultiplayerSettings();
+        state.multiplayerDraftDirty = true;
         syncMultiplayerSettingsUi();
-        void refreshMultiplayerConnection();
       }
 `;

@@ -8,6 +8,12 @@ export interface AppSettings {
   integrations: {
     cursorApiKey: string | null;
   };
+  multiplayer: {
+    enabled: boolean;
+    host: string | null;
+    room: string | null;
+    nickname: string | null;
+  };
 }
 
 export interface CursorIntegrationSettings {
@@ -18,10 +24,24 @@ export interface CursorIntegrationSettings {
   storedMaskedKey: string | null;
 }
 
+export interface MultiplayerSettings {
+  enabled: boolean;
+  host: string;
+  room: string;
+  nickname: string;
+  configured: boolean;
+}
+
 const DEFAULT_APP_SETTINGS: AppSettings = {
   version: 1,
   integrations: {
     cursorApiKey: null
+  },
+  multiplayer: {
+    enabled: false,
+    host: null,
+    room: null,
+    nickname: null
   }
 };
 
@@ -40,11 +60,23 @@ function normalizeAppSettings(input: unknown): AppSettings {
   const integrations = record.integrations && typeof record.integrations === "object"
     ? record.integrations as Record<string, unknown>
     : {};
+  const multiplayer = record.multiplayer && typeof record.multiplayer === "object"
+    ? record.multiplayer as Record<string, unknown>
+    : {};
+  const host = normalizeSecret(multiplayer.host);
+  const room = normalizeSecret(multiplayer.room);
+  const hasCredentials = Boolean(host && room);
 
   return {
     version: 1,
     integrations: {
       cursorApiKey: normalizeSecret(integrations.cursorApiKey)
+    },
+    multiplayer: {
+      enabled: Boolean(multiplayer.enabled) && hasCredentials,
+      host,
+      room,
+      nickname: normalizeSecret(multiplayer.nickname)
     }
   };
 }
@@ -82,7 +114,11 @@ function readStoredAppSettingsSync(): AppSettings {
   const filePath = getAppSettingsFilePath();
   try {
     if (!existsSync(filePath)) {
-      cachedSettings = { ...DEFAULT_APP_SETTINGS, integrations: { ...DEFAULT_APP_SETTINGS.integrations } };
+      cachedSettings = {
+        ...DEFAULT_APP_SETTINGS,
+        integrations: { ...DEFAULT_APP_SETTINGS.integrations },
+        multiplayer: { ...DEFAULT_APP_SETTINGS.multiplayer }
+      };
       return cachedSettings;
     }
 
@@ -90,7 +126,11 @@ function readStoredAppSettingsSync(): AppSettings {
     cachedSettings = normalizeAppSettings(JSON.parse(raw));
     return cachedSettings;
   } catch {
-    cachedSettings = { ...DEFAULT_APP_SETTINGS, integrations: { ...DEFAULT_APP_SETTINGS.integrations } };
+    cachedSettings = {
+      ...DEFAULT_APP_SETTINGS,
+      integrations: { ...DEFAULT_APP_SETTINGS.integrations },
+      multiplayer: { ...DEFAULT_APP_SETTINGS.multiplayer }
+    };
     return cachedSettings;
   }
 }
@@ -107,10 +147,51 @@ export function getStoredCursorApiKeySync(): string | null {
 }
 
 export async function setStoredCursorApiKey(apiKey: string | null): Promise<void> {
+  const currentSettings = readStoredAppSettingsSync();
   const nextSettings: AppSettings = {
     version: 1,
     integrations: {
       cursorApiKey: normalizeSecret(apiKey)
+    },
+    multiplayer: { ...currentSettings.multiplayer }
+  };
+  await writeStoredAppSettings(nextSettings);
+}
+
+export function getStoredMultiplayerSettingsSync(): MultiplayerSettings {
+  const stored = readStoredAppSettingsSync().multiplayer;
+  const host = stored.host ?? "";
+  const room = stored.room ?? "";
+  const nickname = stored.nickname ?? "";
+  const configured = Boolean(host && room);
+  return {
+    enabled: configured && stored.enabled === true,
+    host,
+    room,
+    nickname,
+    configured
+  };
+}
+
+export async function setStoredMultiplayerSettings(settings: {
+  enabled?: boolean;
+  host?: string | null;
+  room?: string | null;
+  nickname?: string | null;
+} | null): Promise<void> {
+  const currentSettings = readStoredAppSettingsSync();
+  const host = normalizeSecret(settings?.host);
+  const room = normalizeSecret(settings?.room);
+  const nickname = normalizeSecret(settings?.nickname);
+  const configured = Boolean(host && room);
+  const nextSettings: AppSettings = {
+    version: 1,
+    integrations: { ...currentSettings.integrations },
+    multiplayer: {
+      enabled: configured && settings?.enabled === true,
+      host,
+      room,
+      nickname
     }
   };
   await writeStoredAppSettings(nextSettings);
@@ -156,6 +237,10 @@ export function describeCursorIntegrationSettings(): CursorIntegrationSettings {
     storedConfigured: false,
     storedMaskedKey: null
   };
+}
+
+export function describeStoredMultiplayerSettings(): MultiplayerSettings {
+  return getStoredMultiplayerSettingsSync();
 }
 
 export function resetAppSettingsCacheForTest(): void {

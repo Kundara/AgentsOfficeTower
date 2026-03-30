@@ -125,7 +125,7 @@ Current browser settings surfaces are:
 - a persisted `Split Worktrees` toggle that restores one floor per worktree instead of the default merged repo floor
 - a debug tile overlay toggle for layout diagnostics
 - machine-local Cursor API key save/clear controls
-- shared-room sync toggle plus `host`, `room`, and short `nickname` fields
+- shared-room sync toggle plus `host`, `room`, and short `nickname` fields, with explicit save/clear controls
 - a per-floor persisted `Shared` toggle for local projects while shared-room sync is enabled, defaulting to on and controlling whether that local project is broadcast into the room
 
 ### Workload placement
@@ -242,13 +242,15 @@ Worktree identity rules:
 ### Shared-room behavior
 
 - Shared-room sync is an optional browser-side overlay, not the primary local transport.
-- Shared-room settings are persisted client-side and should survive browser reloads.
+- Shared-room host, room, nickname, and enabled state should be loaded from machine-local Agents Office user data when the page opens and should survive browser reloads.
+- Shared-room form fields should behave like ordinary inputs while the user is typing; runtime refreshes must not rewrite the draft value under the cursor.
+- Shared-room settings should persist only on explicit save/clear actions or other explicit sharing controls, not on passive input repaint.
 - Local project share preferences should be persisted client-side per project root and default to sharing until the user turns a floor off.
 - The browser should broadcast only the local project roots whose `Shared` floor toggle is still on.
 - Remote workspace activity should merge into locally matching workspaces when names match, but remote-only room workspaces should also remain visible as standalone floors when they do not exist locally.
 - Remote-only floors should grey the project-title treatment slightly so “not my workspace” reads as a distinct state without hiding the floor.
 - Each floor header should list the active participant nicknames currently visible in that workspace; when a remote-only floor is cooling down and has no active agents left, it may fall back to the most recent participant labels.
-- Remote shared-room agents should preserve peer labeling and peer-host context so they remain visibly distinct from local sessions.
+- Remote shared-room agents should preserve peer labeling and shared-room context so they remain visibly distinct from local sessions.
 - Remote-only shared projects should cool down for 1 hour before disappearing after room updates stop.
 - Screenshot mode should disable shared-room sync.
 - `/api/multiplayer` should expose the current server multiplayer transport status even when the transport is currently disabled.

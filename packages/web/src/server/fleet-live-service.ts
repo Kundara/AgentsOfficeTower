@@ -4,11 +4,13 @@ import {
   canonicalizeProjectPath,
   cycleAgentAppearance,
   describeCursorIntegrationSettings,
+  describeStoredMultiplayerSettings,
   discoverProjects,
   listCloudTasks,
   ProjectLiveMonitor,
   scaffoldRoomsFile,
-  setStoredCursorApiKey
+  setStoredCursorApiKey,
+  setStoredMultiplayerSettings
 } from "@codex-agents-office/core";
 import type { CloudTask, DiscoveredProject } from "@codex-agents-office/core";
 
@@ -122,13 +124,25 @@ export class FleetLiveService {
 
   getIntegrationSettings(): IntegrationSettingsResponse {
     return {
-      cursor: describeCursorIntegrationSettings()
+      cursor: describeCursorIntegrationSettings(),
+      multiplayer: describeStoredMultiplayerSettings()
     };
   }
 
   async setCursorApiKey(apiKey: string | null): Promise<IntegrationSettingsResponse> {
     await setStoredCursorApiKey(apiKey);
     await Promise.all(Array.from(this.monitors.values()).map((monitor) => monitor.refreshNow()));
+    await this.publish();
+    return this.getIntegrationSettings();
+  }
+
+  async setMultiplayerSettings(settings: {
+    enabled?: boolean;
+    host?: string | null;
+    room?: string | null;
+    nickname?: string | null;
+  } | null): Promise<IntegrationSettingsResponse> {
+    await setStoredMultiplayerSettings(settings);
     await this.publish();
     return this.getIntegrationSettings();
   }

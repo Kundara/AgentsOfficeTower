@@ -108,7 +108,7 @@ Sources:
   - live SSE updates for browser clients
   - all discovered workspaces stay live-monitored at once
   - reserved multiplayer status surface for a future secured sync transport
-  - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; once connected, each local floor exposes a persisted `Shared` toggle that controls whether that project is broadcast into the room
+  - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; those shared-room credentials now restore from machine-local Agents Office user data on launch, and each local floor exposes a persisted `Shared` toggle that controls whether that project is broadcast into the room
   - remote shared-room activity now merges client-side onto matching local workspaces when possible, and otherwise stays visible as remote-only floors with a 1-hour cooldown before disappearing after updates stop
 - map and terminal-style views through `?view=map|terminal`
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
@@ -195,7 +195,7 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
   - `navigation-source.ts`: navigation grid, avatar routing, scene hit-target focus, terminal/fleet summaries, and the durable "Needs You" queue.
   - `ui-source.ts`: browser render loop, DOM patching, fleet ingestion, and session-card rendering.
 - `packages/web/src/client/multiplayer-source.ts`
-  Holds the browser-side PartyKit room sync overlay, shared-room settings persistence, per-project share preferences, remote-only floor cooldown memory, and remote fleet merge helpers so the realtime room transport stays outside the main renderer script.
+  Holds the browser-side PartyKit room sync overlay, shared-room draft/input behavior, per-project share preferences, remote-only floor cooldown memory, and remote fleet merge helpers so the realtime room transport stays outside the main renderer script.
 - `packages/party`
   Holds the deployable PartyKit room relay that validates and rebroadcasts the browser `fleet-sync` payloads over shared room sockets.
 - `packages/web/src/client/toast-source.ts`

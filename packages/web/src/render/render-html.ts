@@ -115,9 +115,6 @@ export function renderHtml(
                         autocomplete="off"
                       />
                     </label>
-                    <div class="settings-note muted">
-                      Local Cursor sessions are inferred automatically for repos opened in the Cursor app on this machine. Save a Cursor API key here only if you also want Cursor Cloud/Background Agents.
-                    </div>
                     <div class="settings-actions">
                       <button id="cursor-api-key-save-button" class="toggle-button settings-toggle" type="button">Save Key</button>
                       <button id="cursor-api-key-clear-button" class="toggle-button settings-toggle" type="button">Clear Saved Key</button>
@@ -161,6 +158,13 @@ export function renderHtml(
                         autocomplete="off"
                       />
                     </label>
+                    <div class="settings-note muted">
+                      Shared-room host, room, and nickname are saved in this machine's Agents Office user data and restored on launch.
+                    </div>
+                    <div class="settings-actions">
+                      <button id="multiplayer-save-button" class="toggle-button settings-toggle" type="button">Save Shared Room</button>
+                      <button id="multiplayer-clear-button" class="toggle-button settings-toggle" type="button">Clear Shared Room</button>
+                    </div>
                     <div id="multiplayer-status" class="settings-note muted">Shared room sync is off.</div>
                   </div>
                   <button id="debug-tiles-button" class="toggle-button settings-toggle" type="button" aria-pressed="false">Debug Tiles</button>

@@ -2466,3 +2466,72 @@ test("snapshot prefers recent file-change events over trailing summary messages"
   assert.equal(agent.activityEvent.path, "/tmp/CodexAgentsOffice/packages/core/src/snapshot.ts");
   assert.match(agent.detail, /Edited .*snapshot\.ts$/);
 });
+
+test("streamed completed replies outrank later thread-read fallback messages", async () => {
+  const now = Date.now();
+  const thread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor((now - 5_000) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            id: "item_final",
+            text: "Good. The fix is now live.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    threads: [thread],
+    events: [
+      {
+        id: "evt_stream_final",
+        source: "codex",
+        confidence: "typed",
+        threadId: "thr_123",
+        createdAt: new Date(now - 2_000).toISOString(),
+        method: "item/completed",
+        turnId: "turn_1",
+        itemId: "item_final",
+        itemType: "agentMessage",
+        kind: "message",
+        phase: "completed",
+        title: "Reply completed",
+        detail: "Good. The fix is now live.",
+        path: "/tmp/CodexAgentsOffice"
+      },
+      {
+        id: "evt_read_fallback",
+        source: "codex",
+        confidence: "typed",
+        threadId: "thr_123",
+        createdAt: new Date(now - 1_000).toISOString(),
+        method: "thread/read/agentMessage",
+        turnId: "turn_1",
+        itemId: "item_commentary",
+        kind: "message",
+        phase: "completed",
+        title: "Reply completed",
+        detail: "The older commentary reply that should not win.",
+        path: "/tmp/CodexAgentsOffice"
+      }
+    ]
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.latestMessage, "Good. The fix is now live.");
+  assert.equal(agent.detail, "Good. The fix is now live.");
+  assert.equal(agent.activityEvent?.type, "agentMessage");
+  assert.equal(agent.activityEvent?.title, "Good. The fix is now live.");
+});

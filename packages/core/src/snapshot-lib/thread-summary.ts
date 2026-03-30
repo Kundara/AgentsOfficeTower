@@ -20,6 +20,39 @@ function isFreshActivityEvent(event: DashboardEvent, threadUpdatedAtMs: number, 
     && createdAtMs >= nowMs - EVENT_ACTIVITY_WINDOW_MS;
 }
 
+function recentActivityEventPriority(event: DashboardEvent): number {
+  if (event.kind === "message") {
+    if (event.method === "item/completed" && event.itemType === "agentMessage") {
+      return 40;
+    }
+    if (event.method === "item/agentMessage/delta") {
+      return 35;
+    }
+    if (event.method === "item/started" && event.itemType === "agentMessage") {
+      return 30;
+    }
+    if (event.method === "thread/read/agentMessage") {
+      return 10;
+    }
+    return 20;
+  }
+  if (event.kind === "fileChange") {
+    return 50;
+  }
+  if (event.kind === "command") {
+    return 45;
+  }
+  return 0;
+}
+
+function compareRecentActivityEvents(left: DashboardEvent, right: DashboardEvent): number {
+  const priorityDelta = recentActivityEventPriority(right) - recentActivityEventPriority(left);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+  return right.createdAt.localeCompare(left.createdAt);
+}
+
 function threadTurns(thread: CodexThread): CodexTurn[] {
   return Array.isArray(thread.turns) ? thread.turns : [];
 }
@@ -224,7 +257,7 @@ export function syncSummaryWithLatestThreadMessage(
 
   const latestRecentMessageEvent = recentEvents
     .filter((event) => event.threadId === thread.id && event.kind === "message")
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+    .sort(compareRecentActivityEvents)[0] ?? null;
   const latestRecentMessageCreatedAtMs = latestRecentMessageEvent
     ? Date.parse(latestRecentMessageEvent.createdAt)
     : Number.NaN;
@@ -724,7 +757,7 @@ export function applyRecentActivityEvent(
       }
       return isFreshActivityEvent(event, updatedAtMs);
     })
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .sort(compareRecentActivityEvents)
     .find((event) => event.kind === "fileChange" || event.kind === "command" || event.kind === "message");
 
   if (!preferredEvent) {

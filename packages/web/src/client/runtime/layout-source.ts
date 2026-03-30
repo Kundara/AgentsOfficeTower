@@ -15,6 +15,8 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
       const multiplayerHostInput = document.getElementById("multiplayer-host-input");
       const multiplayerRoomInput = document.getElementById("multiplayer-room-input");
       const multiplayerNicknameInput = document.getElementById("multiplayer-nickname-input");
+      const multiplayerSaveButton = document.getElementById("multiplayer-save-button");
+      const multiplayerClearButton = document.getElementById("multiplayer-clear-button");
       const multiplayerStatus = document.getElementById("multiplayer-status");
       const connectionPill = document.getElementById("connection-pill");
       const stamp = document.getElementById("stamp");
@@ -105,22 +107,27 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         setTextIfChanged(cursorApiKeyStatus, cursorIntegrationStatusText());
       }
 
+      function applyIntegrationSettingsResponse(nextSettings) {
+        state.integrationSettings = nextSettings || defaultIntegrationSettings();
+        syncStoredMultiplayerSettings(state.integrationSettings.multiplayer);
+      }
+
       async function refreshIntegrationSettings() {
         try {
           const response = await fetch("/api/settings/integrations");
           if (!response.ok) {
             throw new Error(await response.text());
           }
-          state.integrationSettings = await response.json();
+          applyIntegrationSettingsResponse(await response.json());
           state.integrationSettingsError = null;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          state.integrationSettings = defaultIntegrationSettings();
+          applyIntegrationSettingsResponse(defaultIntegrationSettings());
           state.integrationSettingsError = "Cursor settings unavailable: " + message;
         } finally {
           state.integrationSettingsPending = false;
-          syncCursorIntegrationUi();
-        }
+        syncCursorIntegrationUi();
+      }
       }
 
       async function saveCursorApiKey() {
@@ -140,7 +147,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         syncCursorIntegrationUi();
 
         try {
-          state.integrationSettings = await postJson("/api/settings/integrations", { cursorApiKey });
+          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { cursorApiKey }));
           state.integrationSettingsError = null;
           cursorApiKeyInput.value = "";
         } catch (error) {
@@ -158,7 +165,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         syncCursorIntegrationUi();
 
         try {
-          state.integrationSettings = await postJson("/api/settings/integrations", { cursorApiKey: null });
+          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { cursorApiKey: null }));
           state.integrationSettingsError = null;
           if (cursorApiKeyInput instanceof HTMLInputElement) {
             cursorApiKeyInput.value = "";

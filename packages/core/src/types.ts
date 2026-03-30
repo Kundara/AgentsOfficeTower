@@ -255,6 +255,7 @@ export interface DashboardAgent {
       peerId: string;
       peerLabel: string;
       peerHost: string | null;
+      peerRoom: string | null;
     }
     | null;
 }

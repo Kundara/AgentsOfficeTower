@@ -29,7 +29,6 @@ export function startClientApp(): void {
       const internalSceneSettings = runtimeConfig.internalSceneSettings || {};
       const sceneSettingsStorageKey = "codex-agents-office:scene-settings";
       const furnitureLayoutStorageKey = "codex-agents-office:furniture-layout";
-      const multiplayerSettingsStorageKey = "codex-agents-office:multiplayer-settings";
       const multiplayerProjectShareStorageKey = "codex-agents-office:multiplayer-project-shares";
       const multiplayerPeerIdStorageKey = "codex-agents-office:multiplayer-peer-id";
       const multiplayerDeviceIdStorageKey = "codex-agents-office:multiplayer-device-id";
@@ -40,6 +39,13 @@ export function startClientApp(): void {
           maskedKey: null,
           storedConfigured: false,
           storedMaskedKey: null
+        },
+        multiplayer: {
+          enabled: false,
+          host: "",
+          room: "",
+          nickname: "",
+          configured: false
         }
       });
       const clampSceneTextScale = (value) => {
@@ -76,7 +82,9 @@ export function startClientApp(): void {
         integrationSettings: defaultIntegrationSettings(),
         integrationSettingsPending: false,
         integrationSettingsError: null,
-        multiplayerSettings: loadMultiplayerSettings(),
+        multiplayerSettings: { ...defaultIntegrationSettings().multiplayer },
+        multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },
+        multiplayerDraftDirty: false,
         multiplayerProjectShares: loadMultiplayerProjectShares(),
         multiplayerStatus: {
           state: "disabled",
@@ -1878,31 +1886,17 @@ export function startClientApp(): void {
         );
       }
 
-      function loadMultiplayerSettings() {
-        try {
-          const raw = window.localStorage.getItem(multiplayerSettingsStorageKey);
-          if (!raw) {
-            return { enabled: false, host: "", room: "", nickname: "" };
-          }
-          const parsed = JSON.parse(raw);
-          const host = sanitizeMultiplayerField(parsed && parsed.host);
-          const room = sanitizeMultiplayerField(parsed && parsed.room);
-          const hasCredentials = Boolean(host && room);
-          return {
-            enabled: typeof (parsed && parsed.enabled) === "boolean" ? Boolean(parsed && parsed.enabled) : hasCredentials,
-            host,
-            room,
-            nickname: sanitizeMultiplayerNickname(parsed && parsed.nickname)
-          };
-        } catch {
-          return { enabled: false, host: "", room: "", nickname: "" };
-        }
-      }
-
-      function saveMultiplayerSettings() {
-        try {
-          window.localStorage.setItem(multiplayerSettingsStorageKey, JSON.stringify(state.multiplayerSettings));
-        } catch {}
+      function normalizeMultiplayerSettings(settings) {
+        const host = sanitizeMultiplayerField(settings && settings.host);
+        const room = sanitizeMultiplayerField(settings && settings.room);
+        const hasCredentials = Boolean(host && room);
+        return {
+          enabled: Boolean(settings && settings.enabled) && hasCredentials,
+          host,
+          room,
+          nickname: sanitizeMultiplayerNickname(settings && settings.nickname),
+          configured: hasCredentials
+        };
       }
 
       function loadMultiplayerProjectShares() {
@@ -2180,21 +2174,44 @@ export function startClientApp(): void {
         syncMultiplayerSettingsUi();
       }
 
+      function syncStoredMultiplayerSettings(settings) {
+        const normalized = normalizeMultiplayerSettings(settings);
+        state.multiplayerSettings = normalized;
+        if (state.multiplayerDraftDirty !== true) {
+          state.multiplayerDraft = {
+            enabled: normalized.enabled,
+            host: normalized.host,
+            room: normalized.room,
+            nickname: normalized.nickname,
+            configured: normalized.configured
+          };
+        }
+        syncMultiplayerSettingsUi();
+        void refreshMultiplayerConnection();
+      }
+
       function syncMultiplayerSettingsUi() {
+        const draft = normalizeMultiplayerSettings(state.multiplayerDraft || state.multiplayerSettings);
         if (multiplayerEnabledButton instanceof HTMLButtonElement) {
           const enabled = state.multiplayerSettings.enabled === true;
           multiplayerEnabledButton.classList.toggle("active", enabled);
           multiplayerEnabledButton.setAttribute("aria-pressed", enabled ? "true" : "false");
           multiplayerEnabledButton.textContent = enabled ? "Sharing On" : "Sharing Off";
         }
-        if (multiplayerHostInput instanceof HTMLInputElement && multiplayerHostInput.value !== state.multiplayerSettings.host) {
-          multiplayerHostInput.value = state.multiplayerSettings.host;
+        if (multiplayerHostInput instanceof HTMLInputElement && multiplayerHostInput.value !== draft.host) {
+          multiplayerHostInput.value = draft.host;
         }
-        if (multiplayerRoomInput instanceof HTMLInputElement && multiplayerRoomInput.value !== state.multiplayerSettings.room) {
-          multiplayerRoomInput.value = state.multiplayerSettings.room;
+        if (multiplayerRoomInput instanceof HTMLInputElement && multiplayerRoomInput.value !== draft.room) {
+          multiplayerRoomInput.value = draft.room;
         }
-        if (multiplayerNicknameInput instanceof HTMLInputElement && multiplayerNicknameInput.value !== state.multiplayerSettings.nickname) {
-          multiplayerNicknameInput.value = state.multiplayerSettings.nickname;
+        if (multiplayerNicknameInput instanceof HTMLInputElement && multiplayerNicknameInput.value !== draft.nickname) {
+          multiplayerNicknameInput.value = draft.nickname;
+        }
+        if (multiplayerSaveButton instanceof HTMLButtonElement) {
+          multiplayerSaveButton.disabled = state.integrationSettingsPending === true;
+        }
+        if (multiplayerClearButton instanceof HTMLButtonElement) {
+          multiplayerClearButton.disabled = state.integrationSettingsPending === true || !state.multiplayerSettings.configured;
         }
         if (multiplayerStatus instanceof HTMLElement) {
           multiplayerStatus.textContent = state.multiplayerStatus.detail;
@@ -2232,7 +2249,8 @@ export function startClientApp(): void {
             transport: "partykit",
             peerId: peer.peerId,
             peerLabel: peer.peerLabel,
-            peerHost: state.multiplayerSettings.host || null
+            peerHost: state.multiplayerSettings.host || null,
+            peerRoom: state.multiplayerSettings.room || null
           }
         };
       }
@@ -2647,26 +2665,16 @@ export function startClientApp(): void {
       }
 
       function commitMultiplayerSettings(nextSettings) {
-        const nextHost = sanitizeMultiplayerField(nextSettings && nextSettings.host);
-        const nextRoom = sanitizeMultiplayerField(nextSettings && nextSettings.room);
-        const nextNickname = sanitizeMultiplayerNickname(nextSettings && nextSettings.nickname);
-        const nextHasCredentials = Boolean(nextHost && nextRoom);
-        const previousHadCredentials = hasMultiplayerCredentials(state.multiplayerSettings);
-        const nextEnabled =
-          typeof (nextSettings && nextSettings.enabled) === "boolean"
-            ? Boolean(nextSettings && nextSettings.enabled) && nextHasCredentials
-            : nextHasCredentials
-              ? (!previousHadCredentials ? true : state.multiplayerSettings.enabled === true)
-              : false;
-        state.multiplayerSettings = {
-          enabled: nextEnabled,
-          host: nextHost,
-          room: nextRoom,
-          nickname: nextNickname
+        const normalized = normalizeMultiplayerSettings(nextSettings);
+        state.multiplayerDraft = {
+          enabled: normalized.enabled,
+          host: normalized.host,
+          room: normalized.room,
+          nickname: normalized.nickname,
+          configured: normalized.configured
         };
-        saveMultiplayerSettings();
+        state.multiplayerDraftDirty = true;
         syncMultiplayerSettingsUi();
-        void refreshMultiplayerConnection();
       }
 
 
@@ -2688,6 +2696,8 @@ export function startClientApp(): void {
       const multiplayerHostInput = document.getElementById("multiplayer-host-input");
       const multiplayerRoomInput = document.getElementById("multiplayer-room-input");
       const multiplayerNicknameInput = document.getElementById("multiplayer-nickname-input");
+      const multiplayerSaveButton = document.getElementById("multiplayer-save-button");
+      const multiplayerClearButton = document.getElementById("multiplayer-clear-button");
       const multiplayerStatus = document.getElementById("multiplayer-status");
       const connectionPill = document.getElementById("connection-pill");
       const stamp = document.getElementById("stamp");
@@ -2778,22 +2788,27 @@ export function startClientApp(): void {
         setTextIfChanged(cursorApiKeyStatus, cursorIntegrationStatusText());
       }
 
+      function applyIntegrationSettingsResponse(nextSettings) {
+        state.integrationSettings = nextSettings || defaultIntegrationSettings();
+        syncStoredMultiplayerSettings(state.integrationSettings.multiplayer);
+      }
+
       async function refreshIntegrationSettings() {
         try {
           const response = await fetch("/api/settings/integrations");
           if (!response.ok) {
             throw new Error(await response.text());
           }
-          state.integrationSettings = await response.json();
+          applyIntegrationSettingsResponse(await response.json());
           state.integrationSettingsError = null;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          state.integrationSettings = defaultIntegrationSettings();
+          applyIntegrationSettingsResponse(defaultIntegrationSettings());
           state.integrationSettingsError = "Cursor settings unavailable: " + message;
         } finally {
           state.integrationSettingsPending = false;
-          syncCursorIntegrationUi();
-        }
+        syncCursorIntegrationUi();
+      }
       }
 
       async function saveCursorApiKey() {
@@ -2813,7 +2828,7 @@ export function startClientApp(): void {
         syncCursorIntegrationUi();
 
         try {
-          state.integrationSettings = await postJson("/api/settings/integrations", { cursorApiKey });
+          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { cursorApiKey }));
           state.integrationSettingsError = null;
           cursorApiKeyInput.value = "";
         } catch (error) {
@@ -2831,7 +2846,7 @@ export function startClientApp(): void {
         syncCursorIntegrationUi();
 
         try {
-          state.integrationSettings = await postJson("/api/settings/integrations", { cursorApiKey: null });
+          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { cursorApiKey: null }));
           state.integrationSettingsError = null;
           if (cursorApiKeyInput instanceof HTMLInputElement) {
             cursorApiKeyInput.value = "";
@@ -4203,7 +4218,7 @@ export function startClientApp(): void {
         if (!agent || !agent.network) {
           return "";
         }
-        const location = agent.network.peerHost ? ` @ ${agent.network.peerHost}` : "";
+        const location = agent.network.peerRoom ? ` @ ${agent.network.peerRoom}` : "";
         return `${agent.network.peerLabel}${location}`;
       }
 
@@ -4724,7 +4739,7 @@ export function startClientApp(): void {
           `<span>${escapeHtml(titleCaseWords(agentKindLabel(snapshot, agent)))}</span>`,
           `<span>${escapeHtml(agentHoverSourceLabel(agent, summary.source))}</span>`,
           agent.network
-            ? `<span class="agent-hover-peer">${escapeHtml(agent.network.peerLabel)}</span>${agent.network.peerHost ? `<span>${escapeHtml(" @ " + agent.network.peerHost)}</span>` : ""}`
+            ? `<span class="agent-hover-peer">${escapeHtml(agent.network.peerLabel + (agent.network.peerRoom ? " @ " + agent.network.peerRoom : ""))}</span>`
             : "",
           lead ? `<span>${escapeHtml("with " + lead)}</span>` : "",
           `<span>${escapeHtml(formatUpdatedAt(agent.updatedAt))}</span>`
@@ -8391,6 +8406,30 @@ function focusKeysIntersect(keys, focusedKeys) {
         }).join("");
       }
 
+      function workspaceFloorChromeToken(snapshot, options = {}) {
+        if (!snapshot) {
+          return "";
+        }
+        const participantToken = sharedParticipantLabelsForSnapshot(snapshot).join("|");
+        const localOwnershipToken = snapshotHasLocalProject(snapshot) ? "local" : "remote";
+        const shareToken = shouldRenderProjectShareToggle(snapshot)
+          ? (projectShareEnabledForSnapshot(snapshot) ? "shared-on" : "shared-off")
+          : "share-hidden";
+        const worktreeToken = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)
+          ? worktreeNameForSnapshot(snapshot)
+          : "";
+        return [
+          snapshot.projectRoot,
+          projectLabel(snapshot.projectRoot),
+          participantToken,
+          localOwnershipToken,
+          shareToken,
+          worktreeToken,
+          options.focusMode === true ? "focus" : "default",
+          options.actionType || ""
+        ].join("::");
+      }
+
       function applySessionFocus() {
         const focusedKeys = new Set(state.focusedSessionKeys);
         const hasFocus = focusedKeys.size > 0;
@@ -8711,8 +8750,13 @@ function focusKeysIntersect(keys, focusedKeys) {
         const counts = fleetCounts({ projects: sessionProjects });
         const nextSceneToken = state.view === "map"
           ? (snapshot
-            ? `project-shell::${snapshot.projectRoot}::${state.workspaceFullscreen ? "focus" : "default"}`
-            : `fleet-shell::${displayedProjects.map((project) => project.projectRoot).join("||")}`)
+            ? `project-shell::${workspaceFloorChromeToken(snapshot, {
+              focusMode: state.workspaceFullscreen,
+              actionType: "toggle-workspace-focus"
+            })}`
+            : `fleet-shell::${displayedProjects.map((project) => workspaceFloorChromeToken(project, {
+              actionType: "select-project"
+            })).join("||")}`)
           : (snapshot
             ? `project::${sceneSnapshotToken(snapshot)}`
             : `fleet::${displayedProjects.map(sceneSnapshotToken).join("||")}`);
@@ -9050,52 +9094,109 @@ function focusKeysIntersect(keys, focusedKeys) {
           void clearCursorApiKey();
         });
       }
-      const commitMultiplayerInputs = () => {
+      const commitMultiplayerInputs = (overrides = {}) => {
         commitMultiplayerSettings({
+          ...state.multiplayerDraft,
           host: multiplayerHostInput instanceof HTMLInputElement ? multiplayerHostInput.value : "",
           room: multiplayerRoomInput instanceof HTMLInputElement ? multiplayerRoomInput.value : "",
-          nickname: multiplayerNicknameInput instanceof HTMLInputElement ? multiplayerNicknameInput.value : ""
+          nickname: multiplayerNicknameInput instanceof HTMLInputElement ? multiplayerNicknameInput.value : "",
+          ...overrides
         });
       };
+      const saveMultiplayerDraft = async (overrides = {}) => {
+        state.integrationSettingsPending = true;
+        syncCursorIntegrationUi();
+        syncMultiplayerSettingsUi();
+        try {
+          state.multiplayerDraftDirty = false;
+          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", {
+            multiplayer: {
+              ...state.multiplayerDraft,
+              ...overrides
+            }
+          }));
+          state.integrationSettingsError = null;
+        } catch (error) {
+          state.multiplayerDraftDirty = true;
+          const message = error instanceof Error ? error.message : String(error);
+          setMultiplayerStatus("error", "Failed to save shared room settings: " + message);
+        } finally {
+          state.integrationSettingsPending = false;
+          syncCursorIntegrationUi();
+          syncMultiplayerSettingsUi();
+        }
+      };
+      const clearMultiplayerDraft = async () => {
+        state.integrationSettingsPending = true;
+        syncCursorIntegrationUi();
+        syncMultiplayerSettingsUi();
+        try {
+          state.multiplayerDraftDirty = false;
+          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { multiplayer: null }));
+          state.integrationSettingsError = null;
+        } catch (error) {
+          state.multiplayerDraftDirty = true;
+          const message = error instanceof Error ? error.message : String(error);
+          setMultiplayerStatus("error", "Failed to clear shared room settings: " + message);
+        } finally {
+          state.integrationSettingsPending = false;
+          syncCursorIntegrationUi();
+          syncMultiplayerSettingsUi();
+        }
+      };
       if (multiplayerHostInput instanceof HTMLInputElement) {
-        multiplayerHostInput.addEventListener("change", commitMultiplayerInputs);
-        multiplayerHostInput.addEventListener("blur", commitMultiplayerInputs);
+        multiplayerHostInput.addEventListener("input", () => {
+          commitMultiplayerInputs();
+        });
         multiplayerHostInput.addEventListener("keydown", (event) => {
           if (event.key === "Enter") {
             event.preventDefault();
-            commitMultiplayerInputs();
+            void saveMultiplayerDraft();
           }
         });
       }
       if (multiplayerRoomInput instanceof HTMLInputElement) {
-        multiplayerRoomInput.addEventListener("change", commitMultiplayerInputs);
-        multiplayerRoomInput.addEventListener("blur", commitMultiplayerInputs);
+        multiplayerRoomInput.addEventListener("input", () => {
+          commitMultiplayerInputs();
+        });
         multiplayerRoomInput.addEventListener("keydown", (event) => {
           if (event.key === "Enter") {
             event.preventDefault();
-            commitMultiplayerInputs();
+            void saveMultiplayerDraft();
           }
         });
       }
       if (multiplayerNicknameInput instanceof HTMLInputElement) {
-        multiplayerNicknameInput.addEventListener("change", commitMultiplayerInputs);
-        multiplayerNicknameInput.addEventListener("blur", commitMultiplayerInputs);
+        multiplayerNicknameInput.addEventListener("input", () => {
+          commitMultiplayerInputs();
+        });
         multiplayerNicknameInput.addEventListener("keydown", (event) => {
           if (event.key === "Enter") {
             event.preventDefault();
-            commitMultiplayerInputs();
+            void saveMultiplayerDraft();
           }
+        });
+      }
+      if (multiplayerSaveButton instanceof HTMLButtonElement) {
+        multiplayerSaveButton.addEventListener("click", () => {
+          void saveMultiplayerDraft();
+        });
+      }
+      if (multiplayerClearButton instanceof HTMLButtonElement) {
+        multiplayerClearButton.addEventListener("click", () => {
+          void clearMultiplayerDraft();
         });
       }
       if (multiplayerEnabledButton instanceof HTMLButtonElement) {
         multiplayerEnabledButton.addEventListener("click", () => {
-          commitMultiplayerSettings({
-            ...state.multiplayerSettings,
+          commitMultiplayerInputs({
+            enabled: !state.multiplayerSettings.enabled
+          });
+          void saveMultiplayerDraft({
             enabled: !state.multiplayerSettings.enabled
           });
         });
       }
-      void refreshMultiplayerConnection();
 
       if (!screenshotMode) {
         window.addEventListener("online", () => setConnection("reconnecting"));

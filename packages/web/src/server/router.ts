@@ -181,13 +181,59 @@ async function handleIntegrationSettingsRoute(context: RequestContext): Promise<
   if (matchesMethod(context, "POST")) {
     const payload = await readJsonBody(context.request);
     const rawCursorApiKey = payload.cursorApiKey;
+    const rawMultiplayer = payload.multiplayer;
     if (rawCursorApiKey !== null && typeof rawCursorApiKey !== "string" && typeof rawCursorApiKey !== "undefined") {
       sendJson(context.response, 400, { error: "cursorApiKey must be a string or null" });
       return true;
     }
+    if (
+      rawMultiplayer !== null
+      && typeof rawMultiplayer !== "undefined"
+      && (typeof rawMultiplayer !== "object" || Array.isArray(rawMultiplayer))
+    ) {
+      sendJson(context.response, 400, { error: "multiplayer must be an object or null" });
+      return true;
+    }
 
-    const cursorApiKey = typeof rawCursorApiKey === "string" ? rawCursorApiKey : null;
-    sendJson(context.response, 200, await context.service.setCursorApiKey(cursorApiKey));
+    if (typeof rawMultiplayer === "object" && rawMultiplayer) {
+      const { enabled, host, room, nickname } = rawMultiplayer as Record<string, unknown>;
+      if (typeof enabled !== "boolean" && typeof enabled !== "undefined") {
+        sendJson(context.response, 400, { error: "multiplayer.enabled must be a boolean when provided" });
+        return true;
+      }
+      if (host !== null && typeof host !== "string" && typeof host !== "undefined") {
+        sendJson(context.response, 400, { error: "multiplayer.host must be a string or null" });
+        return true;
+      }
+      if (room !== null && typeof room !== "string" && typeof room !== "undefined") {
+        sendJson(context.response, 400, { error: "multiplayer.room must be a string or null" });
+        return true;
+      }
+      if (nickname !== null && typeof nickname !== "string" && typeof nickname !== "undefined") {
+        sendJson(context.response, 400, { error: "multiplayer.nickname must be a string or null" });
+        return true;
+      }
+    }
+
+    if (typeof rawCursorApiKey === "undefined" && typeof rawMultiplayer === "undefined") {
+      sendJson(context.response, 400, { error: "cursorApiKey or multiplayer is required" });
+      return true;
+    }
+
+    if (typeof rawCursorApiKey !== "undefined") {
+      const cursorApiKey = typeof rawCursorApiKey === "string" ? rawCursorApiKey : null;
+      await context.service.setCursorApiKey(cursorApiKey);
+    }
+    const response =
+      typeof rawMultiplayer !== "undefined"
+        ? await context.service.setMultiplayerSettings(rawMultiplayer as {
+          enabled?: boolean;
+          host?: string | null;
+          room?: string | null;
+          nickname?: string | null;
+        } | null)
+        : context.service.getIntegrationSettings();
+    sendJson(context.response, 200, response);
     return true;
   }
 

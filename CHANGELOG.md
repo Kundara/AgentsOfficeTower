@@ -32,6 +32,8 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed shared-room settings so host, room, and nickname now restore from machine-local Agents Office user data on launch, no longer disappear on refresh, and no longer fight active input while the user is typing in the Settings popup.
+- Fixed Codex reply-event precedence so a streamed `item/completed` final answer now keeps ownership of the visible latest reply even if a later `thread/read/agentMessage` fallback arrives from a stale reread, preventing the UI from briefly snapping back to older commentary text after the real final answer already rendered.
 - Fixed live workstation z-ordering so the assembled client runtime preserves workstation shell depth metadata instead of dropping it through a duplicate sprite factory, which had been forcing desk computers back onto fixed layer `9` and bypassing the row sorter entirely.
 - Fixed seated workstation layering so mounted users now win the same-row tie against their own workstation shell, keeping the avatar visually above the computer while still letting higher-row passersby stay behind the desk.
 - Fixed workstation occupant layering so any avatar mounted on a workstation slot now keeps that front-layer priority even outside the narrow active-seat state set, instead of dropping behind the chair/computer until the state became fully active.

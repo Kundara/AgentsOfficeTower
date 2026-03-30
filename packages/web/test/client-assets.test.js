@@ -58,6 +58,18 @@ test("renderHtml includes the global split-worktrees toggle", () => {
   assert.match(html, /Split Worktrees/);
 });
 
+test("renderHtml includes explicit shared-room save and clear controls", () => {
+  const html = renderHtml({
+    host: "127.0.0.1",
+    port: 4181,
+    explicitProjects: false,
+    projects: [{ root: "/tmp/project", label: "project" }]
+  });
+
+  assert.match(html, /id="multiplayer-save-button"/);
+  assert.match(html, /id="multiplayer-clear-button"/);
+});
+
 test("z-order audit html exposes the visual workstation overlap harness", () => {
   const html = renderZOrderAuditHtml();
 
@@ -222,16 +234,23 @@ test("blocked failure hover summaries prefer the current error detail over stale
 test("multiplayer runtime persists per-project sharing and cools remote-only projects for one hour", () => {
   const bootstrapSource = readRuntimeSource("bootstrap-source.ts");
   const settingsSource = readRuntimeSource("settings-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
   const multiplayerSource = readClientSource("multiplayer-source.ts");
 
   assert.ok(bootstrapSource.includes('multiplayerProjectShareStorageKey = \\"codex-agents-office:multiplayer-project-shares\\";'));
   assert.ok(settingsSource.includes("multiplayerProjectShares: loadMultiplayerProjectShares(),"));
+  assert.ok(settingsSource.includes("multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },"));
   assert.ok(multiplayerSource.includes("const MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS = 60 * 60 * 1000;"));
+  assert.ok(multiplayerSource.includes("function normalizeMultiplayerSettings(settings) {"));
+  assert.ok(multiplayerSource.includes("function syncStoredMultiplayerSettings(settings) {"));
   assert.ok(multiplayerSource.includes("function loadMultiplayerProjectShares() {"));
   assert.ok(multiplayerSource.includes("function setProjectRootsSharedWithRoom(projectRoots, shared) {"));
   assert.ok(multiplayerSource.includes("function cooledRemoteProjectSnapshot(entry) {"));
   assert.ok(multiplayerSource.includes("Shared project cooldown · keep remote-only floors visible for up to 1 hour after sharing stops."));
   assert.ok(multiplayerSource.includes("const sharedProjects = state.localFleet.projects.filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot));"));
+  assert.ok(uiSource.includes('applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", {'));
+  assert.ok(uiSource.includes('multiplayerHostInput.addEventListener("input", () => {'));
+  assert.ok(uiSource.includes('multiplayerSaveButton.addEventListener("click", () => {'));
 });
 
 test("workspace floors show multiplayer participants, grey remote-only titles, and expose a shared toggle", () => {
@@ -425,6 +444,9 @@ test("runtime source merges worktrees by repo and renders worktree badges in hov
   assert.ok(layoutSource.includes("sourceProjectRoot,"));
   assert.ok(renderSource.includes('const worktreeHtml = worktreeName'));
   assert.ok(renderSource.includes('class="agent-hover-worktree"'));
+  assert.ok(renderSource.includes('class="agent-hover-peer"'));
+  assert.ok(renderSource.includes('agent.network.peerRoom ?'));
+  assert.ok(!renderSource.includes('" @ " + agent.network.peerHost'));
   assert.ok(sceneSource.includes('tower-floor-title-project'));
   assert.ok(sceneSource.includes('tower-floor-title-worktree'));
   assert.ok(uiSource.includes('const selectableProjects = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)'));

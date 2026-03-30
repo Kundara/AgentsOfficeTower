@@ -165,6 +165,7 @@ How we use it:
 - map the session into project rooms using extracted paths
 - keep read-only visibility for older threads outside the live subscription window
 - synthesize fallback assistant-message events from reread desktop rollout threads only when live `thread/resume` delivery is unavailable, so read-only threads can still toast without replaying healthy subscribed sessions
+- treat those synthesized `thread/read/agentMessage` events as recovery-only signal; streamed `item/completed` final answers remain the authoritative visible reply when both exist for the same thread, so a late reread cannot overwrite a newer live final answer in the UI
 
 ### `thread/resume` / `thread/unsubscribe`
 
@@ -834,7 +835,7 @@ How it works:
 - `/api/events` streams live fleet updates over SSE
 - `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
 - browser-side rendering starts from `client/index.ts`, executes the generated `app-runtime.ts` module, and then delegates behavior across the focused runtime section files
-- optional PartyKit room sync, shared-room settings persistence, per-project share preferences, and remote-only floor cooldown handling live in `multiplayer-source.ts`
+- optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, per-project share preferences, and remote-only floor cooldown handling live in `multiplayer-source.ts`
 
 - server-sent events from `/api/events`
 
