@@ -18,10 +18,12 @@ const {
   normalizeClaudeSdkMessageForTest
 } = require("../dist/claude-agent-sdk.js");
 const {
+  describeStoredAppearanceSettings,
   describeCursorIntegrationSettings,
   describeStoredMultiplayerSettings,
   getAppSettingsFilePath,
   resetAppSettingsCacheForTest,
+  setStoredAppearanceSettings,
   setStoredCursorApiKey,
   setStoredMultiplayerSettings
 } = require("../dist/app-settings.js");
@@ -1370,24 +1372,76 @@ test("stored multiplayer settings persist host, room, nickname, and enabled stat
       room: "design/review",
       nickname: "kaki"
     });
-    assert.deepEqual(describeStoredMultiplayerSettings(), {
+    const describedSettings = describeStoredMultiplayerSettings();
+    assert.equal(typeof describedSettings.deviceId, "string");
+    assert.ok(describedSettings.deviceId.length > 0);
+    assert.deepEqual({
+      ...describedSettings,
+      deviceId: "<generated>"
+    }, {
       enabled: true,
       host: "team-sync.partykit.dev",
       room: "design/review",
       nickname: "kaki",
+      deviceId: "<generated>",
       configured: true
     });
     const savedSettings = await readFile(getAppSettingsFilePath(), "utf8");
     assert.match(savedSettings, /team-sync\.partykit\.dev/);
     assert.match(savedSettings, /design\/review/);
     assert.match(savedSettings, /kaki/);
+    assert.match(savedSettings, /"deviceId":\s*"[0-9a-f-]+"/);
     await setStoredCursorApiKey("cursor_test_12345678");
-    assert.deepEqual(describeStoredMultiplayerSettings(), {
+    assert.deepEqual({
+      ...describeStoredMultiplayerSettings(),
+      deviceId: describedSettings.deviceId
+    }, {
       enabled: true,
       host: "team-sync.partykit.dev",
       room: "design/review",
       nickname: "kaki",
+      deviceId: describedSettings.deviceId,
       configured: true
+    });
+  } finally {
+    if (typeof previousXdgConfigHome === "string") {
+      process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+    } else {
+      delete process.env.XDG_CONFIG_HOME;
+    }
+    if (typeof previousCodexHome === "string") {
+      process.env.CODEX_HOME = previousCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
+    }
+    resetAppSettingsCacheForTest();
+  }
+});
+
+test("stored appearance settings persist the selected hat and survive other settings writes", { concurrency: false }, async () => {
+  const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.XDG_CONFIG_HOME = await mkdtemp(path.join(os.tmpdir(), "appearance-settings-stored-"));
+  delete process.env.CODEX_HOME;
+  resetAppSettingsCacheForTest();
+
+  try {
+    await setStoredAppearanceSettings({
+      hatId: "sombrero"
+    });
+    assert.deepEqual(describeStoredAppearanceSettings(), {
+      hatId: "sombrero"
+    });
+    const savedSettings = await readFile(getAppSettingsFilePath(), "utf8");
+    assert.match(savedSettings, /sombrero/);
+    await setStoredMultiplayerSettings({
+      enabled: true,
+      host: "team-sync.partykit.dev",
+      room: "design/review",
+      nickname: "kaki"
+    });
+    assert.deepEqual(describeStoredAppearanceSettings(), {
+      hatId: "sombrero"
     });
   } finally {
     if (typeof previousXdgConfigHome === "string") {

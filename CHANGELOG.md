@@ -7,6 +7,24 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ## [0.1.0] - 2026-03-25
 
+### Added
+
+- Added a machine-local image-only hat selector in the browser `Settings` popup, with a first `no hat` option and immediate application across the local player's visible agents.
+- Added hat manifest entries under `packages/web/src/config/pixel-office-manifest.json`, including shared default scale/offset values plus per-hat override hooks for outlier sprites.
+
+### Changed
+
+- Changed shared-room fleet payloads so each peer now broadcasts its selected `hatId`, letting merged remote agents keep their own hat styling instead of collapsing to the viewer's local cosmetic choice.
+- Changed avatar rendering so hats are now attached to the same Pixi motion/depth pipeline as the base avatar sprite, keeping hats aligned through seating, walking, fading, and workstation occlusion.
+
+### Fixed
+
+- Fixed shared-room self-duplication so the browser view and VS Code panel now reuse the same machine-local multiplayer device identity, preventing the same user's Codex agents from reappearing as remote peers when both clients join the same room.
+
+### Docs
+
+- Updated the README, product spec, architecture notes, and self-development checks to describe the new hat selector, config-driven hat placement, and shared-room hat propagation.
+
 ### Changed
 
 - Changed the VS Code activity-bar surface to embed the real Agents Office renderer for the current workspace through a local web server, replacing the older simplified placeholder room-grid view.

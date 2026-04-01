@@ -693,21 +693,81 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         });
       }
       if (cursorApiKeyInput instanceof HTMLInputElement) {
+        cursorApiKeyInput.addEventListener("input", () => {
+          queueCursorApiKeySave();
+        });
+        cursorApiKeyInput.addEventListener("blur", () => {
+          queueCursorApiKeySave(true);
+        });
         cursorApiKeyInput.addEventListener("keydown", (event) => {
           if (event.key === "Enter") {
             event.preventDefault();
-            void saveCursorApiKey();
+            queueCursorApiKeySave(true);
           }
         });
       }
-      if (cursorApiKeySaveButton instanceof HTMLButtonElement) {
-        cursorApiKeySaveButton.addEventListener("click", () => {
-          void saveCursorApiKey();
+      let hatSelectionRequestId = 0;
+      function applyOptimisticHatSelection(hatId) {
+        state.integrationSettings = normalizedIntegrationSettings({
+          ...state.integrationSettings,
+          appearance: {
+            ...(state.integrationSettings && state.integrationSettings.appearance
+              ? state.integrationSettings.appearance
+              : defaultIntegrationSettings().appearance),
+            hatId: normalizeHatId(hatId)
+          }
+        });
+        syncAppearanceSettingsUi();
+        render();
+        scheduleMultiplayerBroadcast();
+      }
+      async function saveHatSelection(hatId) {
+        const requestId = ++hatSelectionRequestId;
+        const previousHatId = currentSelectedHatId();
+        applyOptimisticHatSelection(hatId);
+        state.appearanceSettingsPending = true;
+        syncAppearanceSettingsUi();
+        try {
+          const response = await postJson("/api/settings/integrations", {
+            appearance: {
+              hatId: normalizeHatId(hatId)
+            }
+          });
+          if (requestId !== hatSelectionRequestId) {
+            return;
+          }
+          applyIntegrationSettingsResponse(response);
+        } catch (error) {
+          if (requestId !== hatSelectionRequestId) {
+            return;
+          }
+          console.error("failed to save hat selection", error);
+          applyOptimisticHatSelection(previousHatId);
+        } finally {
+          if (requestId !== hatSelectionRequestId) {
+            return;
+          }
+          state.appearanceSettingsPending = false;
+          syncAppearanceSettingsUi();
+        }
+      }
+      function cycleHatSelection(direction) {
+        const entries = hatSelectionEntries();
+        if (entries.length <= 1) {
+          return;
+        }
+        const index = currentHatSelectionIndex();
+        const nextIndex = (index + direction + entries.length) % entries.length;
+        void saveHatSelection(entries[nextIndex]);
+      }
+      if (hatPrevButton instanceof HTMLButtonElement) {
+        hatPrevButton.addEventListener("click", () => {
+          cycleHatSelection(-1);
         });
       }
-      if (cursorApiKeyClearButton instanceof HTMLButtonElement) {
-        cursorApiKeyClearButton.addEventListener("click", () => {
-          void clearCursorApiKey();
+      if (hatNextButton instanceof HTMLButtonElement) {
+        hatNextButton.addEventListener("click", () => {
+          cycleHatSelection(1);
         });
       }
       const commitMultiplayerInputs = (overrides = {}) => {

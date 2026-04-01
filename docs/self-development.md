@@ -77,6 +77,8 @@ A good iteration improves at least one of these:
 - verify desk pods start on tile columns and their workstation seat cells remain aligned to the same grid contract as rec-strip furniture
 - verify global text scale changes hover/toast/map text without changing room geometry or desk assignment
 - verify approval, input-wait, file-change, command-run, and turn lifecycle states have clear visible notification paths
+- verify the Settings hat picker applies immediately to all local agents without showing file names, and that the first slot cleanly renders as `no hat`
+- verify shared-room peers keep their own selected hats after fleet merge instead of inheriting the local viewer's hat choice
 - verify the browser session panel exposes the durable approval/input "needs you" queue
 - verify Claude-derived sessions are visibly marked as inferred in hover/session detail
 - verify Claude hook-backed sessions are visibly marked as typed rather than inferred when `.codex-agents/claude-hooks/<session-id>.jsonl` exists

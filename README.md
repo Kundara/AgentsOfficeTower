@@ -1,6 +1,15 @@
 # Agents Office Tower
 
-Live workload visibility for coding agents.
+A pixel-art shared workspace for all agents (Codex + Claude + Cursor).
+
+## Main Features
+
+- Sessions represented as agent avatars.
+- Observe active local agents per project (project = floor) plus the last 4 agents.
+- Subagents: an agent becomes a boss with a booth once it has more than 2 subagents.
+- Multiplayer: share activity with friends or machines running on the same projects and see your agents together.
+- Worktrees: split floors per worktree or collapse them together.
+- Web and VS Code plugin views.
 
 Agents Office Tower shows active work across local and cloud agent sessions in three places:
 
@@ -137,7 +146,7 @@ Fields:
 - `Room`: a shared room name such as `team/project-name`
 - `Nickname`: an optional short label shown on remote agents
 
-Once connected, each local project floor also gets a persisted `Shared` toggle in its header so you can stop broadcasting that project without leaving the room. Remote-only projects exposed by the room now stay visible even when they are not local to your machine, show active participant nicknames in the floor header, grey the title slightly when you are not involved locally, and cool down for 1 hour before disappearing after sharing stops.
+Once connected, each local project floor also gets a persisted `Shared` toggle in its header so you can stop broadcasting that project without leaving the room. Remote-only projects exposed by the room now stay visible even when they are not local to your machine, show active participant nicknames in the floor header, grey the title slightly when you are not involved locally, and cool down for 1 hour before disappearing after sharing stops. The browser and VS Code panel also reuse the same machine-local room identity now, so opening both views at once will not mirror your own Codex agents back in as a fake remote peer.
 
 Quick relay flow:
 

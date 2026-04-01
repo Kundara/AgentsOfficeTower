@@ -7,9 +7,10 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
       const debugTilesButton = document.getElementById("debug-tiles-button");
       const textScaleInput = document.getElementById("text-scale-input");
       const textScaleOutput = document.getElementById("text-scale-output");
+      const hatPrevButton = document.getElementById("hat-prev-button");
+      const hatNextButton = document.getElementById("hat-next-button");
+      const hatPreview = document.getElementById("hat-preview");
       const cursorApiKeyInput = document.getElementById("cursor-api-key-input");
-      const cursorApiKeySaveButton = document.getElementById("cursor-api-key-save-button");
-      const cursorApiKeyClearButton = document.getElementById("cursor-api-key-clear-button");
       const cursorApiKeyStatus = document.getElementById("cursor-api-key-status");
       const multiplayerEnabledButton = document.getElementById("multiplayer-enabled-button");
       const multiplayerHostInput = document.getElementById("multiplayer-host-input");
@@ -31,6 +32,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
       const roomsPath = document.getElementById("rooms-path");
       applyGlobalSceneSettings();
       syncSettingsPopup();
+      syncAppearanceSettingsUi();
       syncCursorIntegrationUi();
       syncMultiplayerSettingsUi();
       void refreshIntegrationSettings();
@@ -75,7 +77,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           return "Saved on this machine for Agents Office" + (cursor.maskedKey ? " (" + cursor.maskedKey + ")." : ".");
         }
 
-        return "No local Cursor API key is saved. Local Cursor sessions may still appear automatically; save a key only to include official Cursor background agents for matching repos.";
+        return "No Cursor API Key is saved";
       }
 
       function syncCursorIntegrationUi() {
@@ -95,20 +97,77 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           }
         }
 
-        if (cursorApiKeySaveButton instanceof HTMLButtonElement) {
-          cursorApiKeySaveButton.disabled = busy;
-          cursorApiKeySaveButton.textContent = busy ? "Saving..." : "Save Key";
-        }
-
-        if (cursorApiKeyClearButton instanceof HTMLButtonElement) {
-          cursorApiKeyClearButton.disabled = busy || cursor.storedConfigured !== true;
-        }
-
         setTextIfChanged(cursorApiKeyStatus, cursorIntegrationStatusText());
       }
 
+      function normalizedIntegrationSettings(nextSettings) {
+        const defaults = defaultIntegrationSettings();
+        const incoming = nextSettings && typeof nextSettings === "object" ? nextSettings : {};
+        return {
+          ...defaults,
+          ...incoming,
+          cursor: {
+            ...defaults.cursor,
+            ...(incoming && incoming.cursor ? incoming.cursor : {})
+          },
+          appearance: {
+            ...defaults.appearance,
+            ...(incoming && incoming.appearance ? incoming.appearance : {})
+          },
+          multiplayer: {
+            ...defaults.multiplayer,
+            ...(incoming && incoming.multiplayer ? incoming.multiplayer : {})
+          }
+        };
+      }
+
+      function hatSelectionEntries() {
+        return [null].concat(
+          pixelOfficeHatOptions()
+            .map((entry) => normalizeHatId(entry && entry.id))
+            .filter(Boolean)
+        );
+      }
+
+      function currentHatSelectionIndex() {
+        const entries = hatSelectionEntries();
+        const currentHatId = currentSelectedHatId();
+        const matchIndex = entries.findIndex((hatId) => hatId === currentHatId);
+        return matchIndex >= 0 ? matchIndex : 0;
+      }
+
+      function selectedHatDefinition() {
+        return hatDefinitionById(currentSelectedHatId());
+      }
+
+      function syncAppearanceSettingsUi() {
+        const entries = hatSelectionEntries();
+        if (hatPrevButton instanceof HTMLButtonElement) {
+          hatPrevButton.disabled = entries.length <= 1;
+        }
+        if (hatNextButton instanceof HTMLButtonElement) {
+          hatNextButton.disabled = entries.length <= 1;
+        }
+        if (hatPreview instanceof HTMLElement) {
+          const hat = selectedHatDefinition();
+          if (!hat) {
+            hatPreview.innerHTML = '<div class="hat-preview-frame is-empty" aria-label="No hat selected"><span class="hat-preview-empty" aria-hidden="true"></span></div>';
+            return;
+          }
+          const previewScale = Number.isFinite(hat.previewScale) ? Number(hat.previewScale) : pixelOfficeHatDefaults().previewScale;
+          hatPreview.innerHTML = '<div class="hat-preview-frame" aria-label="Hat selected"><img class="hat-preview-image" src="'
+            + escapeHtml(hat.url)
+            + '" alt="" style="transform: translateY('
+            + Math.round(Math.min(0, hat.offsetPx.y * 0.5))
+            + 'px) scale('
+            + previewScale
+            + ');" /></div>';
+        }
+      }
+
       function applyIntegrationSettingsResponse(nextSettings) {
-        state.integrationSettings = nextSettings || defaultIntegrationSettings();
+        state.integrationSettings = normalizedIntegrationSettings(nextSettings);
+        syncAppearanceSettingsUi();
         syncStoredMultiplayerSettings(state.integrationSettings.multiplayer);
       }
 
@@ -126,18 +185,40 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           state.integrationSettingsError = "Cursor settings unavailable: " + message;
         } finally {
           state.integrationSettingsPending = false;
-        syncCursorIntegrationUi();
-      }
+          state.appearanceSettingsPending = false;
+          syncAppearanceSettingsUi();
+          syncCursorIntegrationUi();
+        }
       }
 
-      async function saveCursorApiKey() {
+      let cursorApiKeySaveTimer = null;
+
+      function queueCursorApiKeySave(immediate = false) {
+        if (!(cursorApiKeyInput instanceof HTMLInputElement)) {
+          return;
+        }
+        if (cursorApiKeySaveTimer !== null) {
+          clearTimeout(cursorApiKeySaveTimer);
+          cursorApiKeySaveTimer = null;
+        }
+        const saveDelayMs = immediate ? 0 : 500;
+        cursorApiKeySaveTimer = window.setTimeout(() => {
+          cursorApiKeySaveTimer = null;
+          void saveCursorApiKeyDraft();
+        }, saveDelayMs);
+      }
+
+      async function saveCursorApiKeyDraft() {
         if (!(cursorApiKeyInput instanceof HTMLInputElement)) {
           return;
         }
 
         const cursorApiKey = cursorApiKeyInput.value.trim();
-        if (!cursorApiKey) {
-          state.integrationSettingsError = "Enter a Cursor API key before saving.";
+        const cursor = state.integrationSettings && state.integrationSettings.cursor
+          ? state.integrationSettings.cursor
+          : defaultIntegrationSettings().cursor;
+        if (!cursorApiKey && cursor.storedConfigured !== true) {
+          state.integrationSettingsError = null;
           syncCursorIntegrationUi();
           return;
         }
@@ -147,32 +228,14 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         syncCursorIntegrationUi();
 
         try {
-          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { cursorApiKey }));
+          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", {
+            cursorApiKey: cursorApiKey || null
+          }));
           state.integrationSettingsError = null;
           cursorApiKeyInput.value = "";
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           state.integrationSettingsError = "Failed to save Cursor API key: " + message;
-        } finally {
-          state.integrationSettingsPending = false;
-          syncCursorIntegrationUi();
-        }
-      }
-
-      async function clearCursorApiKey() {
-        state.integrationSettingsPending = true;
-        state.integrationSettingsError = null;
-        syncCursorIntegrationUi();
-
-        try {
-          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { cursorApiKey: null }));
-          state.integrationSettingsError = null;
-          if (cursorApiKeyInput instanceof HTMLInputElement) {
-            cursorApiKeyInput.value = "";
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          state.integrationSettingsError = "Failed to clear saved Cursor API key: " + message;
         } finally {
           state.integrationSettingsPending = false;
           syncCursorIntegrationUi();

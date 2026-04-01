@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,11 +9,15 @@ export interface AppSettings {
   integrations: {
     cursorApiKey: string | null;
   };
+  appearance: {
+    hatId: string | null;
+  };
   multiplayer: {
     enabled: boolean;
     host: string | null;
     room: string | null;
     nickname: string | null;
+    deviceId: string | null;
   };
 }
 
@@ -29,7 +34,12 @@ export interface MultiplayerSettings {
   host: string;
   room: string;
   nickname: string;
+  deviceId: string;
   configured: boolean;
+}
+
+export interface AppearanceSettings {
+  hatId: string | null;
 }
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -37,11 +47,15 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   integrations: {
     cursorApiKey: null
   },
+  appearance: {
+    hatId: null
+  },
   multiplayer: {
     enabled: false,
     host: null,
     room: null,
-    nickname: null
+    nickname: null,
+    deviceId: null
   }
 };
 
@@ -60,6 +74,9 @@ function normalizeAppSettings(input: unknown): AppSettings {
   const integrations = record.integrations && typeof record.integrations === "object"
     ? record.integrations as Record<string, unknown>
     : {};
+  const appearance = record.appearance && typeof record.appearance === "object"
+    ? record.appearance as Record<string, unknown>
+    : {};
   const multiplayer = record.multiplayer && typeof record.multiplayer === "object"
     ? record.multiplayer as Record<string, unknown>
     : {};
@@ -72,11 +89,15 @@ function normalizeAppSettings(input: unknown): AppSettings {
     integrations: {
       cursorApiKey: normalizeSecret(integrations.cursorApiKey)
     },
+    appearance: {
+      hatId: normalizeSecret(appearance.hatId)
+    },
     multiplayer: {
       enabled: Boolean(multiplayer.enabled) && hasCredentials,
       host,
       room,
-      nickname: normalizeSecret(multiplayer.nickname)
+      nickname: normalizeSecret(multiplayer.nickname),
+      deviceId: normalizeSecret(multiplayer.deviceId)
     }
   };
 }
@@ -117,6 +138,7 @@ function readStoredAppSettingsSync(): AppSettings {
       cachedSettings = {
         ...DEFAULT_APP_SETTINGS,
         integrations: { ...DEFAULT_APP_SETTINGS.integrations },
+        appearance: { ...DEFAULT_APP_SETTINGS.appearance },
         multiplayer: { ...DEFAULT_APP_SETTINGS.multiplayer }
       };
       return cachedSettings;
@@ -129,6 +151,7 @@ function readStoredAppSettingsSync(): AppSettings {
     cachedSettings = {
       ...DEFAULT_APP_SETTINGS,
       integrations: { ...DEFAULT_APP_SETTINGS.integrations },
+      appearance: { ...DEFAULT_APP_SETTINGS.appearance },
       multiplayer: { ...DEFAULT_APP_SETTINGS.multiplayer }
     };
     return cachedSettings;
@@ -142,6 +165,36 @@ async function writeStoredAppSettings(settings: AppSettings): Promise<void> {
   cachedSettings = settings;
 }
 
+function writeStoredAppSettingsSync(settings: AppSettings): void {
+  const filePath = getAppSettingsFilePath();
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  cachedSettings = settings;
+}
+
+function createMultiplayerDeviceId(): string {
+  return randomUUID();
+}
+
+function ensureStoredMultiplayerDeviceIdSync(): string {
+  const currentSettings = readStoredAppSettingsSync();
+  if (currentSettings.multiplayer.deviceId) {
+    return currentSettings.multiplayer.deviceId;
+  }
+  const deviceId = createMultiplayerDeviceId();
+  const nextSettings: AppSettings = {
+    version: 1,
+    integrations: { ...currentSettings.integrations },
+    appearance: { ...currentSettings.appearance },
+    multiplayer: {
+      ...currentSettings.multiplayer,
+      deviceId
+    }
+  };
+  writeStoredAppSettingsSync(nextSettings);
+  return deviceId;
+}
+
 export function getStoredCursorApiKeySync(): string | null {
   return readStoredAppSettingsSync().integrations.cursorApiKey;
 }
@@ -153,6 +206,28 @@ export async function setStoredCursorApiKey(apiKey: string | null): Promise<void
     integrations: {
       cursorApiKey: normalizeSecret(apiKey)
     },
+    appearance: { ...currentSettings.appearance },
+    multiplayer: { ...currentSettings.multiplayer }
+  };
+  await writeStoredAppSettings(nextSettings);
+}
+
+export function describeStoredAppearanceSettings(): AppearanceSettings {
+  return {
+    hatId: readStoredAppSettingsSync().appearance.hatId ?? null
+  };
+}
+
+export async function setStoredAppearanceSettings(settings: {
+  hatId?: string | null;
+} | null): Promise<void> {
+  const currentSettings = readStoredAppSettingsSync();
+  const nextSettings: AppSettings = {
+    version: 1,
+    integrations: { ...currentSettings.integrations },
+    appearance: {
+      hatId: normalizeSecret(settings?.hatId)
+    },
     multiplayer: { ...currentSettings.multiplayer }
   };
   await writeStoredAppSettings(nextSettings);
@@ -160,6 +235,7 @@ export async function setStoredCursorApiKey(apiKey: string | null): Promise<void
 
 export function getStoredMultiplayerSettingsSync(): MultiplayerSettings {
   const stored = readStoredAppSettingsSync().multiplayer;
+  const deviceId = stored.deviceId ?? ensureStoredMultiplayerDeviceIdSync();
   const host = stored.host ?? "";
   const room = stored.room ?? "";
   const nickname = stored.nickname ?? "";
@@ -169,6 +245,7 @@ export function getStoredMultiplayerSettingsSync(): MultiplayerSettings {
     host,
     room,
     nickname,
+    deviceId,
     configured
   };
 }
@@ -187,11 +264,13 @@ export async function setStoredMultiplayerSettings(settings: {
   const nextSettings: AppSettings = {
     version: 1,
     integrations: { ...currentSettings.integrations },
+    appearance: { ...currentSettings.appearance },
     multiplayer: {
       enabled: configured && settings?.enabled === true,
       host,
       room,
-      nickname
+      nickname,
+      deviceId: currentSettings.multiplayer.deviceId
     }
   };
   await writeStoredAppSettings(nextSettings);

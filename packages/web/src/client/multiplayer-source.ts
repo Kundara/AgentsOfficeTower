@@ -30,6 +30,7 @@ export const MULTIPLAYER_SCRIPT = `
       function normalizeMultiplayerSettings(settings, options = {}) {
         const host = sanitizeMultiplayerField(settings && settings.host);
         const room = sanitizeMultiplayerField(settings && settings.room);
+        const deviceId = sanitizeMultiplayerField(settings && settings.deviceId);
         const hasCredentials = Boolean(host && room);
         const fallbackEnabled = options && typeof options.fallbackEnabled === "boolean"
           ? options.fallbackEnabled
@@ -43,6 +44,7 @@ export const MULTIPLAYER_SCRIPT = `
           host,
           room,
           nickname: sanitizeMultiplayerNickname(settings && settings.nickname),
+          deviceId,
           configured: hasCredentials
         };
       }
@@ -247,6 +249,10 @@ export const MULTIPLAYER_SCRIPT = `
         return nickname || "Peer " + multiplayerPeerId.slice(0, 6);
       }
 
+      function currentMultiplayerDeviceId() {
+        return sanitizeMultiplayerField(state.multiplayerSettings && state.multiplayerSettings.deviceId) || multiplayerDeviceId;
+      }
+
       function sharedLocalParticipantLabel() {
         const nickname = sanitizeMultiplayerNickname(state.multiplayerSettings.nickname);
         return nickname || "You";
@@ -331,6 +337,7 @@ export const MULTIPLAYER_SCRIPT = `
             host: normalized.host,
             room: normalized.room,
             nickname: normalized.nickname,
+            deviceId: normalized.deviceId,
             configured: normalized.configured
           };
         }
@@ -688,11 +695,21 @@ export const MULTIPLAYER_SCRIPT = `
           return null;
         }
         const nickname = sanitizeMultiplayerNickname(state.multiplayerSettings.nickname);
-        const sharedProjects = state.localFleet.projects.filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot));
+        const localHatId = currentSelectedHatId();
+        const sharedProjects = state.localFleet.projects
+          .filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot))
+          .map((snapshot) => {
+            const cloned = cloneValue(snapshot);
+            cloned.agents = (Array.isArray(cloned.agents) ? cloned.agents : []).map((agent) => ({
+              ...agent,
+              hatId: localHatId
+            }));
+            return cloned;
+          });
         return {
           type: "fleet-sync",
           peerId: multiplayerPeerId,
-          deviceId: multiplayerDeviceId,
+          deviceId: currentMultiplayerDeviceId(),
           peerLabel: nickname || sharedPeerLabel(),
           nickname,
           sentAt: new Date().toISOString(),
@@ -735,7 +752,7 @@ export const MULTIPLAYER_SCRIPT = `
           !payload
           || payload.type !== "fleet-sync"
           || payload.peerId === multiplayerPeerId
-          || payload.deviceId === multiplayerDeviceId
+          || payload.deviceId === currentMultiplayerDeviceId()
           || !Array.isArray(payload.projects)
         ) {
           return;
@@ -829,6 +846,7 @@ export const MULTIPLAYER_SCRIPT = `
           host: normalized.host,
           room: normalized.room,
           nickname: normalized.nickname,
+          deviceId: normalized.deviceId,
           configured: normalized.configured
         };
         state.multiplayerDraftDirty = true;

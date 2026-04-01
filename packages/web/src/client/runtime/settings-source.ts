@@ -15,6 +15,7 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
         furnitureLayoutOverrides: loadFurnitureLayoutOverrides(),
         integrationSettings: defaultIntegrationSettings(),
         integrationSettingsPending: false,
+        appearanceSettingsPending: false,
         integrationSettingsError: null,
         multiplayerSettings: { ...defaultIntegrationSettings().multiplayer },
         multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },
@@ -85,6 +86,71 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
 
       function projectLabel(projectRoot) {
         return projectInfo(projectRoot).label;
+      }
+
+      function normalizeHatId(value) {
+        const normalized = typeof value === "string" ? value.trim() : "";
+        return normalized.length > 0 ? normalized : null;
+      }
+
+      function pixelOfficeHatDefaults() {
+        const defaults = pixelOffice && pixelOffice.hatDefaults ? pixelOffice.hatDefaults : {};
+        const offset = defaults && defaults.offsetPx ? defaults.offsetPx : {};
+        return {
+          scale: Number.isFinite(defaults && defaults.scale) ? Number(defaults.scale) : 0.82,
+          previewScale: Number.isFinite(defaults && defaults.previewScale) ? Number(defaults.previewScale) : 2,
+          offsetPx: {
+            x: Number.isFinite(offset && offset.x) ? Number(offset.x) : 0,
+            y: Number.isFinite(offset && offset.y) ? Number(offset.y) : -2
+          }
+        };
+      }
+
+      function pixelOfficeHatOptions() {
+        return Array.isArray(pixelOffice && pixelOffice.hats) ? pixelOffice.hats : [];
+      }
+
+      function hatDefinitionById(hatId) {
+        const normalizedHatId = normalizeHatId(hatId);
+        if (!normalizedHatId) {
+          return null;
+        }
+        const defaults = pixelOfficeHatDefaults();
+        const match = pixelOfficeHatOptions().find((entry) => normalizeHatId(entry && entry.id) === normalizedHatId);
+        if (!match || !match.url) {
+          return null;
+        }
+        const offset = match && match.offsetPx ? match.offsetPx : {};
+        return {
+          id: normalizedHatId,
+          url: match.url,
+          scale: Number.isFinite(match && match.scale) ? Number(match.scale) : defaults.scale,
+          previewScale: Number.isFinite(match && match.previewScale) ? Number(match.previewScale) : defaults.previewScale,
+          offsetPx: {
+            x: Number.isFinite(offset && offset.x) ? Number(offset.x) : defaults.offsetPx.x,
+            y: Number.isFinite(offset && offset.y) ? Number(offset.y) : defaults.offsetPx.y
+          }
+        };
+      }
+
+      function selectedHatIdFromSettings(settings) {
+        const appearance = settings && settings.appearance ? settings.appearance : defaultIntegrationSettings().appearance;
+        return normalizeHatId(appearance && appearance.hatId);
+      }
+
+      function currentSelectedHatId() {
+        return selectedHatIdFromSettings(state.integrationSettings);
+      }
+
+      function effectiveHatIdForAgent(agent) {
+        if (!agent) {
+          return null;
+        }
+        return agent.network ? normalizeHatId(agent.hatId) : currentSelectedHatId();
+      }
+
+      function effectiveHatDefinitionForAgent(agent) {
+        return hatDefinitionById(effectiveHatIdForAgent(agent));
       }
 
       function localProjectRootsForSnapshot(snapshot) {

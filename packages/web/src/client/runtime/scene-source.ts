@@ -453,6 +453,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                   focusKey: focusAgentKey(snapshot, agent),
                   focusKeys: collectFocusedSessionKeys(snapshot, agent),
                   appearance: agent.appearance,
+                  hatId: effectiveHatIdForAgent(agent),
                   needsUser: agent.needsUser || null,
                   statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                   slotId: entry.slot.id,
@@ -537,6 +538,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                     focusKey: focusAgentKey(snapshot, entry.agent),
                     focusKeys: collectFocusedSessionKeys(snapshot, entry.agent),
                     appearance: entry.agent.appearance,
+                    hatId: effectiveHatIdForAgent(entry.agent),
                     needsUser: entry.agent.needsUser || null,
                     statusMarkerIconUrl: stateMarkerIconUrlForAgent(entry.agent),
                     slotId: entry.slot.id,
@@ -590,6 +592,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 focusKey: focusAgentKey(snapshot, agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, agent),
                 appearance: agent.appearance,
+                hatId: effectiveHatIdForAgent(agent),
                 needsUser: agent.needsUser || null,
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                 sprite: avatarForAgent(agent).url,
@@ -632,6 +635,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 focusKey: focusAgentKey(snapshot, agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, agent),
                 appearance: agent.appearance,
+                hatId: effectiveHatIdForAgent(agent),
                 needsUser: agent.needsUser || null,
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                 sprite: avatarForAgent(agent).url,
@@ -842,6 +846,25 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 } else {
                   entry.sprite.scale.x = Math.abs(entry.sprite.scale.x || 1);
                 }
+                if (entry.hatSprite) {
+                  const hatWidth = Number.isFinite(entry.hatWidth) ? Number(entry.hatWidth) : 0;
+                  const hatCenteredOffsetX = Number.isFinite(entry.hatCenteredOffsetX) ? Number(entry.hatCenteredOffsetX) : 0;
+                  const hatManualOffsetX = Number.isFinite(entry.hatManualOffsetX) ? Number(entry.hatManualOffsetX) : 0;
+                  const hatOffsetY = Number.isFinite(entry.hatOffsetY) ? Number(entry.hatOffsetY) : 0;
+                  const hatBaseX = entry.currentX + renderOffsetX;
+                  entry.hatSprite.x = pixelSnap(
+                    hatBaseX
+                    + hatCenteredOffsetX
+                    + (entry.flipX ? -hatManualOffsetX : hatManualOffsetX)
+                  );
+                  entry.hatSprite.y = pixelSnap(entry.currentY + renderOffsetY + hatOffsetY);
+                  if (entry.flipX) {
+                    entry.hatSprite.scale.x = -Math.abs(entry.hatSprite.scale.x || 1);
+                    entry.hatSprite.x = pixelSnap(entry.hatSprite.x + hatWidth);
+                  } else {
+                    entry.hatSprite.scale.x = Math.abs(entry.hatSprite.scale.x || 1);
+                  }
+                }
                 if (entry.bubbleBox && entry.bubbleText) {
                   const bubbleX = pixelSnap(entry.currentX + Math.round(entry.width * 0.2));
                   const bubbleY = pixelSnap(entry.currentY - 14);
@@ -852,8 +875,9 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 }
                 if (entry.statusMarker) {
                   const markerWidth = Math.max(8, Math.round(entry.statusMarker.width || 11));
+                  const markerLift = Number.isFinite(entry.statusMarkerLift) ? Number(entry.statusMarkerLift) : 0;
                   entry.statusMarker.x = pixelSnap(entry.currentX + Math.round((entry.width - markerWidth) / 2));
-                  entry.statusMarker.y = pixelSnap(entry.currentY - (entry.bubbleBox ? 20 : 13));
+                  entry.statusMarker.y = pixelSnap(entry.currentY - (entry.bubbleBox ? 20 : 13) - markerLift);
                 }
                 if (typeof renderer.syncHeldItemSprite === "function") {
                   renderer.syncHeldItemSprite(entry);
@@ -872,6 +896,9 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                   }
                   if (entry.statusMarker) {
                     entry.statusMarker.alpha = entry.sprite.alpha;
+                  }
+                  if (entry.hatSprite) {
+                    entry.hatSprite.alpha = entry.sprite.alpha;
                   }
                   if (entry.heldItemSprite) {
                     entry.heldItemSprite.alpha = entry.sprite.alpha;
@@ -897,9 +924,22 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 return;
               }
               if (entry.kind === "bob") {
-                entry.sprite.y = entry.baseY + Math.round(Math.sin((now + entry.phase) / 220) * 1);
+                const bobOffset = Math.round(Math.sin((now + entry.phase) / 220) * 1);
+                entry.sprite.y = entry.baseY + bobOffset;
+                if (entry.hatSprite) {
+                  entry.hatSprite.y = entry.hatBaseY + bobOffset;
+                }
+                if (entry.statusMarker) {
+                  entry.statusMarker.y = entry.statusMarkerBaseY + bobOffset;
+                }
+                if (entry.bubbleBox) {
+                  entry.bubbleBox.y = entry.bubbleBoxBaseY + bobOffset;
+                }
+                if (entry.bubbleText) {
+                  entry.bubbleText.y = entry.bubbleTextBaseY + bobOffset;
+                }
                 if (typeof renderer.syncMotionStateDepth === "function") {
-                  renderer.syncMotionStateDepth(entry);
+                  renderer.syncMotionStateDepth(entry.motionState || entry);
                 }
                 return;
               }
@@ -1001,6 +1041,10 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             if (agent && agent.sprite) {
               urls.add(agent.sprite);
             }
+            const hat = hatDefinitionById(agent && agent.hatId);
+            if (hat && hat.url) {
+              urls.add(hat.url);
+            }
             if (agent && agent.statusMarkerIconUrl) {
               urls.add(agent.statusMarkerIconUrl);
             }
@@ -1015,6 +1059,10 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           if (office.agent && office.agent.sprite) {
             urls.add(office.agent.sprite);
           }
+          const officeHat = hatDefinitionById(office.agent && office.agent.hatId);
+          if (officeHat && officeHat.url) {
+            urls.add(officeHat.url);
+          }
           if (office.agent && office.agent.statusMarkerIconUrl) {
             urls.add(office.agent.statusMarkerIconUrl);
           }
@@ -1022,6 +1070,10 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         model.recAgents.forEach((agent) => {
           if (agent && agent.sprite) {
             urls.add(agent.sprite);
+          }
+          const hat = hatDefinitionById(agent && agent.hatId);
+          if (hat && hat.url) {
+            urls.add(hat.url);
           }
           if (agent && agent.statusMarkerIconUrl) {
             urls.add(agent.statusMarkerIconUrl);

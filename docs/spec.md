@@ -49,7 +49,7 @@ The VS Code panel should expose the same snapshot model as the browser and termi
 All renderers should consume the same normalized snapshot model.
 
 - A `DashboardSnapshot` represents one tracked workspace and includes `projectRoot`, `projectLabel`, `projectIdentity`, `generatedAt`, `rooms`, `agents`, `cloudTasks`, `events`, and `notes`.
-- A `DashboardAgent` represents one visible session or agent and carries identity, currentness, room placement, state, detail text, latest useful message, resume/open affordances, provenance/confidence, and optional `needsUser` or shared-room `network` metadata.
+- A `DashboardAgent` represents one visible session or agent and carries identity, currentness, room placement, state, detail text, latest useful message, resume/open affordances, provenance/confidence, and optional `needsUser`, `hatId`, or shared-room `network` metadata.
 - A `DashboardEvent` is the normalized event log used for browser notifications and event-native state surfaces such as approvals, input waits, command/file activity, subagent events, and typed messages.
 - `needsUser` is the durable per-agent approval/input state used by the browser `Needs You` queue and raised-hand desk marker.
 - `network` marks a remote shared-room agent and should preserve peer label and peer host metadata distinctly from local sessions.
@@ -124,6 +124,7 @@ Current browser settings surfaces are:
 - text scale
 - a persisted `Split Worktrees` toggle that restores one floor per worktree instead of the default merged repo floor
 - a debug tile overlay toggle for layout diagnostics
+- a machine-local image-only hat selector with left/right cycling, a first `no hat` option, and immediate application across the local player's visible agents
 - machine-local Cursor API key save/clear controls
 - shared-room sync toggle plus `host`, `room`, and short `nickname` fields, with explicit save/clear controls
 - a per-floor persisted `Shared` toggle for local projects while shared-room sync is enabled, defaulting to on and controlling whether that local project is broadcast into the room
@@ -170,6 +171,7 @@ Current browser settings surfaces are:
 - Agents, chairs, desks, workstations, and other floor props that can visually overlap should follow that same foot/base sorting rule so overlap reads spatially correct.
 - If an agent's feet are still above a workstation or desk base on screen, the workstation/desk must render in front of that agent; once the agent's feet move below that base, the agent must render in front.
 - Depth sorting must update continuously during routed movement and idle motion, not only when an agent first spawns or is assigned to a seat.
+- Agent hats should always render with the avatar, use config-driven default scale/offset values derived from the base `16px` sprite language, and allow per-hat override scale/offset tuning from the hat manifest without requiring renderer code edits.
 - Agent movement in the retained browser scene should follow walkable tile paths instead of straight-line tween resets.
 - Tile pathfinding should avoid occupied cells from furniture, workstation footprints, and already-seated agents.
 - Visual-only updates such as debug overlays, text-scale changes, or scene host rerenders must not be treated as a new placement instruction.
@@ -253,6 +255,7 @@ Worktree identity rules:
 - Remote-only floors should grey the project-title treatment slightly so “not my workspace” reads as a distinct state without hiding the floor.
 - Each floor header should list the active participant nicknames currently visible in that workspace; when a remote-only floor is cooling down and has no active agents left, it may fall back to the most recent participant labels.
 - Remote shared-room agents should preserve peer labeling and shared-room context so they remain visibly distinct from local sessions.
+- Shared-room broadcasts should also preserve each participant's selected `hatId`, and remote merged agents should keep rendering with that hat even when the local viewer has chosen a different one.
 - Remote-only shared projects should cool down for 1 hour before disappearing after room updates stop.
 - Screenshot mode should disable shared-room sync.
 - `/api/multiplayer` should expose the current server multiplayer transport status even when the transport is currently disabled.

@@ -70,6 +70,19 @@ test("renderHtml includes explicit shared-room save and clear controls", () => {
   assert.match(html, /id="multiplayer-clear-button"/);
 });
 
+test("renderHtml includes the image-only hat picker controls", () => {
+  const html = renderHtml({
+    host: "127.0.0.1",
+    port: 4181,
+    explicitProjects: false,
+    projects: [{ root: "/tmp/project", label: "project" }]
+  });
+
+  assert.match(html, /id="hat-prev-button"/);
+  assert.match(html, /id="hat-preview"/);
+  assert.match(html, /id="hat-next-button"/);
+});
+
 test("z-order audit html exposes the visual workstation overlap harness", () => {
   const html = renderZOrderAuditHtml();
 
@@ -242,17 +255,26 @@ test("multiplayer runtime persists per-project sharing and cools remote-only pro
   const multiplayerSource = readClientSource("multiplayer-source.ts");
 
   assert.ok(bootstrapSource.includes('multiplayerProjectShareStorageKey = \\"codex-agents-office:multiplayer-project-shares\\";'));
+  assert.ok(bootstrapSource.includes('appearance: {\\n          hatId: null\\n        },'));
+  assert.ok(bootstrapSource.includes('deviceId: \\"\\"'));
   assert.ok(settingsSource.includes("multiplayerProjectShares: loadMultiplayerProjectShares(),"));
+  assert.ok(settingsSource.includes("function effectiveHatIdForAgent(agent) {"));
   assert.ok(settingsSource.includes("multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },"));
   assert.ok(multiplayerSource.includes("const MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS = 60 * 60 * 1000;"));
   assert.ok(multiplayerSource.includes("function normalizeMultiplayerSettings(settings, options = {}) {"));
+  assert.ok(multiplayerSource.includes("const deviceId = sanitizeMultiplayerField(settings && settings.deviceId);"));
   assert.ok(multiplayerSource.includes("const fallbackEnabled = options && typeof options.fallbackEnabled === \"boolean\""));
+  assert.ok(multiplayerSource.includes("function currentMultiplayerDeviceId() {"));
   assert.ok(multiplayerSource.includes("function syncStoredMultiplayerSettings(settings) {"));
   assert.ok(multiplayerSource.includes("function loadMultiplayerProjectShares() {"));
   assert.ok(multiplayerSource.includes("function setProjectRootsSharedWithRoom(projectRoots, shared) {"));
   assert.ok(multiplayerSource.includes("function cooledRemoteProjectSnapshot(entry) {"));
   assert.ok(multiplayerSource.includes("Shared project cooldown · keep remote-only floors visible for up to 1 hour after sharing stops."));
-  assert.ok(multiplayerSource.includes("const sharedProjects = state.localFleet.projects.filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot));"));
+  assert.ok(multiplayerSource.includes(".filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot))"));
+  assert.ok(multiplayerSource.includes("const localHatId = currentSelectedHatId();"));
+  assert.ok(multiplayerSource.includes("hatId: localHatId"));
+  assert.ok(multiplayerSource.includes("deviceId: currentMultiplayerDeviceId(),"));
+  assert.ok(multiplayerSource.includes("payload.deviceId === currentMultiplayerDeviceId()"));
   assert.ok(uiSource.includes('applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", {'));
   assert.ok(uiSource.includes('multiplayerHostInput.addEventListener("input", () => {'));
   assert.ok(uiSource.includes('multiplayerSaveButton.addEventListener("click", () => {'));
@@ -274,6 +296,31 @@ test("workspace floors show multiplayer participants, grey remote-only titles, a
   assert.ok(styles.includes(".tower-floor-title.is-remote-only .tower-floor-title-project {"));
   assert.ok(styles.includes(".tower-floor-participants {"));
   assert.ok(styles.includes(".tower-floor-share.active {"));
+});
+
+test("runtime source exposes hat preview controls and hat-attached avatar rendering", () => {
+  const layoutSource = readRuntimeSource("layout-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+  const styles = readClientSource("styles.css");
+
+  assert.ok(layoutSource.includes('const hatPrevButton = document.getElementById("hat-prev-button");'));
+  assert.ok(layoutSource.includes("function syncAppearanceSettingsUi() {"));
+  assert.ok(uiSource.includes("function applyOptimisticHatSelection(hatId) {"));
+  assert.ok(uiSource.includes("function cycleHatSelection(direction) {"));
+  assert.ok(layoutSource.includes("hatPrevButton.disabled = entries.length <= 1;"));
+  assert.ok(uiSource.includes("state.appearanceSettingsPending = true;"));
+  assert.ok(navigationSource.includes("function hatRenderMetrics(agent, avatarMetrics) {"));
+  assert.ok(navigationSource.includes("function hatRenderX(baseX, centeredOffsetX, manualOffsetX, flipX) {"));
+  assert.ok(navigationSource.includes("function buildBobAnimationEntry(agent, avatarVisual, motionState) {"));
+  assert.ok(navigationSource.includes("hatSprite"));
+  assert.ok(sceneSource.includes("(entry.flipX ? -hatManualOffsetX : hatManualOffsetX)"));
+  assert.ok(sceneSource.includes("entry.hatSprite.y = entry.hatBaseY + bobOffset;"));
+  assert.ok(sceneSource.includes("hatId: effectiveHatIdForAgent(agent),"));
+  assert.ok(sceneSource.includes("const hat = hatDefinitionById(agent && agent.hatId);"));
+  assert.ok(styles.includes(".hat-cycle {"));
+  assert.ok(styles.includes(".hat-preview-frame {"));
 });
 
 test("navigation source depth-sorts agents and desk shell sprites by feet position instead of fixed layers", () => {

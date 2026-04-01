@@ -103,6 +103,17 @@ export function renderHtml(
                     <output id="text-scale-output">${DEFAULT_GLOBAL_SCENE_SETTINGS.textScale.toFixed(2)}x</output>
                   </label>
                   <div class="settings-section">
+                    <strong>Agents</strong>
+                    <div class="settings-field">
+                      <span class="muted">Hat</span>
+                      <div class="hat-cycle" role="group" aria-label="Agent hat">
+                        <button id="hat-prev-button" class="toggle-button hat-cycle-button" type="button" aria-label="Previous hat">&lt;</button>
+                        <div id="hat-preview" class="hat-preview" aria-live="polite"></div>
+                        <button id="hat-next-button" class="toggle-button hat-cycle-button" type="button" aria-label="Next hat">&gt;</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="settings-section">
                     <strong>Cursor</strong>
                     <label class="settings-field" for="cursor-api-key-input">
                       <span class="muted">API Key</span>
@@ -115,10 +126,6 @@ export function renderHtml(
                         autocomplete="off"
                       />
                     </label>
-                    <div class="settings-actions">
-                      <button id="cursor-api-key-save-button" class="toggle-button settings-toggle" type="button">Save Key</button>
-                      <button id="cursor-api-key-clear-button" class="toggle-button settings-toggle" type="button">Clear Saved Key</button>
-                    </div>
                     <div id="cursor-api-key-status" class="settings-note muted">Loading Cursor integration status...</div>
                   </div>
                   <div class="settings-section">
@@ -158,9 +165,6 @@ export function renderHtml(
                         autocomplete="off"
                       />
                     </label>
-                    <div class="settings-note muted">
-                      Shared-room host, room, and nickname are saved in this machine's Agents Office user data and restored on launch.
-                    </div>
                     <div class="settings-actions">
                       <button id="multiplayer-save-button" class="toggle-button settings-toggle" type="button">Save Shared Room</button>
                       <button id="multiplayer-clear-button" class="toggle-button settings-toggle" type="button">Clear Shared Room</button>

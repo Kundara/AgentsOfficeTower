@@ -40,11 +40,15 @@ export function startClientApp(): void {
           storedConfigured: false,
           storedMaskedKey: null
         },
+        appearance: {
+          hatId: null
+        },
         multiplayer: {
           enabled: false,
           host: "",
           room: "",
           nickname: "",
+          deviceId: "",
           configured: false
         }
       });
@@ -81,6 +85,7 @@ export function startClientApp(): void {
         furnitureLayoutOverrides: loadFurnitureLayoutOverrides(),
         integrationSettings: defaultIntegrationSettings(),
         integrationSettingsPending: false,
+        appearanceSettingsPending: false,
         integrationSettingsError: null,
         multiplayerSettings: { ...defaultIntegrationSettings().multiplayer },
         multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },
@@ -151,6 +156,71 @@ export function startClientApp(): void {
 
       function projectLabel(projectRoot) {
         return projectInfo(projectRoot).label;
+      }
+
+      function normalizeHatId(value) {
+        const normalized = typeof value === "string" ? value.trim() : "";
+        return normalized.length > 0 ? normalized : null;
+      }
+
+      function pixelOfficeHatDefaults() {
+        const defaults = pixelOffice && pixelOffice.hatDefaults ? pixelOffice.hatDefaults : {};
+        const offset = defaults && defaults.offsetPx ? defaults.offsetPx : {};
+        return {
+          scale: Number.isFinite(defaults && defaults.scale) ? Number(defaults.scale) : 0.82,
+          previewScale: Number.isFinite(defaults && defaults.previewScale) ? Number(defaults.previewScale) : 2,
+          offsetPx: {
+            x: Number.isFinite(offset && offset.x) ? Number(offset.x) : 0,
+            y: Number.isFinite(offset && offset.y) ? Number(offset.y) : -2
+          }
+        };
+      }
+
+      function pixelOfficeHatOptions() {
+        return Array.isArray(pixelOffice && pixelOffice.hats) ? pixelOffice.hats : [];
+      }
+
+      function hatDefinitionById(hatId) {
+        const normalizedHatId = normalizeHatId(hatId);
+        if (!normalizedHatId) {
+          return null;
+        }
+        const defaults = pixelOfficeHatDefaults();
+        const match = pixelOfficeHatOptions().find((entry) => normalizeHatId(entry && entry.id) === normalizedHatId);
+        if (!match || !match.url) {
+          return null;
+        }
+        const offset = match && match.offsetPx ? match.offsetPx : {};
+        return {
+          id: normalizedHatId,
+          url: match.url,
+          scale: Number.isFinite(match && match.scale) ? Number(match.scale) : defaults.scale,
+          previewScale: Number.isFinite(match && match.previewScale) ? Number(match.previewScale) : defaults.previewScale,
+          offsetPx: {
+            x: Number.isFinite(offset && offset.x) ? Number(offset.x) : defaults.offsetPx.x,
+            y: Number.isFinite(offset && offset.y) ? Number(offset.y) : defaults.offsetPx.y
+          }
+        };
+      }
+
+      function selectedHatIdFromSettings(settings) {
+        const appearance = settings && settings.appearance ? settings.appearance : defaultIntegrationSettings().appearance;
+        return normalizeHatId(appearance && appearance.hatId);
+      }
+
+      function currentSelectedHatId() {
+        return selectedHatIdFromSettings(state.integrationSettings);
+      }
+
+      function effectiveHatIdForAgent(agent) {
+        if (!agent) {
+          return null;
+        }
+        return agent.network ? normalizeHatId(agent.hatId) : currentSelectedHatId();
+      }
+
+      function effectiveHatDefinitionForAgent(agent) {
+        return hatDefinitionById(effectiveHatIdForAgent(agent));
       }
 
       function localProjectRootsForSnapshot(snapshot) {
@@ -1889,6 +1959,7 @@ export function startClientApp(): void {
       function normalizeMultiplayerSettings(settings, options = {}) {
         const host = sanitizeMultiplayerField(settings && settings.host);
         const room = sanitizeMultiplayerField(settings && settings.room);
+        const deviceId = sanitizeMultiplayerField(settings && settings.deviceId);
         const hasCredentials = Boolean(host && room);
         const fallbackEnabled = options && typeof options.fallbackEnabled === "boolean"
           ? options.fallbackEnabled
@@ -1902,6 +1973,7 @@ export function startClientApp(): void {
           host,
           room,
           nickname: sanitizeMultiplayerNickname(settings && settings.nickname),
+          deviceId,
           configured: hasCredentials
         };
       }
@@ -2106,6 +2178,10 @@ export function startClientApp(): void {
         return nickname || "Peer " + multiplayerPeerId.slice(0, 6);
       }
 
+      function currentMultiplayerDeviceId() {
+        return sanitizeMultiplayerField(state.multiplayerSettings && state.multiplayerSettings.deviceId) || multiplayerDeviceId;
+      }
+
       function sharedLocalParticipantLabel() {
         const nickname = sanitizeMultiplayerNickname(state.multiplayerSettings.nickname);
         return nickname || "You";
@@ -2190,6 +2266,7 @@ export function startClientApp(): void {
             host: normalized.host,
             room: normalized.room,
             nickname: normalized.nickname,
+            deviceId: normalized.deviceId,
             configured: normalized.configured
           };
         }
@@ -2547,11 +2624,21 @@ export function startClientApp(): void {
           return null;
         }
         const nickname = sanitizeMultiplayerNickname(state.multiplayerSettings.nickname);
-        const sharedProjects = state.localFleet.projects.filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot));
+        const localHatId = currentSelectedHatId();
+        const sharedProjects = state.localFleet.projects
+          .filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot))
+          .map((snapshot) => {
+            const cloned = cloneValue(snapshot);
+            cloned.agents = (Array.isArray(cloned.agents) ? cloned.agents : []).map((agent) => ({
+              ...agent,
+              hatId: localHatId
+            }));
+            return cloned;
+          });
         return {
           type: "fleet-sync",
           peerId: multiplayerPeerId,
-          deviceId: multiplayerDeviceId,
+          deviceId: currentMultiplayerDeviceId(),
           peerLabel: nickname || sharedPeerLabel(),
           nickname,
           sentAt: new Date().toISOString(),
@@ -2594,7 +2681,7 @@ export function startClientApp(): void {
           !payload
           || payload.type !== "fleet-sync"
           || payload.peerId === multiplayerPeerId
-          || payload.deviceId === multiplayerDeviceId
+          || payload.deviceId === currentMultiplayerDeviceId()
           || !Array.isArray(payload.projects)
         ) {
           return;
@@ -2688,6 +2775,7 @@ export function startClientApp(): void {
           host: normalized.host,
           room: normalized.room,
           nickname: normalized.nickname,
+          deviceId: normalized.deviceId,
           configured: normalized.configured
         };
         state.multiplayerDraftDirty = true;
@@ -2705,9 +2793,10 @@ export function startClientApp(): void {
       const debugTilesButton = document.getElementById("debug-tiles-button");
       const textScaleInput = document.getElementById("text-scale-input");
       const textScaleOutput = document.getElementById("text-scale-output");
+      const hatPrevButton = document.getElementById("hat-prev-button");
+      const hatNextButton = document.getElementById("hat-next-button");
+      const hatPreview = document.getElementById("hat-preview");
       const cursorApiKeyInput = document.getElementById("cursor-api-key-input");
-      const cursorApiKeySaveButton = document.getElementById("cursor-api-key-save-button");
-      const cursorApiKeyClearButton = document.getElementById("cursor-api-key-clear-button");
       const cursorApiKeyStatus = document.getElementById("cursor-api-key-status");
       const multiplayerEnabledButton = document.getElementById("multiplayer-enabled-button");
       const multiplayerHostInput = document.getElementById("multiplayer-host-input");
@@ -2729,6 +2818,7 @@ export function startClientApp(): void {
       const roomsPath = document.getElementById("rooms-path");
       applyGlobalSceneSettings();
       syncSettingsPopup();
+      syncAppearanceSettingsUi();
       syncCursorIntegrationUi();
       syncMultiplayerSettingsUi();
       void refreshIntegrationSettings();
@@ -2773,7 +2863,7 @@ export function startClientApp(): void {
           return "Saved on this machine for Agents Office" + (cursor.maskedKey ? " (" + cursor.maskedKey + ")." : ".");
         }
 
-        return "No local Cursor API key is saved. Local Cursor sessions may still appear automatically; save a key only to include official Cursor background agents for matching repos.";
+        return "No Cursor API Key is saved";
       }
 
       function syncCursorIntegrationUi() {
@@ -2793,20 +2883,77 @@ export function startClientApp(): void {
           }
         }
 
-        if (cursorApiKeySaveButton instanceof HTMLButtonElement) {
-          cursorApiKeySaveButton.disabled = busy;
-          cursorApiKeySaveButton.textContent = busy ? "Saving..." : "Save Key";
-        }
-
-        if (cursorApiKeyClearButton instanceof HTMLButtonElement) {
-          cursorApiKeyClearButton.disabled = busy || cursor.storedConfigured !== true;
-        }
-
         setTextIfChanged(cursorApiKeyStatus, cursorIntegrationStatusText());
       }
 
+      function normalizedIntegrationSettings(nextSettings) {
+        const defaults = defaultIntegrationSettings();
+        const incoming = nextSettings && typeof nextSettings === "object" ? nextSettings : {};
+        return {
+          ...defaults,
+          ...incoming,
+          cursor: {
+            ...defaults.cursor,
+            ...(incoming && incoming.cursor ? incoming.cursor : {})
+          },
+          appearance: {
+            ...defaults.appearance,
+            ...(incoming && incoming.appearance ? incoming.appearance : {})
+          },
+          multiplayer: {
+            ...defaults.multiplayer,
+            ...(incoming && incoming.multiplayer ? incoming.multiplayer : {})
+          }
+        };
+      }
+
+      function hatSelectionEntries() {
+        return [null].concat(
+          pixelOfficeHatOptions()
+            .map((entry) => normalizeHatId(entry && entry.id))
+            .filter(Boolean)
+        );
+      }
+
+      function currentHatSelectionIndex() {
+        const entries = hatSelectionEntries();
+        const currentHatId = currentSelectedHatId();
+        const matchIndex = entries.findIndex((hatId) => hatId === currentHatId);
+        return matchIndex >= 0 ? matchIndex : 0;
+      }
+
+      function selectedHatDefinition() {
+        return hatDefinitionById(currentSelectedHatId());
+      }
+
+      function syncAppearanceSettingsUi() {
+        const entries = hatSelectionEntries();
+        if (hatPrevButton instanceof HTMLButtonElement) {
+          hatPrevButton.disabled = entries.length <= 1;
+        }
+        if (hatNextButton instanceof HTMLButtonElement) {
+          hatNextButton.disabled = entries.length <= 1;
+        }
+        if (hatPreview instanceof HTMLElement) {
+          const hat = selectedHatDefinition();
+          if (!hat) {
+            hatPreview.innerHTML = '<div class="hat-preview-frame is-empty" aria-label="No hat selected"><span class="hat-preview-empty" aria-hidden="true"></span></div>';
+            return;
+          }
+          const previewScale = Number.isFinite(hat.previewScale) ? Number(hat.previewScale) : pixelOfficeHatDefaults().previewScale;
+          hatPreview.innerHTML = '<div class="hat-preview-frame" aria-label="Hat selected"><img class="hat-preview-image" src="'
+            + escapeHtml(hat.url)
+            + '" alt="" style="transform: translateY('
+            + Math.round(Math.min(0, hat.offsetPx.y * 0.5))
+            + 'px) scale('
+            + previewScale
+            + ');" /></div>';
+        }
+      }
+
       function applyIntegrationSettingsResponse(nextSettings) {
-        state.integrationSettings = nextSettings || defaultIntegrationSettings();
+        state.integrationSettings = normalizedIntegrationSettings(nextSettings);
+        syncAppearanceSettingsUi();
         syncStoredMultiplayerSettings(state.integrationSettings.multiplayer);
       }
 
@@ -2824,18 +2971,40 @@ export function startClientApp(): void {
           state.integrationSettingsError = "Cursor settings unavailable: " + message;
         } finally {
           state.integrationSettingsPending = false;
-        syncCursorIntegrationUi();
-      }
+          state.appearanceSettingsPending = false;
+          syncAppearanceSettingsUi();
+          syncCursorIntegrationUi();
+        }
       }
 
-      async function saveCursorApiKey() {
+      let cursorApiKeySaveTimer = null;
+
+      function queueCursorApiKeySave(immediate = false) {
+        if (!(cursorApiKeyInput instanceof HTMLInputElement)) {
+          return;
+        }
+        if (cursorApiKeySaveTimer !== null) {
+          clearTimeout(cursorApiKeySaveTimer);
+          cursorApiKeySaveTimer = null;
+        }
+        const saveDelayMs = immediate ? 0 : 500;
+        cursorApiKeySaveTimer = window.setTimeout(() => {
+          cursorApiKeySaveTimer = null;
+          void saveCursorApiKeyDraft();
+        }, saveDelayMs);
+      }
+
+      async function saveCursorApiKeyDraft() {
         if (!(cursorApiKeyInput instanceof HTMLInputElement)) {
           return;
         }
 
         const cursorApiKey = cursorApiKeyInput.value.trim();
-        if (!cursorApiKey) {
-          state.integrationSettingsError = "Enter a Cursor API key before saving.";
+        const cursor = state.integrationSettings && state.integrationSettings.cursor
+          ? state.integrationSettings.cursor
+          : defaultIntegrationSettings().cursor;
+        if (!cursorApiKey && cursor.storedConfigured !== true) {
+          state.integrationSettingsError = null;
           syncCursorIntegrationUi();
           return;
         }
@@ -2845,32 +3014,14 @@ export function startClientApp(): void {
         syncCursorIntegrationUi();
 
         try {
-          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { cursorApiKey }));
+          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", {
+            cursorApiKey: cursorApiKey || null
+          }));
           state.integrationSettingsError = null;
           cursorApiKeyInput.value = "";
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           state.integrationSettingsError = "Failed to save Cursor API key: " + message;
-        } finally {
-          state.integrationSettingsPending = false;
-          syncCursorIntegrationUi();
-        }
-      }
-
-      async function clearCursorApiKey() {
-        state.integrationSettingsPending = true;
-        state.integrationSettingsError = null;
-        syncCursorIntegrationUi();
-
-        try {
-          applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", { cursorApiKey: null }));
-          state.integrationSettingsError = null;
-          if (cursorApiKeyInput instanceof HTMLInputElement) {
-            cursorApiKeyInput.value = "";
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          state.integrationSettingsError = "Failed to clear saved Cursor API key: " + message;
         } finally {
           state.integrationSettingsPending = false;
           syncCursorIntegrationUi();
@@ -5760,6 +5911,7 @@ export function startClientApp(): void {
                   focusKey: focusAgentKey(snapshot, agent),
                   focusKeys: collectFocusedSessionKeys(snapshot, agent),
                   appearance: agent.appearance,
+                  hatId: effectiveHatIdForAgent(agent),
                   needsUser: agent.needsUser || null,
                   statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                   slotId: entry.slot.id,
@@ -5844,6 +5996,7 @@ export function startClientApp(): void {
                     focusKey: focusAgentKey(snapshot, entry.agent),
                     focusKeys: collectFocusedSessionKeys(snapshot, entry.agent),
                     appearance: entry.agent.appearance,
+                    hatId: effectiveHatIdForAgent(entry.agent),
                     needsUser: entry.agent.needsUser || null,
                     statusMarkerIconUrl: stateMarkerIconUrlForAgent(entry.agent),
                     slotId: entry.slot.id,
@@ -5897,6 +6050,7 @@ export function startClientApp(): void {
                 focusKey: focusAgentKey(snapshot, agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, agent),
                 appearance: agent.appearance,
+                hatId: effectiveHatIdForAgent(agent),
                 needsUser: agent.needsUser || null,
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                 sprite: avatarForAgent(agent).url,
@@ -5939,6 +6093,7 @@ export function startClientApp(): void {
                 focusKey: focusAgentKey(snapshot, agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, agent),
                 appearance: agent.appearance,
+                hatId: effectiveHatIdForAgent(agent),
                 needsUser: agent.needsUser || null,
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                 sprite: avatarForAgent(agent).url,
@@ -6149,6 +6304,25 @@ export function startClientApp(): void {
                 } else {
                   entry.sprite.scale.x = Math.abs(entry.sprite.scale.x || 1);
                 }
+                if (entry.hatSprite) {
+                  const hatWidth = Number.isFinite(entry.hatWidth) ? Number(entry.hatWidth) : 0;
+                  const hatCenteredOffsetX = Number.isFinite(entry.hatCenteredOffsetX) ? Number(entry.hatCenteredOffsetX) : 0;
+                  const hatManualOffsetX = Number.isFinite(entry.hatManualOffsetX) ? Number(entry.hatManualOffsetX) : 0;
+                  const hatOffsetY = Number.isFinite(entry.hatOffsetY) ? Number(entry.hatOffsetY) : 0;
+                  const hatBaseX = entry.currentX + renderOffsetX;
+                  entry.hatSprite.x = pixelSnap(
+                    hatBaseX
+                    + hatCenteredOffsetX
+                    + (entry.flipX ? -hatManualOffsetX : hatManualOffsetX)
+                  );
+                  entry.hatSprite.y = pixelSnap(entry.currentY + renderOffsetY + hatOffsetY);
+                  if (entry.flipX) {
+                    entry.hatSprite.scale.x = -Math.abs(entry.hatSprite.scale.x || 1);
+                    entry.hatSprite.x = pixelSnap(entry.hatSprite.x + hatWidth);
+                  } else {
+                    entry.hatSprite.scale.x = Math.abs(entry.hatSprite.scale.x || 1);
+                  }
+                }
                 if (entry.bubbleBox && entry.bubbleText) {
                   const bubbleX = pixelSnap(entry.currentX + Math.round(entry.width * 0.2));
                   const bubbleY = pixelSnap(entry.currentY - 14);
@@ -6159,8 +6333,9 @@ export function startClientApp(): void {
                 }
                 if (entry.statusMarker) {
                   const markerWidth = Math.max(8, Math.round(entry.statusMarker.width || 11));
+                  const markerLift = Number.isFinite(entry.statusMarkerLift) ? Number(entry.statusMarkerLift) : 0;
                   entry.statusMarker.x = pixelSnap(entry.currentX + Math.round((entry.width - markerWidth) / 2));
-                  entry.statusMarker.y = pixelSnap(entry.currentY - (entry.bubbleBox ? 20 : 13));
+                  entry.statusMarker.y = pixelSnap(entry.currentY - (entry.bubbleBox ? 20 : 13) - markerLift);
                 }
                 if (typeof renderer.syncHeldItemSprite === "function") {
                   renderer.syncHeldItemSprite(entry);
@@ -6179,6 +6354,9 @@ export function startClientApp(): void {
                   }
                   if (entry.statusMarker) {
                     entry.statusMarker.alpha = entry.sprite.alpha;
+                  }
+                  if (entry.hatSprite) {
+                    entry.hatSprite.alpha = entry.sprite.alpha;
                   }
                   if (entry.heldItemSprite) {
                     entry.heldItemSprite.alpha = entry.sprite.alpha;
@@ -6204,9 +6382,22 @@ export function startClientApp(): void {
                 return;
               }
               if (entry.kind === "bob") {
-                entry.sprite.y = entry.baseY + Math.round(Math.sin((now + entry.phase) / 220) * 1);
+                const bobOffset = Math.round(Math.sin((now + entry.phase) / 220) * 1);
+                entry.sprite.y = entry.baseY + bobOffset;
+                if (entry.hatSprite) {
+                  entry.hatSprite.y = entry.hatBaseY + bobOffset;
+                }
+                if (entry.statusMarker) {
+                  entry.statusMarker.y = entry.statusMarkerBaseY + bobOffset;
+                }
+                if (entry.bubbleBox) {
+                  entry.bubbleBox.y = entry.bubbleBoxBaseY + bobOffset;
+                }
+                if (entry.bubbleText) {
+                  entry.bubbleText.y = entry.bubbleTextBaseY + bobOffset;
+                }
                 if (typeof renderer.syncMotionStateDepth === "function") {
-                  renderer.syncMotionStateDepth(entry);
+                  renderer.syncMotionStateDepth(entry.motionState || entry);
                 }
                 return;
               }
@@ -6308,6 +6499,10 @@ export function startClientApp(): void {
             if (agent && agent.sprite) {
               urls.add(agent.sprite);
             }
+            const hat = hatDefinitionById(agent && agent.hatId);
+            if (hat && hat.url) {
+              urls.add(hat.url);
+            }
             if (agent && agent.statusMarkerIconUrl) {
               urls.add(agent.statusMarkerIconUrl);
             }
@@ -6322,6 +6517,10 @@ export function startClientApp(): void {
           if (office.agent && office.agent.sprite) {
             urls.add(office.agent.sprite);
           }
+          const officeHat = hatDefinitionById(office.agent && office.agent.hatId);
+          if (officeHat && officeHat.url) {
+            urls.add(officeHat.url);
+          }
           if (office.agent && office.agent.statusMarkerIconUrl) {
             urls.add(office.agent.statusMarkerIconUrl);
           }
@@ -6329,6 +6528,10 @@ export function startClientApp(): void {
         model.recAgents.forEach((agent) => {
           if (agent && agent.sprite) {
             urls.add(agent.sprite);
+          }
+          const hat = hatDefinitionById(agent && agent.hatId);
+          if (hat && hat.url) {
+            urls.add(hat.url);
           }
           if (agent && agent.statusMarkerIconUrl) {
             urls.add(agent.statusMarkerIconUrl);
@@ -7134,6 +7337,54 @@ function roleTint(role) {
           };
         }
 
+        function assetImageDimensions(url, fallbackWidth = 16, fallbackHeight = 16) {
+          const image = loadedOfficeAssetImages.get(url);
+          const width = Number(image && image.naturalWidth) || fallbackWidth;
+          const height = Number(image && image.naturalHeight) || fallbackHeight;
+          return {
+            width: Math.max(1, width),
+            height: Math.max(1, height)
+          };
+        }
+
+        function hatRenderMetrics(agent, avatarMetrics) {
+          const hat = hatDefinitionById(agent && agent.hatId);
+          if (!hat || !hat.url || !avatarMetrics) {
+            return null;
+          }
+          const avatarDefinition = Array.isArray(pixelOffice && pixelOffice.avatars)
+            ? pixelOffice.avatars.find((entry) => entry && entry.url === agent.sprite) || null
+            : null;
+          const avatarSourceHeight = Math.max(1, Number(avatarDefinition && avatarDefinition.h) || Number(avatarMetrics.height) || 16);
+          const avatarRenderScale = Math.max(0.1, Number(avatarMetrics.height) / avatarSourceHeight);
+          const hatDimensions = assetImageDimensions(hat.url);
+          const hatScale = Math.max(0.1, avatarRenderScale * (Number.isFinite(hat.scale) ? Number(hat.scale) : 1));
+          const width = pixelSnap(hatDimensions.width * hatScale, 1);
+          const height = pixelSnap(hatDimensions.height * hatScale, 1);
+          const centeredOffsetX = pixelSnap(Math.round((avatarMetrics.width - width) / 2));
+          const manualOffsetX = pixelSnap(
+            (Number.isFinite(hat.offsetPx && hat.offsetPx.x) ? Number(hat.offsetPx.x) : 0) * avatarRenderScale
+          );
+          const offsetY = pixelSnap(
+            -Math.round(height * 0.42)
+            + (Number.isFinite(hat.offsetPx && hat.offsetPx.y) ? Number(hat.offsetPx.y) : 0) * avatarRenderScale
+          );
+          return {
+            url: hat.url,
+            width,
+            height,
+            offsetX: centeredOffsetX + manualOffsetX,
+            centeredOffsetX,
+            manualOffsetX,
+            offsetY,
+            markerLift: Math.max(0, Math.round(height * 0.34))
+          };
+        }
+
+        function hatRenderX(baseX, centeredOffsetX, manualOffsetX, flipX) {
+          return pixelSnap(baseX + centeredOffsetX + (flipX ? -manualOffsetX : manualOffsetX));
+        }
+
         function addAvatarNode(agent, zIndex = 12) {
           const avatar = PIXI.Sprite.from(loadedOfficeAssetImages.get(agent.sprite) || agent.sprite);
           const createdNodes = [];
@@ -7142,6 +7393,7 @@ function roleTint(role) {
           const snappedHeight = renderMetrics.height;
           const offsetX = renderMetrics.offsetX;
           const offsetY = renderMetrics.offsetY;
+          const hatMetrics = hatRenderMetrics(agent, renderMetrics);
           avatar.x = pixelSnap(agent.x) + offsetX;
           avatar.y = pixelSnap(agent.y) + offsetY;
           avatar.width = snappedWidth;
@@ -7176,6 +7428,46 @@ function roleTint(role) {
           }
           renderer.root.addChild(avatar);
           createdNodes.push(avatar);
+          let hatSprite = null;
+          if (hatMetrics) {
+            hatSprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(hatMetrics.url) || hatMetrics.url);
+            hatSprite.x = hatRenderX(
+              agent.x + offsetX,
+              hatMetrics.centeredOffsetX,
+              hatMetrics.manualOffsetX,
+              agent.flipX === true
+            );
+            hatSprite.y = pixelSnap(agent.y + offsetY + hatMetrics.offsetY);
+            hatSprite.width = hatMetrics.width;
+            hatSprite.height = hatMetrics.height;
+            if (agent.flipX) {
+              hatSprite.scale.x = -Math.abs(hatSprite.scale.x || 1);
+              hatSprite.x = pixelSnap(hatSprite.x + hatMetrics.width);
+            }
+            if (Number.isFinite(agent.depthFootY)) {
+              hatSprite.zIndex = sceneFootDepth(
+                Number(agent.depthFootY) - snappedHeight,
+                snappedHeight,
+                (Number(agent.depthBias) || zIndex) + 0.5,
+                model.tile,
+                Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0,
+                Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null
+              );
+            } else if (fixedZ !== null) {
+              hatSprite.zIndex = fixedZ + 0.5;
+            } else {
+              hatSprite.zIndex = sceneFootDepth(
+                avatar.y,
+                snappedHeight,
+                zIndex + 0.5,
+                model.tile,
+                Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0,
+                Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null
+              );
+            }
+            renderer.root.addChild(hatSprite);
+            createdNodes.push(hatSprite);
+          }
           let statusMarker = null;
           const statusMarkerUrl = agent.statusMarkerIconUrl || stateMarkerIconUrlForAgent(agent);
           if (statusMarkerUrl) {
@@ -7184,7 +7476,7 @@ function roleTint(role) {
             const markerHeight = STATE_MARKER_SIZE;
             const markerPosition = statusMarkerPosition(agent, markerWidth);
             statusMarker.x = markerPosition.x;
-            statusMarker.y = markerPosition.y;
+            statusMarker.y = markerPosition.y - (hatMetrics ? hatMetrics.markerLift : 0);
             statusMarker.width = markerWidth;
             statusMarker.height = markerHeight;
             statusMarker.zIndex = Number.isFinite(agent.depthFootY)
@@ -7227,6 +7519,7 @@ function roleTint(role) {
           return {
             nodes: createdNodes,
             avatar,
+            hatSprite,
             statusMarker,
             bubbleBox,
             bubbleText,
@@ -7237,7 +7530,14 @@ function roleTint(role) {
             depthBias: Number.isFinite(agent.depthBias) ? Number(agent.depthBias) : (fixedZ !== null ? fixedZ : zIndex),
             depthFootY: Number.isFinite(agent.depthFootY) ? Number(agent.depthFootY) : null,
             depthBaseY: Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0,
-            depthRow: Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null
+            depthRow: Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null,
+            hatWidth: hatMetrics ? hatMetrics.width : 0,
+            hatHeight: hatMetrics ? hatMetrics.height : 0,
+            hatOffsetX: hatMetrics ? hatMetrics.offsetX : 0,
+            hatCenteredOffsetX: hatMetrics ? hatMetrics.centeredOffsetX : 0,
+            hatManualOffsetX: hatMetrics ? hatMetrics.manualOffsetX : 0,
+            hatOffsetY: hatMetrics ? hatMetrics.offsetY : 0,
+            statusMarkerLift: hatMetrics ? hatMetrics.markerLift : 0
           };
         }
 
@@ -7302,6 +7602,16 @@ function roleTint(role) {
                 effectiveDepthRow
               );
             }
+            if (motionState.hatSprite) {
+              motionState.hatSprite.zIndex = sceneFootDepth(
+                Number(effectiveDepthFootY) - renderHeight,
+                renderHeight,
+                effectiveDepthBias + 0.5,
+                model.tile,
+                Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0,
+                effectiveDepthRow
+              );
+            }
             if (motionState.heldItemSprite) {
               motionState.heldItemSprite.zIndex = sceneFootDepth(
                 Number(effectiveDepthFootY) - renderHeight,
@@ -7319,6 +7629,9 @@ function roleTint(role) {
             motionState.sprite.zIndex = fixedZ;
             if (motionState.statusMarker) {
               motionState.statusMarker.zIndex = fixedZ + 1;
+            }
+            if (motionState.hatSprite) {
+              motionState.hatSprite.zIndex = fixedZ + 0.5;
             }
             if (motionState.bubbleBox) {
               motionState.bubbleBox.zIndex = fixedZ + 2;
@@ -7344,6 +7657,9 @@ function roleTint(role) {
               )?.row
             : null;
           applyFootDepth(motionState.sprite, renderTopY, renderHeight, depthBias, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
+          if (motionState.hatSprite) {
+            applyFootDepth(motionState.hatSprite, renderTopY, renderHeight, depthBias + 0.5, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
+          }
           if (motionState.statusMarker) {
             applyFootDepth(motionState.statusMarker, renderTopY, renderHeight, depthBias + 1, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
           }
@@ -7416,6 +7732,24 @@ function roleTint(role) {
           }
         }
 
+        function buildBobAnimationEntry(agent, avatarVisual, motionState) {
+          return {
+            kind: "bob",
+            motionState,
+            sprite: avatarVisual.avatar,
+            hatSprite: avatarVisual.hatSprite,
+            statusMarker: avatarVisual.statusMarker,
+            bubbleBox: avatarVisual.bubbleBox,
+            bubbleText: avatarVisual.bubbleText,
+            baseY: pixelSnap(avatarVisual.avatar && avatarVisual.avatar.y),
+            hatBaseY: pixelSnap(avatarVisual.hatSprite && avatarVisual.hatSprite.y),
+            statusMarkerBaseY: pixelSnap(avatarVisual.statusMarker && avatarVisual.statusMarker.y),
+            bubbleBoxBaseY: pixelSnap(avatarVisual.bubbleBox && avatarVisual.bubbleBox.y),
+            bubbleTextBaseY: pixelSnap(avatarVisual.bubbleText && avatarVisual.bubbleText.y),
+            phase: stableHash(agent.id || agent.label || "") % 1000
+          };
+        }
+
         function registerAgentMotion(agent, avatarVisual, roomNavigation, reservations, previousMotionState = null, options = {}) {
           if (!agent || !avatarVisual || !avatarVisual.avatar) {
             return avatarVisual.nodes;
@@ -7450,6 +7784,7 @@ function roleTint(role) {
           );
           if (sameTarget) {
             previousState.sprite = avatarVisual.avatar;
+            previousState.hatSprite = avatarVisual.hatSprite;
             previousState.statusMarker = avatarVisual.statusMarker;
             previousState.bubbleBox = avatarVisual.bubbleBox;
             previousState.bubbleText = avatarVisual.bubbleText;
@@ -7461,6 +7796,13 @@ function roleTint(role) {
             previousState.renderHeight = avatarVisual.renderHeight;
             previousState.renderOffsetX = avatarVisual.renderOffsetX;
             previousState.renderOffsetY = avatarVisual.renderOffsetY;
+            previousState.hatWidth = avatarVisual.hatWidth;
+            previousState.hatHeight = avatarVisual.hatHeight;
+            previousState.hatOffsetX = avatarVisual.hatOffsetX;
+            previousState.hatCenteredOffsetX = avatarVisual.hatCenteredOffsetX;
+            previousState.hatManualOffsetX = avatarVisual.hatManualOffsetX;
+            previousState.hatOffsetY = avatarVisual.hatOffsetY;
+            previousState.statusMarkerLift = avatarVisual.statusMarkerLift;
             previousState.state = agent.state || "idle";
             previousState.spriteUrl = agent.sprite;
             previousState.depthBaseY = avatarVisual.depthBaseY;
@@ -7511,13 +7853,7 @@ function roleTint(role) {
             if (autonomousResting) {
               renderer.animatedSprites.push(previousState);
             } else if (["editing", "running", "validating", "scanning", "thinking", "planning", "delegating"].includes(agent.state) && previousState.routeIndex >= (previousState.route?.length || 0)) {
-              renderer.animatedSprites.push({
-                kind: "bob",
-                sprite: avatarVisual.avatar,
-                baseY: pixelSnap(previousState.currentY),
-                depthBias: avatarVisual.depthBias,
-                phase: stableHash(agent.id || agent.label || "") % 1000
-              });
+              renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, previousState));
             } else {
               renderer.animatedSprites.push(previousState);
             }
@@ -7559,6 +7895,7 @@ function roleTint(role) {
             key: agentKey,
             roomId: agent.roomId,
             sprite: avatarVisual.avatar,
+            hatSprite: avatarVisual.hatSprite,
             statusMarker: avatarVisual.statusMarker,
             spriteUrl: agent.sprite,
             bubbleBox: avatarVisual.bubbleBox,
@@ -7569,6 +7906,13 @@ function roleTint(role) {
             renderHeight: avatarVisual.renderHeight,
             renderOffsetX: avatarVisual.renderOffsetX,
             renderOffsetY: avatarVisual.renderOffsetY,
+            hatWidth: avatarVisual.hatWidth,
+            hatHeight: avatarVisual.hatHeight,
+            hatOffsetX: avatarVisual.hatOffsetX,
+            hatCenteredOffsetX: avatarVisual.hatCenteredOffsetX,
+            hatManualOffsetX: avatarVisual.hatManualOffsetX,
+            hatOffsetY: avatarVisual.hatOffsetY,
+            statusMarkerLift: avatarVisual.statusMarkerLift,
             currentX: previousState
               ? previousState.currentX
               : (route[0]?.x ?? agent.x),
@@ -7632,13 +7976,7 @@ function roleTint(role) {
             motionState.route = [{ x: agent.x, y: agent.y }];
             motionState.routeIndex = 1;
             renderer.motionStates.set(motionState.key, motionState);
-            renderer.animatedSprites.push({
-              kind: "bob",
-              sprite: avatarVisual.avatar,
-              baseY: pixelSnap(agent.y),
-              depthBias: avatarVisual.depthBias,
-              phase: stableHash(agent.id || agent.label || "") % 1000
-            });
+            renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, motionState));
             syncMotionStateDepth(motionState);
             syncAgentHitNodePosition(renderer, motionState);
             return avatarVisual.nodes;
@@ -9074,21 +9412,81 @@ function focusKeysIntersect(keys, focusedKeys) {
         });
       }
       if (cursorApiKeyInput instanceof HTMLInputElement) {
+        cursorApiKeyInput.addEventListener("input", () => {
+          queueCursorApiKeySave();
+        });
+        cursorApiKeyInput.addEventListener("blur", () => {
+          queueCursorApiKeySave(true);
+        });
         cursorApiKeyInput.addEventListener("keydown", (event) => {
           if (event.key === "Enter") {
             event.preventDefault();
-            void saveCursorApiKey();
+            queueCursorApiKeySave(true);
           }
         });
       }
-      if (cursorApiKeySaveButton instanceof HTMLButtonElement) {
-        cursorApiKeySaveButton.addEventListener("click", () => {
-          void saveCursorApiKey();
+      let hatSelectionRequestId = 0;
+      function applyOptimisticHatSelection(hatId) {
+        state.integrationSettings = normalizedIntegrationSettings({
+          ...state.integrationSettings,
+          appearance: {
+            ...(state.integrationSettings && state.integrationSettings.appearance
+              ? state.integrationSettings.appearance
+              : defaultIntegrationSettings().appearance),
+            hatId: normalizeHatId(hatId)
+          }
+        });
+        syncAppearanceSettingsUi();
+        render();
+        scheduleMultiplayerBroadcast();
+      }
+      async function saveHatSelection(hatId) {
+        const requestId = ++hatSelectionRequestId;
+        const previousHatId = currentSelectedHatId();
+        applyOptimisticHatSelection(hatId);
+        state.appearanceSettingsPending = true;
+        syncAppearanceSettingsUi();
+        try {
+          const response = await postJson("/api/settings/integrations", {
+            appearance: {
+              hatId: normalizeHatId(hatId)
+            }
+          });
+          if (requestId !== hatSelectionRequestId) {
+            return;
+          }
+          applyIntegrationSettingsResponse(response);
+        } catch (error) {
+          if (requestId !== hatSelectionRequestId) {
+            return;
+          }
+          console.error("failed to save hat selection", error);
+          applyOptimisticHatSelection(previousHatId);
+        } finally {
+          if (requestId !== hatSelectionRequestId) {
+            return;
+          }
+          state.appearanceSettingsPending = false;
+          syncAppearanceSettingsUi();
+        }
+      }
+      function cycleHatSelection(direction) {
+        const entries = hatSelectionEntries();
+        if (entries.length <= 1) {
+          return;
+        }
+        const index = currentHatSelectionIndex();
+        const nextIndex = (index + direction + entries.length) % entries.length;
+        void saveHatSelection(entries[nextIndex]);
+      }
+      if (hatPrevButton instanceof HTMLButtonElement) {
+        hatPrevButton.addEventListener("click", () => {
+          cycleHatSelection(-1);
         });
       }
-      if (cursorApiKeyClearButton instanceof HTMLButtonElement) {
-        cursorApiKeyClearButton.addEventListener("click", () => {
-          void clearCursorApiKey();
+      if (hatNextButton instanceof HTMLButtonElement) {
+        hatNextButton.addEventListener("click", () => {
+          cycleHatSelection(1);
         });
       }
       const commitMultiplayerInputs = (overrides = {}) => {

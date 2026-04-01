@@ -37,9 +37,17 @@ async function handleAssetRoute(context: RequestContext): Promise<boolean> {
     return false;
   }
 
+  let assetPath = context.url.pathname.slice("/assets/".length);
+  try {
+    assetPath = decodeURIComponent(assetPath);
+  } catch {
+    notFound(context.response);
+    return true;
+  }
+
   await sendStaticAsset(
     context.response,
-    context.url.pathname.slice("/assets/".length),
+    assetPath,
     requestMethod(context)
   );
   return true;
@@ -185,9 +193,18 @@ async function handleIntegrationSettingsRoute(context: RequestContext): Promise<
   if (matchesMethod(context, "POST")) {
     const payload = await readJsonBody(context.request);
     const rawCursorApiKey = payload.cursorApiKey;
+    const rawAppearance = payload.appearance;
     const rawMultiplayer = payload.multiplayer;
     if (rawCursorApiKey !== null && typeof rawCursorApiKey !== "string" && typeof rawCursorApiKey !== "undefined") {
       sendJson(context.response, 400, { error: "cursorApiKey must be a string or null" });
+      return true;
+    }
+    if (
+      rawAppearance !== null
+      && typeof rawAppearance !== "undefined"
+      && (typeof rawAppearance !== "object" || Array.isArray(rawAppearance))
+    ) {
+      sendJson(context.response, 400, { error: "appearance must be an object or null" });
       return true;
     }
     if (
@@ -219,14 +236,31 @@ async function handleIntegrationSettingsRoute(context: RequestContext): Promise<
       }
     }
 
-    if (typeof rawCursorApiKey === "undefined" && typeof rawMultiplayer === "undefined") {
-      sendJson(context.response, 400, { error: "cursorApiKey or multiplayer is required" });
+    if (typeof rawAppearance === "object" && rawAppearance) {
+      const { hatId } = rawAppearance as Record<string, unknown>;
+      if (hatId !== null && typeof hatId !== "string" && typeof hatId !== "undefined") {
+        sendJson(context.response, 400, { error: "appearance.hatId must be a string or null when provided" });
+        return true;
+      }
+    }
+
+    if (
+      typeof rawCursorApiKey === "undefined"
+      && typeof rawAppearance === "undefined"
+      && typeof rawMultiplayer === "undefined"
+    ) {
+      sendJson(context.response, 400, { error: "cursorApiKey, appearance, or multiplayer is required" });
       return true;
     }
 
     if (typeof rawCursorApiKey !== "undefined") {
       const cursorApiKey = typeof rawCursorApiKey === "string" ? rawCursorApiKey : null;
       await context.service.setCursorApiKey(cursorApiKey);
+    }
+    if (typeof rawAppearance !== "undefined") {
+      await context.service.setAppearanceSettings(rawAppearance as {
+        hatId?: string | null;
+      } | null);
     }
     const response =
       typeof rawMultiplayer !== "undefined"

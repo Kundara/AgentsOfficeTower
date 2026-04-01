@@ -235,6 +235,7 @@ export interface DashboardAgent {
   cwd: string | null;
   roomId: string | null;
   appearance: AppearanceProfile;
+  hatId?: string | null;
   updatedAt: string;
   stoppedAt: string | null;
   paths: string[];

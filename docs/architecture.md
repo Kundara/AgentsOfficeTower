@@ -44,6 +44,8 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](./integrati
 
    New sessions get a deterministic random appearance. Overrides are stored in `.codex-agents/agents.json`, which locks their look until changed.
 
+   In addition to that per-project appearance roster, the browser now has a machine-local hat selection stored in Agents Office user data. That `hatId` is applied to every local agent in the assembled snapshot and is also serialized through shared-room fleet sync so remote peers keep their own hat styling.
+
 8. Codex subagent roles
 
    Codex ships with built-in subagents such as `default`, `worker`, and `explorer`, and custom agents can define `nickname_candidates` for more readable spawned names. The visual layer groups booths by the underlying role, while still showing the friendlier label when available.
@@ -110,8 +112,10 @@ Sources:
   - live SSE updates for browser clients
   - all discovered workspaces stay live-monitored at once
   - reserved multiplayer status surface for a future secured sync transport
-  - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; those shared-room credentials now restore from machine-local Agents Office user data on launch, and each local floor exposes a persisted `Shared` toggle that controls whether that project is broadcast into the room without forcing a floor-shell rebuild
+  - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; those shared-room credentials now restore from machine-local Agents Office user data on launch, each local floor exposes a persisted `Shared` toggle that controls whether that project is broadcast into the room without forcing a floor-shell rebuild, and same-machine browser plus VS Code viewers now share one stored multiplayer device identity so self-peers can be ignored cleanly
+  - that same Settings popup now includes an image-only left/right hat picker whose selection applies immediately to all local agents and is preserved in machine-local app settings
   - remote shared-room activity now merges client-side onto matching local workspaces when possible, and otherwise stays visible as remote-only floors with a 1-hour cooldown before disappearing after updates stop
+  - shared-room payloads now also carry the broadcaster's selected `hatId`, so remote peers stay visually distinct without inventing peer-specific palette logic
 - map and terminal-style views through `?view=map|terminal`
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
 - local threads remain seated while the thread is still ongoing, even if they pause between visible events or the latest turn already looks done
@@ -176,9 +180,9 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
 - `packages/web/src/server/server-metadata.ts`
   Builds startup fleet placeholders and the shared `/api/server-meta` payload shape.
 - `packages/web/src/server/fleet-live-service.ts`
-  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, exposes disabled multiplayer status for future secured sync work, and fans snapshots out over SSE. Fleet-wide cloud task polling still lives here so `codex cloud list` runs once per fleet refresh cycle instead of once per project monitor, with shared backoff when the upstream cloud surface rate-limits. Startup now publishes a placeholder fleet immediately and warms project monitors in the background.
+  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, persists machine-local browser settings such as Cursor credentials, shared-room config, and selected hat state, exposes disabled multiplayer status for future secured sync work, and fans snapshots out over SSE. Fleet-wide cloud task polling still lives here so `codex cloud list` runs once per fleet refresh cycle instead of once per project monitor, with shared backoff when the upstream cloud surface rate-limits. Startup now publishes a placeholder fleet immediately and warms project monitors in the background.
 - `packages/web/src/server/router.ts`
-  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, and room scaffolding. Fleet meta and home routes now answer immediately from the current in-memory project list instead of blocking on project discovery.
+  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, machine-local browser settings, and room scaffolding. Fleet meta and home routes now answer immediately from the current in-memory project list instead of blocking on project discovery.
 - `packages/web/src/render/render-html.ts`
   Builds the HTML shell and injects the browser assets.
 - `packages/web/src/client/index.ts`
@@ -190,12 +194,12 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
 - `packages/web/src/client/runtime`
   Holds focused runtime sections so browser behavior can be edited by concern instead of by patch order or by one giant client script.
   Current ownership is:
-  - `settings-source.ts`: persisted scene settings, furniture overrides, and browser-side settings state bootstrap.
-  - `layout-source.ts`: DOM wiring, fleet/workspace selection state, summary helpers, role grouping, and display-text normalization.
+  - `settings-source.ts`: persisted scene settings, furniture overrides, hat catalog helpers, and browser-side settings state bootstrap.
+  - `layout-source.ts`: DOM wiring, fleet/workspace selection state, settings UI sync including the hat preview cycler, summary helpers, role grouping, and display-text normalization.
   - `seating-source.ts`: current-workload workstation policy, local grace windows, and rec-room eligibility.
   - `render-source.ts`: cubicle/workstation visual models, notification copy shaping, and display-path formatting.
-  - `scene-source.ts`: room-to-scene model assembly, Pixi renderer lifecycle, and retained scene orchestration.
-  - `navigation-source.ts`: navigation grid, avatar routing, scene hit-target focus, terminal/fleet summaries, and the durable "Needs You" queue.
+  - `scene-source.ts`: room-to-scene model assembly, Pixi renderer lifecycle, retained scene orchestration, and hat asset preloading.
+  - `navigation-source.ts`: navigation grid, avatar routing, per-avatar Pixi node creation including hats, scene hit-target focus, terminal/fleet summaries, and the durable "Needs You" queue.
   - `ui-source.ts`: browser render loop, DOM patching, fleet ingestion, and session-card rendering.
 - `packages/web/src/client/multiplayer-source.ts`
   Holds the browser-side PartyKit room sync overlay, shared-room draft/input behavior, per-project share preferences, remote-only floor cooldown memory, and remote fleet merge helpers so the realtime room transport stays outside the main renderer script.

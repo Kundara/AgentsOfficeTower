@@ -3,6 +3,7 @@ import type { ServerResponse } from "node:http";
 import {
   canonicalizeProjectPath,
   cycleAgentAppearance,
+  describeStoredAppearanceSettings,
   describeCursorIntegrationSettings,
   describeStoredMultiplayerSettings,
   discoverProjects,
@@ -10,6 +11,7 @@ import {
   projectPathIdentityKey,
   ProjectLiveMonitor,
   scaffoldRoomsFile,
+  setStoredAppearanceSettings,
   setStoredCursorApiKey,
   setStoredMultiplayerSettings
 } from "@codex-agents-office/core";
@@ -130,6 +132,7 @@ export class FleetLiveService {
   getIntegrationSettings(): IntegrationSettingsResponse {
     return {
       cursor: describeCursorIntegrationSettings(),
+      appearance: describeStoredAppearanceSettings(),
       multiplayer: describeStoredMultiplayerSettings()
     };
   }
@@ -149,6 +152,16 @@ export class FleetLiveService {
   } | null): Promise<IntegrationSettingsResponse> {
     await setStoredMultiplayerSettings(settings);
     await this.publish();
+    return this.getIntegrationSettings();
+  }
+
+  async setAppearanceSettings(settings: {
+    hatId?: string | null;
+  } | null): Promise<IntegrationSettingsResponse> {
+    await setStoredAppearanceSettings(settings);
+    void Promise.all(Array.from(this.monitors.values()).map((monitor) => monitor.refreshNow()))
+      .then(() => this.publish())
+      .catch(() => undefined);
     return this.getIntegrationSettings();
   }
 

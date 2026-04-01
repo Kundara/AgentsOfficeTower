@@ -1,4 +1,5 @@
 import type { DashboardSnapshot } from "@codex-agents-office/core";
+import type { AppearanceSettings } from "@codex-agents-office/core";
 import type { CursorIntegrationSettings } from "@codex-agents-office/core";
 import type { MultiplayerSettings } from "@codex-agents-office/core";
 
@@ -29,6 +30,7 @@ export interface ServerOptions {
 
 export interface IntegrationSettingsResponse {
   cursor: CursorIntegrationSettings;
+  appearance: AppearanceSettings;
   multiplayer: MultiplayerSettings;
 }
 
@@ -41,5 +43,6 @@ export interface ServerMeta {
   port: number;
   explicitProjects: boolean;
   projects: ProjectDescriptor[];
+  multiplayerHostId: string;
   multiplayer: MultiplayerStatus;
 }

@@ -1,3 +1,4 @@
+import { describeStoredAppearanceSettings } from "../app-settings";
 import { findRoomForPaths, loadRoomConfig } from "../room-config";
 import { resolveProjectIdentity } from "../project-identity";
 import { applyCurrentWorkloadState } from "../domain/workload-policy";
@@ -42,13 +43,19 @@ export async function assembleProjectSnapshot(input: {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const projectRoot = input.projectRoot;
   const projectLabel = projectLabelFromRoot(projectRoot);
+  const appearanceSettings = describeStoredAppearanceSettings();
   const [projectIdentity, roomConfig] = await Promise.all([
     resolveProjectIdentity(projectRoot),
     loadRoomConfig(projectRoot)
   ]);
 
   const agents = normalizeAgentRoomIds(
-    input.adapterSnapshots.flatMap((snapshot) => snapshot.agents),
+    input.adapterSnapshots
+      .flatMap((snapshot) => snapshot.agents)
+      .map((agent) => ({
+        ...agent,
+        hatId: appearanceSettings.hatId
+      })),
     { projectRoot, roomConfig }
   );
   const cloudTasks = aggregateCloudTasks(input.adapterSnapshots);
@@ -65,4 +72,3 @@ export async function assembleProjectSnapshot(input: {
     notes: aggregateNotes(input.adapterSnapshots)
   }, input.currentnessNow ?? Date.now());
 }
-

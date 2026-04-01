@@ -62,6 +62,7 @@ export function buildServerMeta(
     port: options.port,
     explicitProjects: options.explicitProjects,
     projects,
+    multiplayerHostId: "",
     multiplayer
   };
 }

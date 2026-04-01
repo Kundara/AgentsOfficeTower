@@ -650,6 +650,54 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           };
         }
 
+        function assetImageDimensions(url, fallbackWidth = 16, fallbackHeight = 16) {
+          const image = loadedOfficeAssetImages.get(url);
+          const width = Number(image && image.naturalWidth) || fallbackWidth;
+          const height = Number(image && image.naturalHeight) || fallbackHeight;
+          return {
+            width: Math.max(1, width),
+            height: Math.max(1, height)
+          };
+        }
+
+        function hatRenderMetrics(agent, avatarMetrics) {
+          const hat = hatDefinitionById(agent && agent.hatId);
+          if (!hat || !hat.url || !avatarMetrics) {
+            return null;
+          }
+          const avatarDefinition = Array.isArray(pixelOffice && pixelOffice.avatars)
+            ? pixelOffice.avatars.find((entry) => entry && entry.url === agent.sprite) || null
+            : null;
+          const avatarSourceHeight = Math.max(1, Number(avatarDefinition && avatarDefinition.h) || Number(avatarMetrics.height) || 16);
+          const avatarRenderScale = Math.max(0.1, Number(avatarMetrics.height) / avatarSourceHeight);
+          const hatDimensions = assetImageDimensions(hat.url);
+          const hatScale = Math.max(0.1, avatarRenderScale * (Number.isFinite(hat.scale) ? Number(hat.scale) : 1));
+          const width = pixelSnap(hatDimensions.width * hatScale, 1);
+          const height = pixelSnap(hatDimensions.height * hatScale, 1);
+          const centeredOffsetX = pixelSnap(Math.round((avatarMetrics.width - width) / 2));
+          const manualOffsetX = pixelSnap(
+            (Number.isFinite(hat.offsetPx && hat.offsetPx.x) ? Number(hat.offsetPx.x) : 0) * avatarRenderScale
+          );
+          const offsetY = pixelSnap(
+            -Math.round(height * 0.42)
+            + (Number.isFinite(hat.offsetPx && hat.offsetPx.y) ? Number(hat.offsetPx.y) : 0) * avatarRenderScale
+          );
+          return {
+            url: hat.url,
+            width,
+            height,
+            offsetX: centeredOffsetX + manualOffsetX,
+            centeredOffsetX,
+            manualOffsetX,
+            offsetY,
+            markerLift: Math.max(0, Math.round(height * 0.34))
+          };
+        }
+
+        function hatRenderX(baseX, centeredOffsetX, manualOffsetX, flipX) {
+          return pixelSnap(baseX + centeredOffsetX + (flipX ? -manualOffsetX : manualOffsetX));
+        }
+
         function addAvatarNode(agent, zIndex = 12) {
           const avatar = PIXI.Sprite.from(loadedOfficeAssetImages.get(agent.sprite) || agent.sprite);
           const createdNodes = [];
@@ -658,6 +706,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           const snappedHeight = renderMetrics.height;
           const offsetX = renderMetrics.offsetX;
           const offsetY = renderMetrics.offsetY;
+          const hatMetrics = hatRenderMetrics(agent, renderMetrics);
           avatar.x = pixelSnap(agent.x) + offsetX;
           avatar.y = pixelSnap(agent.y) + offsetY;
           avatar.width = snappedWidth;
@@ -692,6 +741,46 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           }
           renderer.root.addChild(avatar);
           createdNodes.push(avatar);
+          let hatSprite = null;
+          if (hatMetrics) {
+            hatSprite = PIXI.Sprite.from(loadedOfficeAssetImages.get(hatMetrics.url) || hatMetrics.url);
+            hatSprite.x = hatRenderX(
+              agent.x + offsetX,
+              hatMetrics.centeredOffsetX,
+              hatMetrics.manualOffsetX,
+              agent.flipX === true
+            );
+            hatSprite.y = pixelSnap(agent.y + offsetY + hatMetrics.offsetY);
+            hatSprite.width = hatMetrics.width;
+            hatSprite.height = hatMetrics.height;
+            if (agent.flipX) {
+              hatSprite.scale.x = -Math.abs(hatSprite.scale.x || 1);
+              hatSprite.x = pixelSnap(hatSprite.x + hatMetrics.width);
+            }
+            if (Number.isFinite(agent.depthFootY)) {
+              hatSprite.zIndex = sceneFootDepth(
+                Number(agent.depthFootY) - snappedHeight,
+                snappedHeight,
+                (Number(agent.depthBias) || zIndex) + 0.5,
+                model.tile,
+                Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0,
+                Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null
+              );
+            } else if (fixedZ !== null) {
+              hatSprite.zIndex = fixedZ + 0.5;
+            } else {
+              hatSprite.zIndex = sceneFootDepth(
+                avatar.y,
+                snappedHeight,
+                zIndex + 0.5,
+                model.tile,
+                Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0,
+                Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null
+              );
+            }
+            renderer.root.addChild(hatSprite);
+            createdNodes.push(hatSprite);
+          }
           let statusMarker = null;
           const statusMarkerUrl = agent.statusMarkerIconUrl || stateMarkerIconUrlForAgent(agent);
           if (statusMarkerUrl) {
@@ -700,7 +789,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             const markerHeight = STATE_MARKER_SIZE;
             const markerPosition = statusMarkerPosition(agent, markerWidth);
             statusMarker.x = markerPosition.x;
-            statusMarker.y = markerPosition.y;
+            statusMarker.y = markerPosition.y - (hatMetrics ? hatMetrics.markerLift : 0);
             statusMarker.width = markerWidth;
             statusMarker.height = markerHeight;
             statusMarker.zIndex = Number.isFinite(agent.depthFootY)
@@ -743,6 +832,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           return {
             nodes: createdNodes,
             avatar,
+            hatSprite,
             statusMarker,
             bubbleBox,
             bubbleText,
@@ -753,7 +843,14 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             depthBias: Number.isFinite(agent.depthBias) ? Number(agent.depthBias) : (fixedZ !== null ? fixedZ : zIndex),
             depthFootY: Number.isFinite(agent.depthFootY) ? Number(agent.depthFootY) : null,
             depthBaseY: Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0,
-            depthRow: Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null
+            depthRow: Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null,
+            hatWidth: hatMetrics ? hatMetrics.width : 0,
+            hatHeight: hatMetrics ? hatMetrics.height : 0,
+            hatOffsetX: hatMetrics ? hatMetrics.offsetX : 0,
+            hatCenteredOffsetX: hatMetrics ? hatMetrics.centeredOffsetX : 0,
+            hatManualOffsetX: hatMetrics ? hatMetrics.manualOffsetX : 0,
+            hatOffsetY: hatMetrics ? hatMetrics.offsetY : 0,
+            statusMarkerLift: hatMetrics ? hatMetrics.markerLift : 0
           };
         }
 
@@ -818,6 +915,16 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
                 effectiveDepthRow
               );
             }
+            if (motionState.hatSprite) {
+              motionState.hatSprite.zIndex = sceneFootDepth(
+                Number(effectiveDepthFootY) - renderHeight,
+                renderHeight,
+                effectiveDepthBias + 0.5,
+                model.tile,
+                Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0,
+                effectiveDepthRow
+              );
+            }
             if (motionState.heldItemSprite) {
               motionState.heldItemSprite.zIndex = sceneFootDepth(
                 Number(effectiveDepthFootY) - renderHeight,
@@ -835,6 +942,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             motionState.sprite.zIndex = fixedZ;
             if (motionState.statusMarker) {
               motionState.statusMarker.zIndex = fixedZ + 1;
+            }
+            if (motionState.hatSprite) {
+              motionState.hatSprite.zIndex = fixedZ + 0.5;
             }
             if (motionState.bubbleBox) {
               motionState.bubbleBox.zIndex = fixedZ + 2;
@@ -860,6 +970,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
               )?.row
             : null;
           applyFootDepth(motionState.sprite, renderTopY, renderHeight, depthBias, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
+          if (motionState.hatSprite) {
+            applyFootDepth(motionState.hatSprite, renderTopY, renderHeight, depthBias + 0.5, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
+          }
           if (motionState.statusMarker) {
             applyFootDepth(motionState.statusMarker, renderTopY, renderHeight, depthBias + 1, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
           }
@@ -932,6 +1045,24 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           }
         }
 
+        function buildBobAnimationEntry(agent, avatarVisual, motionState) {
+          return {
+            kind: "bob",
+            motionState,
+            sprite: avatarVisual.avatar,
+            hatSprite: avatarVisual.hatSprite,
+            statusMarker: avatarVisual.statusMarker,
+            bubbleBox: avatarVisual.bubbleBox,
+            bubbleText: avatarVisual.bubbleText,
+            baseY: pixelSnap(avatarVisual.avatar && avatarVisual.avatar.y),
+            hatBaseY: pixelSnap(avatarVisual.hatSprite && avatarVisual.hatSprite.y),
+            statusMarkerBaseY: pixelSnap(avatarVisual.statusMarker && avatarVisual.statusMarker.y),
+            bubbleBoxBaseY: pixelSnap(avatarVisual.bubbleBox && avatarVisual.bubbleBox.y),
+            bubbleTextBaseY: pixelSnap(avatarVisual.bubbleText && avatarVisual.bubbleText.y),
+            phase: stableHash(agent.id || agent.label || "") % 1000
+          };
+        }
+
         function registerAgentMotion(agent, avatarVisual, roomNavigation, reservations, previousMotionState = null, options = {}) {
           if (!agent || !avatarVisual || !avatarVisual.avatar) {
             return avatarVisual.nodes;
@@ -966,6 +1097,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
           );
           if (sameTarget) {
             previousState.sprite = avatarVisual.avatar;
+            previousState.hatSprite = avatarVisual.hatSprite;
             previousState.statusMarker = avatarVisual.statusMarker;
             previousState.bubbleBox = avatarVisual.bubbleBox;
             previousState.bubbleText = avatarVisual.bubbleText;
@@ -977,6 +1109,13 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             previousState.renderHeight = avatarVisual.renderHeight;
             previousState.renderOffsetX = avatarVisual.renderOffsetX;
             previousState.renderOffsetY = avatarVisual.renderOffsetY;
+            previousState.hatWidth = avatarVisual.hatWidth;
+            previousState.hatHeight = avatarVisual.hatHeight;
+            previousState.hatOffsetX = avatarVisual.hatOffsetX;
+            previousState.hatCenteredOffsetX = avatarVisual.hatCenteredOffsetX;
+            previousState.hatManualOffsetX = avatarVisual.hatManualOffsetX;
+            previousState.hatOffsetY = avatarVisual.hatOffsetY;
+            previousState.statusMarkerLift = avatarVisual.statusMarkerLift;
             previousState.state = agent.state || "idle";
             previousState.spriteUrl = agent.sprite;
             previousState.depthBaseY = avatarVisual.depthBaseY;
@@ -1027,13 +1166,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             if (autonomousResting) {
               renderer.animatedSprites.push(previousState);
             } else if (["editing", "running", "validating", "scanning", "thinking", "planning", "delegating"].includes(agent.state) && previousState.routeIndex >= (previousState.route?.length || 0)) {
-              renderer.animatedSprites.push({
-                kind: "bob",
-                sprite: avatarVisual.avatar,
-                baseY: pixelSnap(previousState.currentY),
-                depthBias: avatarVisual.depthBias,
-                phase: stableHash(agent.id || agent.label || "") % 1000
-              });
+              renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, previousState));
             } else {
               renderer.animatedSprites.push(previousState);
             }
@@ -1075,6 +1208,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             key: agentKey,
             roomId: agent.roomId,
             sprite: avatarVisual.avatar,
+            hatSprite: avatarVisual.hatSprite,
             statusMarker: avatarVisual.statusMarker,
             spriteUrl: agent.sprite,
             bubbleBox: avatarVisual.bubbleBox,
@@ -1085,6 +1219,13 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             renderHeight: avatarVisual.renderHeight,
             renderOffsetX: avatarVisual.renderOffsetX,
             renderOffsetY: avatarVisual.renderOffsetY,
+            hatWidth: avatarVisual.hatWidth,
+            hatHeight: avatarVisual.hatHeight,
+            hatOffsetX: avatarVisual.hatOffsetX,
+            hatCenteredOffsetX: avatarVisual.hatCenteredOffsetX,
+            hatManualOffsetX: avatarVisual.hatManualOffsetX,
+            hatOffsetY: avatarVisual.hatOffsetY,
+            statusMarkerLift: avatarVisual.statusMarkerLift,
             currentX: previousState
               ? previousState.currentX
               : (route[0]?.x ?? agent.x),
@@ -1148,13 +1289,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `      function officeAvatarPosi
             motionState.route = [{ x: agent.x, y: agent.y }];
             motionState.routeIndex = 1;
             renderer.motionStates.set(motionState.key, motionState);
-            renderer.animatedSprites.push({
-              kind: "bob",
-              sprite: avatarVisual.avatar,
-              baseY: pixelSnap(agent.y),
-              depthBias: avatarVisual.depthBias,
-              phase: stableHash(agent.id || agent.label || "") % 1000
-            });
+            renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, motionState));
             syncMotionStateDepth(motionState);
             syncAgentHitNodePosition(renderer, motionState);
             return avatarVisual.nodes;

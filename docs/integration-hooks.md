@@ -838,7 +838,7 @@ How it works:
 - `/api/events` streams live fleet updates over SSE
 - `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
 - browser-side rendering starts from `client/index.ts`, executes the generated `app-runtime.ts` module, and then delegates behavior across the focused runtime section files
-- optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, per-project share preferences, and remote-only floor cooldown handling live in `multiplayer-source.ts`
+- optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, a server-backed multiplayer device identity for self-peer suppression across local viewers, per-project share preferences, and remote-only floor cooldown handling live in `multiplayer-source.ts`
 
 - server-sent events from `/api/events`
 
