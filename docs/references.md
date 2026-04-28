@@ -4,6 +4,8 @@
 
 - [Codex App Server](https://developers.openai.com/codex/app-server)
   Primary local integration surface for threads, turns, items, approvals, and live notifications.
+- [Codex app-server README and generated schema guidance](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+  Official source-repo reference for `codex app-server generate-ts`, server-initiated approval/input requests, MCP elicitations, and permission request payloads.
 - [Codex App Server events](https://developers.openai.com/codex/app-server#events)
   Source of truth for notification semantics such as `thread/status/changed` and the meaning of active desktop thread state while the observer is attached.
 - [Codex Cloud](https://developers.openai.com/codex/cloud)
@@ -23,6 +25,8 @@
 
 - [Claude Agent SDK TypeScript reference](https://platform.claude.com/docs/en/agent-sdk/typescript)
   Official session APIs, hook callback contracts, and SDK-managed Claude Code integration surface.
+- [Claude Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview)
+  Current setup and capability overview confirming SDK hooks, sessions, permissions, MCP, and bundled Claude Code behavior.
 - [Claude Agent SDK TypeScript V2 preview](https://platform.claude.com/docs/en/agent-sdk/typescript-v2-preview)
   Preview reference for `createSession()` / `resumeSession()` and the newer session lifecycle shape.
 - [Claude API client SDKs](https://platform.claude.com/docs/en/api/client-sdks)
@@ -48,7 +52,7 @@
 - [Cursor Cloud Agents](https://cursor.com/docs/cloud-agent)
   Current product overview for remote cloud agents, follow-ups, takeover, and supported model constraints.
 - [Cursor Cloud Agents API](https://cursor.com/docs/cloud-agent/api/endpoints)
-  Current API entrypoint for listing agents, reading status, conversations, webhooks, repositories, and model metadata.
+  Current API entrypoint for listing agents, reading status, conversations, webhooks, repositories, model metadata, and Bearer-token API authorization.
 - [Cursor List Agents](https://cursor.com/docs/cloud-agent/api/endpoints)
   Primary endpoint for agent id, repo/ref, status, branch, summary, and target URLs.
 - [Cursor Agent Conversation](https://cursor.com/docs/cloud-agent/api/endpoints)

@@ -12,6 +12,33 @@ interface ThreadListResult {
   data: CodexThread[];
 }
 
+interface TurnStartResult {
+  turn: {
+    id: string;
+    status: string;
+    items: unknown[];
+    error: unknown;
+  };
+}
+
+interface TurnSteerResult {
+  turnId: string;
+}
+
+interface TextUserInput {
+  type: "text";
+  text: string;
+  text_elements: unknown[];
+}
+
+export interface ToolRequestUserInputAnswer {
+  answers: string[];
+}
+
+export interface ToolRequestUserInputResponse {
+  answers: Record<string, ToolRequestUserInputAnswer>;
+}
+
 export interface AppServerNotification {
   method: string;
   params?: Record<string, unknown>;
@@ -213,6 +240,24 @@ export class CodexAppServerClient {
     });
   }
 
+  requestNoWait(method: string, params?: Record<string, unknown>): number {
+    const id = this.nextId++;
+    this.send(params ? { id, method, params } : { id, method });
+    return id;
+  }
+
+  respondToServerRequest(requestId: number, result: unknown): void {
+    this.send({ id: requestId, result });
+  }
+
+  respondToToolRequestUserInput(requestId: number, response: ToolRequestUserInputResponse): void {
+    this.respondToServerRequest(requestId, response);
+  }
+
+  respondToApprovalRequest(requestId: number, decision: string): void {
+    this.respondToServerRequest(requestId, { decision });
+  }
+
   async listThreads(params: {
     cwd?: string;
     limit?: number;
@@ -252,6 +297,40 @@ export class CodexAppServerClient {
     return result.thread;
   }
 
+  async startTurn(threadId: string, text: string, cwd?: string): Promise<string> {
+    const result = await this.request<TurnStartResult>("turn/start", {
+      threadId,
+      input: [textUserInput(text)],
+      cwd: cwd ?? null
+    });
+    return result.turn?.id ?? "";
+  }
+
+  startTurnNoWait(threadId: string, text: string, cwd?: string): number {
+    return this.requestNoWait("turn/start", {
+      threadId,
+      input: [textUserInput(text)],
+      cwd: cwd ?? null
+    });
+  }
+
+  async steerTurn(threadId: string, expectedTurnId: string, text: string): Promise<string> {
+    const result = await this.request<TurnSteerResult>("turn/steer", {
+      threadId,
+      input: [textUserInput(text)],
+      expectedTurnId
+    });
+    return result.turnId ?? "";
+  }
+
+  steerTurnNoWait(threadId: string, expectedTurnId: string, text: string): number {
+    return this.requestNoWait("turn/steer", {
+      threadId,
+      input: [textUserInput(text)],
+      expectedTurnId
+    });
+  }
+
   async unsubscribeThread(threadId: string): Promise<"unsubscribed" | "notSubscribed" | "notLoaded"> {
     const result = await this.request<{ status: "unsubscribed" | "notSubscribed" | "notLoaded" }>("thread/unsubscribe", {
       threadId
@@ -269,6 +348,14 @@ export class CodexAppServerClient {
       this.child.kill();
     }
   }
+}
+
+function textUserInput(text: string): TextUserInput {
+  return {
+    type: "text",
+    text,
+    text_elements: []
+  };
 }
 
 export async function withAppServerClient<T>(

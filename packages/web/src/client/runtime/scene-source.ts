@@ -1,5 +1,5 @@
 export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occupants) {
-        const ordered = [...occupants].sort(compareAgentsByRecencyStable);
+        const ordered = sortAgentsStably("lead-clusters", occupants);
         const byId = new Map(ordered.map((agent) => [agent.id, agent]));
         const buckets = new Map();
         const leads = [];
@@ -18,6 +18,31 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           lead,
           children: [...(buckets.get(lead.id) || [])].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
         }));
+      }
+
+      const stableSceneOrderMemory = new Map();
+
+      function sortAgentsStably(bucketKey, agents) {
+        const cacheKey = String(bucketKey || "default");
+        const previousOrder = stableSceneOrderMemory.get(cacheKey);
+        const ordered = [...agents].sort((left, right) => {
+          const leftIndex = previousOrder ? previousOrder.get(left.id) : undefined;
+          const rightIndex = previousOrder ? previousOrder.get(right.id) : undefined;
+          if (leftIndex !== undefined || rightIndex !== undefined) {
+            if (leftIndex === undefined) {
+              return 1;
+            }
+            if (rightIndex === undefined) {
+              return -1;
+            }
+            if (leftIndex !== rightIndex) {
+              return leftIndex - rightIndex;
+            }
+          }
+          return compareAgentsByRecencyStable(left, right);
+        });
+        stableSceneOrderMemory.set(cacheKey, new Map(ordered.map((agent, index) => [agent.id, index])));
+        return ordered;
       }
 
       function partitionAgents(agents, size) {
@@ -75,17 +100,19 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
       }
 
       function restingAgentsFor(snapshot, compact) {
-        return snapshot.agents
-          .filter((agent) => {
-            if (agent.source === "cloud") {
-              return false;
-            }
-            if (shouldSeatAtWorkstation(agent)) {
-              return false;
-            }
-            return agent.state === "idle" || agent.state === "done";
-          })
-          .sort(compareAgentsByRecencyStable);
+        return sortAgentsStably(
+          \`\${snapshot.projectRoot}::\${compact ? "compact-resting" : "resting"}\`,
+          snapshot.agents
+            .filter((agent) => {
+              if (agent.source === "cloud") {
+                return false;
+              }
+              if (shouldSeatAtWorkstation(agent)) {
+                return false;
+              }
+              return agent.state === "idle" || agent.state === "done";
+            })
+        );
       }
 
       function chairSpriteForAgent(agent) {
@@ -254,7 +281,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           : (options.liveOnly
             ? '<div class="muted">Showing live agents plus the 4 most recent lead sessions. Recent leads cool down in the rec area while live subagents stay on the floor.</div>'
             : '<div class="muted">Room shells come from the project XML, while booths are generated live from Codex sessions and grouped by parent session and subagent role.</div>');
-        return \`<div class="scene-shell" data-scene-shell="\${focusMode ? "focus" : "default"}">\${hint}<div class="scene-fit \${compact ? "compact" : ""}" data-scene-fit data-scene-mode="\${focusMode ? "focus" : "default"}" data-scene-fitted="\${focusMode ? "false" : "true"}"><div class="scene-notifications" data-scene-notifications></div><div class="office-map-host" data-office-map-host="\${escapeHtml(shellKey)}" data-project-root="\${escapeHtml(snapshot.projectRoot)}" data-compact="\${compact ? "1" : "0"}" data-focus-mode="\${focusMode ? "1" : "0"}"><div class="office-map-canvas" data-office-map-canvas></div><div class="office-map-anchors" data-office-map-anchors></div></div></div></div>\`;
+        return \`<div class="scene-shell" data-scene-shell="\${focusMode ? "focus" : "default"}">\${hint}<div class="scene-fit \${compact ? "compact" : ""}" data-scene-fit data-scene-mode="\${focusMode ? "focus" : "default"}" data-scene-fitted="\${focusMode ? "false" : "true"}"><div class="scene-notifications" data-scene-notifications></div><div class="office-map-host" data-office-map-host="\${escapeHtml(shellKey)}" data-project-root="\${escapeHtml(snapshot.projectRoot)}" data-compact="\${compact ? "1" : "0"}" data-focus-mode="\${focusMode ? "1" : "0"}"><div class="office-map-canvas" data-office-map-canvas></div><div class="office-map-anchors" data-office-map-anchors></div><div class="office-map-thread-layer" data-office-map-thread-layer></div></div></div></div>\`;
       }
 
       function sceneShellToken(projects, focusMode = false) {
@@ -273,9 +300,10 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const tile = layoutConfig.tileSize;
         const baseMaxX = Math.max(...rooms.map((room) => room.x + room.width), 24);
         const maxY = Math.max(...rooms.map((room) => room.y + room.height), 16);
-        const waitingAgents = snapshot.agents
-          .filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !shouldSeatAtWorkstation(agent))
-          .sort(compareAgentsByRecencyStable);
+        const waitingAgents = sortAgentsStably(
+          \`\${snapshot.projectRoot}::\${compact ? "compact-waiting" : "waiting"}\`,
+          snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !shouldSeatAtWorkstation(agent))
+        );
         const allRestingAgents = restingAgentsFor(snapshot, compact);
         const restingAgents = allRestingAgents
           .filter((agent) =>
@@ -301,9 +329,55 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           offices: [],
           recAgents: [],
           relationshipLines: [],
-          anchors: []
+          anchors: [],
+          threadPanel: null
         };
         const agentPositions = new Map();
+        const openThreadSuppressesHover = Boolean(state.openAgentThread || state.closingAgentThread);
+
+        function sceneThreadPanelState(agent) {
+          const projectRoot = threadViewProjectRoot(snapshot, agent);
+          if (!projectRoot || !agent || !agent.threadId) {
+            return null;
+          }
+          if (
+            state.openAgentThread
+            && state.openAgentThread.projectRoot === projectRoot
+            && state.openAgentThread.threadId === agent.threadId
+          ) {
+            return "open";
+          }
+          if (
+            state.closingAgentThread
+            && state.closingAgentThread.projectRoot === projectRoot
+            && state.closingAgentThread.threadId === agent.threadId
+          ) {
+            return "closing";
+          }
+          return null;
+        }
+
+        function registerThreadPanel(agent) {
+          if (model.threadPanel) {
+            return;
+          }
+          const panelState = sceneThreadPanelState(agent);
+          if (!panelState) {
+            return;
+          }
+          model.threadPanel = {
+            state: panelState,
+            key: agentKey(snapshot.projectRoot, agent),
+            html: renderAgentThreadCard(snapshot, agent, { closing: panelState === "closing" })
+          };
+        }
+
+        function openThreadStageOffset(agent) {
+          if (sceneThreadPanelState(agent) !== "open" || hasReplyThreadWorkIntent(agent)) {
+            return { x: 0, y: 0 };
+          }
+          return { x: compact ? -18 : -26, y: compact ? 10 : 16 };
+        }
 
         rooms.forEach((room) => {
           const isPrimaryRoom = room.id === sceneRooms.primaryRoomId;
@@ -455,6 +529,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                   appearance: agent.appearance,
                   hatId: effectiveHatIdForAgent(agent),
                   needsUser: agent.needsUser || null,
+                  turnSignal: recentTurnSignalForAgent(snapshot, agent),
+                  activityCue: recentActivityCueForAgent(snapshot, agent),
                   statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                   slotId: entry.slot.id,
                   mirrored: seatMirrored,
@@ -469,6 +545,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 key: agentKey(snapshot.projectRoot, agent),
                 ...visual.workstationBounds
               });
+              registerThreadPanel(agent);
               model.anchors.push(
                 {
                   id: "agent::" + agentKey(snapshot.projectRoot, agent),
@@ -480,9 +557,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                   top: visual.avatar ? visual.avatar.y : visual.anchorY,
                   width: visual.avatar ? visual.avatar.width : tile,
                   height: visual.avatar ? visual.avatar.height : tile,
+                  threadId: agent.threadId || "",
+                  replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                   focusKey: focusAgentKey(snapshot, agent),
                   focusKeys: collectFocusedSessionKeys(snapshot, agent),
-                  hoverHtml: renderAgentHover(snapshot, agent)
+                  hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
+                  threadOpen: Boolean(sceneThreadPanelState(agent))
                 },
                 { id: "workstation::" + agentKey(snapshot.projectRoot, agent), type: "workstation", key: agentKey(snapshot.projectRoot, agent), x: pod.x + Math.round(pod.width / 2), y: pod.y + Math.round(pod.height * 0.72) }
               );
@@ -540,6 +620,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                     appearance: entry.agent.appearance,
                     hatId: effectiveHatIdForAgent(entry.agent),
                     needsUser: entry.agent.needsUser || null,
+                    turnSignal: recentTurnSignalForAgent(snapshot, entry.agent),
+                    activityCue: recentActivityCueForAgent(snapshot, entry.agent),
                     statusMarkerIconUrl: stateMarkerIconUrlForAgent(entry.agent),
                     slotId: entry.slot.id,
                     mirrored: false,
@@ -555,6 +637,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
               key: agentKey(snapshot.projectRoot, entry.agent),
               ...visual.workstationBounds
             });
+            registerThreadPanel(entry.agent);
             model.anchors.push(
               {
                 id: "agent::" + agentKey(snapshot.projectRoot, entry.agent),
@@ -566,9 +649,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 top: visual.avatar ? visual.avatar.y : visual.anchorY,
                 width: visual.avatar ? visual.avatar.width : tile,
                 height: visual.avatar ? visual.avatar.height : tile,
+                threadId: entry.agent.threadId || "",
+                replyProjectRoot: threadViewProjectRoot(snapshot, entry.agent) || "",
                 focusKey: focusAgentKey(snapshot, entry.agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, entry.agent),
-                hoverHtml: renderAgentHover(snapshot, entry.agent)
+                hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, entry.agent),
+                threadOpen: Boolean(sceneThreadPanelState(entry.agent))
               },
               { id: "workstation::" + agentKey(snapshot.projectRoot, entry.agent), type: "workstation", key: agentKey(snapshot.projectRoot, entry.agent), x: visual.anchorX, y: visual.anchorY }
             );
@@ -579,8 +665,11 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents, 4);
             waitingAssignments.forEach(({ agent, slotIndex }) => {
               const slot = wallsideWaitingSlotAt(slotIndex, compact, roomPixelWidth, layoutConfig.recAreaWalkwayGridY);
-              const anchorX = roomX + slot.x + Math.round(tile * 0.4);
-              const anchorY = roomY + slot.y + Math.round(tile * 0.6);
+              const stagedOffset = openThreadStageOffset(agent);
+              const avatarX = roomX + slot.x + stagedOffset.x;
+              const avatarY = roomY + slot.y + stagedOffset.y;
+              const anchorX = avatarX + Math.round(tile * 0.4);
+              const anchorY = avatarY + Math.round(tile * 0.6);
               model.recAgents.push({
                 id: agent.id,
                 key: agentKey(snapshot.projectRoot, agent),
@@ -594,10 +683,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 appearance: agent.appearance,
                 hatId: effectiveHatIdForAgent(agent),
                 needsUser: agent.needsUser || null,
+                turnSignal: recentTurnSignalForAgent(snapshot, agent),
+                activityCue: recentActivityCueForAgent(snapshot, agent),
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                 sprite: avatarForAgent(agent).url,
-                x: roomX + slot.x,
-                y: roomY + slot.y,
+                x: avatarX,
+                y: avatarY,
                 width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
                 height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
                 depthBaseY: room.floorTop,
@@ -605,25 +696,32 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 flip: slot.flip
               });
               agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
+              registerThreadPanel(agent);
               model.anchors.push({
                 id: "agent::" + agentKey(snapshot.projectRoot, agent),
                 type: "agent",
                 key: agentKey(snapshot.projectRoot, agent),
                 x: anchorX,
                 y: anchorY,
-                left: roomX + slot.x,
-                top: roomY + slot.y,
+                left: avatarX,
+                top: avatarY,
                 width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
                 height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                threadId: agent.threadId || "",
+                replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                 focusKey: focusAgentKey(snapshot, agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, agent),
-                hoverHtml: renderAgentHover(snapshot, agent)
+                hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
+                threadOpen: Boolean(sceneThreadPanelState(agent))
               });
             });
             restingAssignments.forEach(({ agent, slotIndex }) => {
               const slot = recRoomSeatSlotAt(agent, slotIndex, compact, roomPixelWidth, layoutConfig.recAreaGridTopY, room.__sofaColumns || null);
-              const anchorX = roomX + slot.x + Math.round(tile * 0.4);
-              const anchorY = roomY + slot.y + Math.round(tile * 0.6);
+              const stagedOffset = openThreadStageOffset(agent);
+              const avatarX = roomX + slot.x + stagedOffset.x;
+              const avatarY = roomY + slot.y + stagedOffset.y;
+              const anchorX = avatarX + Math.round(tile * 0.4);
+              const anchorY = avatarY + Math.round(tile * 0.6);
               model.recAgents.push({
                 id: agent.id,
                 key: agentKey(snapshot.projectRoot, agent),
@@ -637,10 +735,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 appearance: agent.appearance,
                 hatId: effectiveHatIdForAgent(agent),
                 needsUser: agent.needsUser || null,
+                turnSignal: recentTurnSignalForAgent(snapshot, agent),
+                activityCue: recentActivityCueForAgent(snapshot, agent),
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                 sprite: avatarForAgent(agent).url,
-                x: roomX + slot.x,
-                y: roomY + slot.y,
+                x: avatarX,
+                y: avatarY,
                 width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
                 height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
                 depthBaseY: room.floorTop,
@@ -648,19 +748,23 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 flip: slot.flip
               });
               agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
+              registerThreadPanel(agent);
               model.anchors.push({
                 id: "agent::" + agentKey(snapshot.projectRoot, agent),
                 type: "agent",
                 key: agentKey(snapshot.projectRoot, agent),
                 x: anchorX,
                 y: anchorY,
-                left: roomX + slot.x,
-                top: roomY + slot.y,
+                left: avatarX,
+                top: avatarY,
                 width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
                 height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                threadId: agent.threadId || "",
+                replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                 focusKey: focusAgentKey(snapshot, agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, agent),
-                hoverHtml: renderAgentHover(snapshot, agent)
+                hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
+                threadOpen: Boolean(sceneThreadPanelState(agent))
               });
             });
           }
@@ -731,6 +835,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         }
         const canvasContainer = host.querySelector("[data-office-map-canvas]");
         const anchorLayer = host.querySelector("[data-office-map-anchors]");
+        const threadLayer = host.querySelector("[data-office-map-thread-layer]");
         if (!(canvasContainer instanceof HTMLElement) || !(anchorLayer instanceof HTMLElement) || !window.PIXI) {
           return null;
         }
@@ -739,6 +844,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           host,
           canvasContainer,
           anchorLayer,
+          threadLayer: threadLayer instanceof HTMLElement ? threadLayer : null,
           app: new window.PIXI.Application(),
           root: null,
           model: null,
@@ -888,6 +994,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 syncAgentHitNodePosition(renderer, entry);
                 if (entry.exiting && entry.routeIndex >= route.length) {
                   entry.sprite.alpha = Math.max(0, entry.sprite.alpha - 0.16);
+                  entry.exitFadeAlpha = entry.sprite.alpha;
                   if (entry.bubbleBox) {
                     entry.bubbleBox.alpha = entry.sprite.alpha;
                   }
@@ -924,22 +1031,346 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 return;
               }
               if (entry.kind === "bob") {
-                const bobOffset = Math.round(Math.sin((now + entry.phase) / 220) * 1);
+                const bobMode = entry.mode || "busy";
+                const waveSlow = Math.sin((now + entry.phase) / 260);
+                const waveMid = Math.sin((now + entry.phase) / 180);
+                const waveFast = Math.sin((now + entry.phase) / 110);
+                const waveStep = Math.sin((now + entry.phase) / 90);
+                const bobOffset =
+                  bobMode === "planning" ? Math.round(waveSlow * 1)
+                  : bobMode === "scanning" ? Math.round(waveMid * 1.4)
+                  : bobMode === "editing" ? Math.round(waveFast * 1.6)
+                  : bobMode === "running" ? Math.round((waveFast + waveStep * 0.45) * 1.7)
+                  : bobMode === "validating" ? Math.round(waveMid * 0.8)
+                  : bobMode === "delegating" ? Math.round((waveSlow + waveMid * 0.45) * 1.3)
+                  : Math.round(waveMid * 1);
+                const driftX =
+                  bobMode === "scanning" ? Math.round(Math.sin((now + entry.phase) / 210) * 1.2)
+                  : bobMode === "delegating" ? Math.round(Math.sin((now + entry.phase) / 320) * 1)
+                  : 0;
+                entry.sprite.x = entry.baseX + driftX;
                 entry.sprite.y = entry.baseY + bobOffset;
                 if (entry.hatSprite) {
+                  entry.hatSprite.x = entry.hatBaseX + driftX;
                   entry.hatSprite.y = entry.hatBaseY + bobOffset;
                 }
                 if (entry.statusMarker) {
+                  entry.statusMarker.x = entry.statusMarkerBaseX + driftX;
                   entry.statusMarker.y = entry.statusMarkerBaseY + bobOffset;
                 }
                 if (entry.bubbleBox) {
+                  entry.bubbleBox.x = entry.bubbleBoxBaseX + driftX;
                   entry.bubbleBox.y = entry.bubbleBoxBaseY + bobOffset;
                 }
                 if (entry.bubbleText) {
+                  entry.bubbleText.x = entry.bubbleTextBaseX + driftX;
                   entry.bubbleText.y = entry.bubbleTextBaseY + bobOffset;
                 }
                 if (typeof renderer.syncMotionStateDepth === "function") {
                   renderer.syncMotionStateDepth(entry.motionState || entry);
+                }
+                if (entry.motionState && typeof syncAgentHitNodePosition === "function") {
+                  syncAgentHitNodePosition(renderer, entry.motionState);
+                }
+                return;
+              }
+              if (entry.kind === "workstation-glow") {
+                if (!entry.node) {
+                  return;
+                }
+                const pulse = (Math.sin((now + entry.phase) / 180) + 1) / 2;
+                entry.node.alpha = Math.max(0.16, Number(entry.baseAlpha || 0.24) + pulse * 0.2);
+                return;
+              }
+              if (entry.kind === "state-effect") {
+                if (typeof syncStateEffectNode === "function") {
+                  syncStateEffectNode(entry, now);
+                }
+                return;
+              }
+              if (entry.kind === "turn-signal") {
+                const motionState = entry.motionState || null;
+                const turnSignal = motionState && motionState.turnSignal ? motionState.turnSignal : null;
+                if (!motionState || !turnSignal || !turnSignal.container) {
+                  return;
+                }
+                const durationMs = Math.max(600, Number(turnSignal.durationMs) || 2400);
+                const ageMs = Math.max(0, Date.now() - Number(turnSignal.startedAtMs || Date.now()));
+                const progress = Math.min(1, ageMs / durationMs);
+                const fade = progress >= 0.72
+                  ? Math.max(0, 1 - (progress - 0.72) / 0.28)
+                  : 1;
+                const pulse = progress < 0.16
+                  ? 0.86 + (progress / 0.16) * 0.14
+                  : 1 + Math.sin((now + entry.phase) / 110) * 0.03 * (1 - progress);
+                if (typeof syncTurnSignalNode === "function") {
+                  syncTurnSignalNode(motionState, turnSignal, progress * 6);
+                }
+                turnSignal.container.alpha = Math.max(
+                  0,
+                  Math.min(1, fade * (motionState.sprite ? Number(motionState.sprite.alpha || 1) : 1))
+                );
+                turnSignal.container.scale.set(pulse);
+                if (typeof renderer.syncMotionStateDepth === "function") {
+                  renderer.syncMotionStateDepth(motionState);
+                }
+                return;
+              }
+              if (entry.kind === "activity-cue") {
+                const motionState = entry.motionState || null;
+                const activityCue = motionState && motionState.activityCue ? motionState.activityCue : null;
+                if (!motionState || !activityCue || !activityCue.container) {
+                  return;
+                }
+                const durationMs = Math.max(900, Number(activityCue.durationMs) || 2200);
+                const ageMs = Math.max(0, Date.now() - Number(activityCue.startedAtMs || Date.now()));
+                const progress = Math.min(1, ageMs / durationMs);
+                const fade = progress >= 0.7
+                  ? Math.max(0, 1 - (progress - 0.7) / 0.3)
+                  : 1;
+                const pulse = 1 + Math.sin((now + entry.phase) / 120) * 0.05 * (1 - progress);
+                const driftX =
+                  entry.mode === "tool" ? Math.round(Math.sin((now + entry.phase) / 140) * 2.2)
+                  : entry.mode === "approval" ? Math.round(Math.sin((now + entry.phase) / 150) * 1.4)
+                  : entry.mode === "input" ? Math.round(Math.sin((now + entry.phase) / 180) * 1.1)
+                  : entry.mode === "command" ? Math.round(Math.sin((now + entry.phase) / 90) * 1.2)
+                  : 0;
+                const driftY =
+                  entry.mode === "resolved" ? -Math.round(progress * 7 + Math.sin((now + entry.phase) / 150) * 1.2)
+                  : entry.mode === "plan" ? -Math.round(progress * 7 + Math.sin((now + entry.phase) / 180) * 1.2)
+                  : entry.mode === "file" ? -Math.round(progress * 5 + Math.sin((now + entry.phase) / 120) * 1.6)
+                  : entry.mode === "approval" ? Math.round(Math.sin((now + entry.phase) / 170) * 1.4)
+                  : entry.mode === "input" ? -Math.round(progress * 3 + Math.sin((now + entry.phase) / 130) * 1.4)
+                  : entry.mode === "command" ? Math.round(Math.sin((now + entry.phase) / 110) * 1.2)
+                  : -Math.round(progress * 4);
+                if (typeof syncActivityCueNode === "function") {
+                  syncActivityCueNode(motionState, activityCue, driftX, driftY);
+                }
+                const cueIcon = activityCue.iconContainer || null;
+                const cueAccent = activityCue.iconAccent || null;
+                const cueText = activityCue.textNode || null;
+                if (cueIcon) {
+                  cueIcon.x = Number.isFinite(activityCue.iconBaseX) ? Number(activityCue.iconBaseX) : 0;
+                  cueIcon.y = Number.isFinite(activityCue.iconBaseY) ? Number(activityCue.iconBaseY) : 0;
+                  cueIcon.rotation = 0;
+                  cueIcon.alpha = 1;
+                  cueIcon.scale.set(1);
+                }
+                if (cueAccent) {
+                  cueAccent.alpha = 0.95;
+                  cueAccent.rotation = 0;
+                  cueAccent.scale.set(1);
+                }
+                if (cueText) {
+                  cueText.x = Number.isFinite(activityCue.textBaseX) ? Number(activityCue.textBaseX) : cueText.x;
+                  cueText.y = Number.isFinite(activityCue.textBaseY) ? Number(activityCue.textBaseY) : cueText.y;
+                  cueText.alpha = 1;
+                }
+                if (cueIcon && entry.mode === "plan") {
+                  cueIcon.y = (Number.isFinite(activityCue.iconBaseY) ? Number(activityCue.iconBaseY) : 0) + Math.round(Math.sin((now + entry.phase) / 180) * 0.8);
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.72 + ((Math.sin((now + entry.phase) / 180) + 1) / 2) * 0.28;
+                  }
+                } else if (cueIcon && entry.mode === "command") {
+                  cueIcon.x = (Number.isFinite(activityCue.iconBaseX) ? Number(activityCue.iconBaseX) : 0) + Math.round(Math.sin((now + entry.phase) / 95) * 0.9);
+                  if (cueAccent) {
+                    cueAccent.alpha = Math.sin((now + entry.phase) / 105) > 0 ? 0.98 : 0.24;
+                  }
+                } else if (cueIcon && entry.mode === "file") {
+                  cueIcon.rotation = Math.sin((now + entry.phase) / 135) * 0.12;
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.58 + ((Math.sin((now + entry.phase) / 120) + 1) / 2) * 0.38;
+                  }
+                } else if (cueIcon && entry.mode === "tool") {
+                  cueIcon.rotation = (now + entry.phase) / 420;
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.64 + ((Math.sin((now + entry.phase) / 140) + 1) / 2) * 0.28;
+                  }
+                } else if (cueIcon && entry.mode === "approval") {
+                  const approvalScale = 0.92 + ((Math.sin((now + entry.phase) / 150) + 1) / 2) * 0.2;
+                  cueIcon.scale.set(approvalScale);
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.28 + (1 - progress) * 0.5;
+                    cueAccent.scale.set(0.88 + progress * 0.5);
+                  }
+                } else if (cueIcon && entry.mode === "input") {
+                  cueIcon.y = (Number.isFinite(activityCue.iconBaseY) ? Number(activityCue.iconBaseY) : 0) + Math.round(Math.sin((now + entry.phase) / 145) * 1);
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.48 + ((Math.sin((now + entry.phase) / 130) + 1) / 2) * 0.46;
+                  }
+                } else if (cueIcon && entry.mode === "resolved") {
+                  const resolvedLift = Math.round(progress * 1.5);
+                  cueIcon.y = (Number.isFinite(activityCue.iconBaseY) ? Number(activityCue.iconBaseY) : 0) - resolvedLift;
+                  cueIcon.scale.set(1 + (1 - progress) * 0.08);
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.72 + (1 - progress) * 0.24;
+                    cueAccent.rotation = (now + entry.phase) / 260;
+                  }
+                  if (cueText) {
+                    cueText.y = (Number.isFinite(activityCue.textBaseY) ? Number(activityCue.textBaseY) : cueText.y) - resolvedLift;
+                  }
+                }
+                activityCue.container.alpha = Math.max(
+                  0,
+                  Math.min(1, fade * (motionState.sprite ? Number(motionState.sprite.alpha || 1) : 1))
+                );
+                activityCue.container.scale.set(pulse);
+                if (typeof renderer.syncMotionStateDepth === "function") {
+                  renderer.syncMotionStateDepth(motionState);
+                }
+                return;
+              }
+              if (entry.kind === "workstation-cue-effect") {
+                if (!entry.node) {
+                  return;
+                }
+                const durationMs = Math.max(900, Number(entry.durationMs) || 2200);
+                const ageMs = Math.max(0, Date.now() - Number(entry.startedAtMs || Date.now()));
+                const progress = Math.min(1, ageMs / durationMs);
+                const fade = progress >= 0.7
+                  ? Math.max(0, 1 - (progress - 0.7) / 0.3)
+                  : 1;
+                const pulse = (Math.sin((now + entry.phase) / 130) + 1) / 2;
+                entry.node.x = pixelSnap(Number(entry.baseX) || 0);
+                entry.node.y = pixelSnap(Number(entry.baseY) || 0);
+                entry.node.alpha = Math.max(0, 0.22 + fade * 0.9);
+                entry.node.scale.set(1);
+                if (entry.glowNode) {
+                  entry.glowNode.alpha = 0.1 + fade * 0.24 + pulse * 0.12;
+                }
+                if (entry.frameNode) {
+                  entry.frameNode.alpha = 0.26 + fade * 0.36;
+                }
+                if (entry.primaryNode) {
+                  entry.primaryNode.alpha = 0.62 + fade * 0.34;
+                  entry.primaryNode.rotation = 0;
+                  entry.primaryNode.scale.set(1);
+                }
+                if (entry.secondaryNode) {
+                  entry.secondaryNode.alpha = 0.54 + fade * 0.28;
+                  entry.secondaryNode.rotation = 0;
+                  entry.secondaryNode.scale.set(1);
+                }
+                (entry.accentNodes || []).forEach((node) => {
+                  if (node) {
+                    node.alpha = 0.52 + fade * 0.28;
+                    node.rotation = 0;
+                    node.scale.set(1);
+                  }
+                });
+                (entry.dotNodes || []).forEach((node) => {
+                  if (node) {
+                    node.alpha = 0.54 + fade * 0.3;
+                    node.scale.set(1);
+                  }
+                });
+                (entry.detailNodes || []).forEach((node) => {
+                  if (node) {
+                    node.alpha = 0.5 + fade * 0.28;
+                    node.rotation = 0;
+                    node.scale.set(1);
+                  }
+                });
+                if (entry.mode === "plan") {
+                  entry.node.y = pixelSnap((Number(entry.baseY) || 0) - Math.round(progress * 4 + pulse * 1.2));
+                  if (entry.primaryNode) {
+                    entry.primaryNode.scale.x = 0.86 + pulse * 0.2;
+                  }
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.scale.x = 0.78 + pulse * 0.24;
+                  }
+                } else if (entry.mode === "command") {
+                  if (entry.accentNodes && entry.accentNodes[0]) {
+                    const scanWidth = Math.max(5, Math.round((Number(entry.width) || 16) * 0.34));
+                    entry.accentNodes[0].x = Math.round(progress * Math.max(3, (Number(entry.width) || 16) - scanWidth));
+                    entry.accentNodes[0].alpha = 0.34 + (1 - progress) * 0.48;
+                  }
+                } else if (entry.mode === "file") {
+                  entry.node.y = pixelSnap((Number(entry.baseY) || 0) - Math.round(progress * 2));
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.rotation = Math.sin((now + entry.phase) / 150) * 0.08;
+                  }
+                } else if (entry.mode === "tool") {
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.rotation = (now + entry.phase) / 480;
+                  }
+                  if (entry.primaryNode) {
+                    entry.primaryNode.scale.set(0.96 + pulse * 0.12);
+                  }
+                } else if (entry.mode === "approval") {
+                  const approvalProfile = entry.requestProfile && typeof entry.requestProfile === "object"
+                    ? entry.requestProfile
+                    : null;
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.scale.set(0.84 + progress * 0.48 + pulse * 0.1);
+                    entry.secondaryNode.alpha = 0.18 + (1 - progress) * 0.46;
+                  }
+                  if (entry.primaryNode) {
+                    entry.primaryNode.scale.set(0.94 + pulse * 0.1);
+                  }
+                  (entry.dotNodes || []).forEach((node, index, nodes) => {
+                    if (!node) {
+                      return;
+                    }
+                    const orbitRadius = Math.max(3, Math.round(Math.min(Number(entry.width) || 16, Number(entry.height) || 10) * 0.42));
+                    const angle = -Math.PI * 0.82
+                      + (index / Math.max(1, nodes.length - 1)) * Math.PI * 0.64
+                      + (1 - progress) * 0.18;
+                    node.x = Math.round((Number(entry.width) || 16) / 2 + Math.cos(angle) * orbitRadius);
+                    node.y = Math.round((Number(entry.height) || 10) / 2 + Math.sin(angle) * orbitRadius);
+                    node.alpha = 0.26 + ((Math.sin((now + entry.phase) / 140 + index * 0.7) + 1) / 2) * 0.56;
+                    node.scale.set(0.86 + pulse * 0.18);
+                  });
+                  (entry.detailNodes || []).forEach((node, index) => {
+                    if (!node) {
+                      return;
+                    }
+                    node.alpha = 0.4 + ((Math.sin((now + entry.phase) / 160 + index * 0.9) + 1) / 2) * 0.42;
+                    if (approvalProfile && approvalProfile.approvalType === "file") {
+                      node.y = 2 - Math.round(Math.sin((now + entry.phase) / 170) * 0.6);
+                    } else if (approvalProfile && approvalProfile.approvalType === "network") {
+                      node.y = Math.max(2, (Number(entry.height) || 10) - 3) - Math.round(Math.sin((now + entry.phase) / 150 + index * 0.6) * 0.7);
+                    }
+                  });
+                } else if (entry.mode === "input") {
+                  const inputProfile = entry.requestProfile && typeof entry.requestProfile === "object"
+                    ? entry.requestProfile
+                    : null;
+                  const questionCount = Math.max(1, Math.min(4, Number(inputProfile && inputProfile.questionCount) || (entry.dotNodes || []).length || 1));
+                  const requiredCount = Math.max(0, Math.min(questionCount, Number(inputProfile && inputProfile.requiredCount) || 0));
+                  (entry.dotNodes || []).forEach((node, index) => {
+                    if (!node) {
+                      return;
+                    }
+                    node.y = Math.max(3, (Number(entry.height) || 10) - 5) - Math.round(((Math.sin((now + entry.phase) / 140 + index * 0.8) + 1) / 2) * 2.2);
+                    node.alpha = 0.28 + ((Math.sin((now + entry.phase) / 150 + index * 0.75) + 1) / 2) * 0.58;
+                    node.scale.y = 0.82 + ((Math.sin((now + entry.phase) / 160 + index * 0.6) + 1) / 2) * 0.42;
+                    node.scale.x = 1;
+                  });
+                  (entry.accentNodes || []).forEach((node, index) => {
+                    if (!node) {
+                      return;
+                    }
+                    node.alpha = index < requiredCount
+                      ? 0.44 + ((Math.sin((now + entry.phase) / 145 + index * 0.9) + 1) / 2) * 0.46
+                      : 0.24;
+                    node.y = 2 - Math.round(Math.sin((now + entry.phase) / 180 + index * 0.7) * 0.8);
+                  });
+                  (entry.detailNodes || []).forEach((node, index) => {
+                    if (!node) {
+                      return;
+                    }
+                    node.alpha = 0.32 + ((Math.sin((now + entry.phase) / 170 + index * 0.65) + 1) / 2) * 0.44;
+                  });
+                } else if (entry.mode === "resolved") {
+                  entry.node.y = pixelSnap((Number(entry.baseY) || 0) - Math.round(progress * 5));
+                  if (entry.primaryNode) {
+                    entry.primaryNode.scale.set(1 + (1 - progress) * 0.08);
+                  }
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.rotation = (now + entry.phase) / 300;
+                    entry.secondaryNode.alpha = 0.34 + (1 - progress) * 0.42;
+                  }
                 }
                 return;
               }
@@ -996,6 +1427,50 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                   entry.sprite.destroy?.();
                 }
                 return !done;
+              }
+              if (entry.kind === "turn-signal") {
+                const motionState = entry.motionState || null;
+                const turnSignal = motionState && motionState.turnSignal ? motionState.turnSignal : null;
+                const done = !turnSignal
+                  || !turnSignal.container
+                  || Date.now() - Number(turnSignal.startedAtMs || Date.now()) >= Math.max(600, Number(turnSignal.durationMs) || 2400);
+                if (done && turnSignal && turnSignal.container && turnSignal.container.parent) {
+                  turnSignal.container.parent.removeChild(turnSignal.container);
+                  turnSignal.container.destroy?.({ children: true });
+                }
+                return !done;
+              }
+              if (entry.kind === "activity-cue") {
+                const motionState = entry.motionState || null;
+                const activityCue = motionState && motionState.activityCue ? motionState.activityCue : null;
+                const done = !activityCue
+                  || !activityCue.container
+                  || Date.now() - Number(activityCue.startedAtMs || Date.now()) >= Math.max(900, Number(activityCue.durationMs) || 2200);
+                if (done && activityCue && activityCue.container && activityCue.container.parent) {
+                  activityCue.container.parent.removeChild(activityCue.container);
+                  activityCue.container.destroy?.({ children: true });
+                }
+                return !done;
+              }
+              if (entry.kind === "workstation-cue-effect") {
+                const done = !entry.node
+                  || !entry.node.parent
+                  || Date.now() - Number(entry.startedAtMs || Date.now()) >= Math.max(900, Number(entry.durationMs) || 2200);
+                if (done && entry.node && entry.node.parent) {
+                  entry.node.parent.removeChild(entry.node);
+                  entry.node.destroy?.({ children: true });
+                }
+                return !done;
+              }
+              if (entry.kind === "workstation-glow") {
+                return Boolean(entry.node && entry.node.parent);
+              }
+              if (entry.kind === "state-effect") {
+                return Boolean(
+                  entry.motionState
+                  && entry.motionState.sprite
+                  && (!entry.motionState.exiting || entry.motionState.sprite.alpha > 0.02)
+                );
               }
               return !entry.exiting || entry.sprite.alpha > 0.02;
             });

@@ -71,7 +71,7 @@ Important note:
 - server requests are parsed and exposed through `onServerRequest(...)`
 - `ProjectLiveMonitor` now consumes both streams directly
 - targeted `thread/read` refreshes still happen, but they are triggered behind the event stream instead of replacing it
-- the observer does not answer approval/input requests; it only visualizes them
+- the observer now answers the local typed request classes the browser can act on: command/file approvals, permission-profile approvals, `tool/requestUserInput`, and MCP elicitation
 
 This means app-server is now both the main truth source and the first-class local event bus for browser notifications.
 
@@ -120,6 +120,7 @@ How we use it:
 - find threads for a specific project
 - detect newly active or changed local sessions
 - decide which threads need a full `thread/read`
+- preserve the fresher `thread/list.updatedAt` when desktop-backed `thread/read` returns a stale hydrated transcript timestamp for the same thread
 
 ### Codex configured project discovery
 
@@ -160,14 +161,18 @@ How we use it:
 - build the normalized `DashboardAgent`
 - infer current state from the last relevant turn item
 - infer ongoing-ness from the latest turn as well as runtime thread status, because `thread/list` / `thread/read` can still report `status.type = notLoaded` for persisted threads that have a current in-progress turn payload
+- keep fresh read-only desktop turns without a final answer desk-live through quiet text gaps, using the merged `thread/list` freshness when `thread/read` lags
+- use recent non-final command, file, tool, plan, or turn events as workload freshness for local desktop threads even when the observer is temporarily `readOnly` or the app-server thread status currently reads `idle`
+- treat a fresh unhydrated `notLoaded` desktop timestamp with no readable turns as a just-sent prompt for an about-8-second planning-current window, not as a completed reply
 - debounce `thread/status/changed -> notLoaded` for about 3 seconds and confirm it with a reread before clearing ongoing local work
-- keep quiet desk-live local work current for about 3 minutes when it is still subscribed or sitting in a transient `notLoaded` transport state
+- keep quiet desk-live local work current for about 3 minutes when it has recent non-final activity, is still subscribed, or is sitting in a transient `notLoaded` transport state
 - infer subagent parentage and depth
 - generate `resumeCommand`
 - map the session into project rooms using extracted paths
 - keep read-only visibility for older threads outside the live subscription window
-- synthesize fallback assistant-message events from reread desktop rollout threads only when live `thread/resume` delivery is unavailable, so read-only threads can still toast without replaying healthy subscribed sessions
+- synthesize fallback assistant-message events from reread desktop rollout threads when the latest assistant message changed and no equivalent recent live message event exists, so read-only or subscribed threads can still toast if the live terminal message notification is missed
 - treat those synthesized `thread/read/agentMessage` events as recovery-only signal; streamed `item/completed` final answers remain the authoritative visible reply when both exist for the same thread, so a late reread cannot overwrite a newer live final answer in the UI
+- keep synthesized `thread/read/agentMessage` commentary as `updated`; only a latest assistant message with `phase = final_answer` is treated as completed
 
 ### `thread/resume` / `thread/unsubscribe`
 
@@ -222,10 +227,14 @@ Current-workload occupancy rules on top of that state:
 - a local thread stays `isCurrent` while the live monitor still considers the thread ongoing, even if the latest turn now reads as `done`
 - browser desk seating now treats local `status = active` as authoritative for occupancy, so active Codex sessions remain on desks even when the summarized state currently reads `waiting`, `blocked`, or recent `done`
 - a `notLoaded` thread still stays `isCurrent` when `thread/read` shows its latest turn is `inProgress`
+- a fresh read-only `notLoaded` desktop thread without a final answer still stays `isCurrent` through quiet text gaps, even if `thread/read` returned an older transcript timestamp than `thread/list`
+- recent non-final local work events can also keep a desktop-backed thread `isCurrent` through temporary `readOnly` or `idle` observer gaps
+- stale `notLoaded` fallback replies are capped to the 3-second finished cooldown; they should not keep a finished top-level thread current for minutes
 - observer-owned unload/runtime-idle transitions such as `thread/closed` or `thread/status/changed -> notLoaded` are not treated as immediate stop signals by themselves; `notLoaded` now waits about 3 seconds and a reread confirmation before the monitor clears ongoing local state
-- subscribed or transiently `notLoaded` desk-live local states now keep currentness and workstation eligibility for about 3 minutes between updates before settling to rest
+- non-final `turn/completed` and `turn/interrupted` notifications keep the thread live instead of marking it stopped; only a final-answer `agentMessage`, hard failure, archive, or confirmed idle unload starts workstation release
+- recent non-final, subscribed, or transiently `notLoaded` desk-live local states now keep currentness and workstation eligibility for about 3 minutes between updates before settling to rest
 - local desk occupancy no longer uses a generic freshness fallback for non-idle summaries; if a thread is not ongoing, not waiting on the user, and not inside the stop grace window, it is no longer `isCurrent`
-- once a top-level thread actually stops, it remains current and workstation-seated for about 5 seconds so final reply text can still surface before the lead cools into rec-area visibility
+- once a top-level thread actually stops, it remains current and workstation-seated for about 3 seconds so final reply text can still surface before the lead cools into rec-area visibility
 - stale local `notLoaded` threads no longer keep a workstation just because they are still recent or subscribed; desk seating now requires actual ongoing work or the explicit stop grace
 - completed process-only items such as `plan`, `reasoning`, and `contextCompaction` now settle to `done` while recent and then `idle` once stale instead of leaving the thread in synthetic `planning` or `thinking`
 - non-local `idle` sessions still drop out of current-workload filtering immediately
@@ -453,6 +462,24 @@ Why it matters:
 - command, file, approval, input, subagent, and turn lifecycle transitions now arrive as typed events
 - the durable "needs you" queue now comes from real request hooks and `serverRequest/resolved`
 
+Verified `tool/requestUserInput` contract:
+
+- request params include `threadId`, `turnId`, `itemId`, and `questions`
+- each question has `header`, `id`, `question`, optional `options`, and optional `isOther`
+- the browser now answers with `{ answers: { "<questionId>": { answers: ["..."] } } }`
+- local queue submit stays disabled until every required question has at least one answer
+- optional questions can be left blank and are omitted from the browser response payload
+- incomplete answers are rejected server-side before the observer responds to app-server
+
+Verified current app-server response and input contracts:
+
+- `turn/start` and `turn/steer` text inputs are sent as `{ type: "text", text, text_elements: [] }`
+- browser follow-up replies are limited to Codex threads owned by the same app-server connection as Agents Office. For those threads, active replies are routed through `turn/steer`; `turn/start` is reserved for idle/resumed threads, and `turn/started` / `turn/completed` notifications update the cached turn list so active steering stays attached to the live turn.
+- observed desktop, VS Code, and CLI Codex threads are view-only for generic chat in Agents Office; the scene thread panel should expose read-only history only instead of a browser Send field or local launch controls.
+- command and file approval requests are answered with `{ decision }`
+- MCP elicitation requests are answered with `{ action: "accept", content, _meta: null }`
+- permission-profile approvals are answered with `{ permissions, scope }`, where `scope` is `turn` or `session`
+
 ### `codex cloud list --json`
 
 Implemented in:
@@ -511,7 +538,7 @@ What we read:
 
 - `getSessionMessages()` from `@anthropic-ai/claude-agent-sdk` when available
 - recent JSONL records from the head and tail of each session file as fallback
-- optional project-local hook sidecars in `.codex-agents/claude-hooks/<session-id>.jsonl`
+- optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl`
 - record timestamps
 - message model names
 - `cwd`
@@ -553,8 +580,10 @@ How this project uses that surface:
 
 - the loader now prefers the official Agent SDK session APIs for Claude project discovery and message backfill
 - we still do not scrape Claude internals directly from a private process stream
-- instead, we support a project-owned bridge that writes hook JSONL sidecars into `.codex-agents/claude-hooks/<session-id>.jsonl`
+- instead, we support a project-owned bridge that writes hook JSONL sidecars into the matching per-project Agents Office user-data folder
 - `packages/core/src/claude-agent-sdk.ts` exports a reusable Agent SDK hook bridge that appends those sidecars with `session_id`, `hook_event_name`, `tool_use_id`, `agent_id`, and `agent_type` when available
+- that same bridge now gives `PermissionRequest` and `Elicitation` hooks a browser response path by waiting on the matching project-scoped response file in Agents Office user data and then returning the official structured hook output back to Claude
+- Agents Office also appends a synthetic resolution marker into the Claude hook sidecar after a browser response so the queue clears immediately even for permission requests that do not emit a later official hook result
 - when those sidecars exist, Claude agents can surface typed permission, input, tool, subagent, stop, user-prompt, session-start/end, and compacting state with `confidence = typed`
 - when they do not exist, Claude falls back to transcript inference with `confidence = inferred`
 
@@ -578,24 +607,30 @@ Current Claude transcript inference rules:
 
 ### Claude hook event rules
 
-When a project-local Claude hook sidecar exists, the loader can map these official Claude hook events directly:
+When a project-scoped Claude hook sidecar exists, the loader can map these official Claude hook events directly:
 
 | Claude hook event | State | Representation |
 | --- | --- | --- |
 | `PermissionRequest` | `blocked` | typed approval-needed state from Claude hook input |
 | `Elicitation` | `waiting` | typed waiting-for-input state |
 | `ElicitationResult` | `planning` | typed input-submitted or declined state |
+| `AgentsOfficePermissionDecision` | `planning` | synthetic queue-clearing marker after a browser approval/deny response |
+| `AgentsOfficeElicitationResponse` | `planning` | synthetic queue-clearing marker after a browser elicitation response |
 | `UserPromptSubmit` | `planning` | typed user-prompt state with `userMessage` activity |
+| `UserPromptExpansion` | `planning` | typed expanded-prompt state with `userMessage` activity |
 | `Setup` | `planning` | typed initialization or maintenance state |
 | `SessionStart` | `planning` | typed session-start state |
 | `SessionEnd` | `done` | typed session-ended state |
 | `PreCompact` | `thinking` | typed context-compacting state |
 | `PostCompact` | `thinking` | typed context-compacted state |
 | `PreToolUse` / `PostToolUse` with edit or write tools | `editing` | file-change style notification and room mapping from paths |
+| `PostToolBatch` | `thinking` | typed batch tool completion state |
 | `PreToolUse` / `PostToolUse` with bash or shell tools | `running` or `validating` | command-style notification |
 | `PostToolUseFailure` | `blocked` | failed command/tool state |
+| `PermissionDenied` | `blocked` | typed permission-denied state |
 | `FileChanged` | `editing` | typed file-change activity from Claude hook input |
 | `Notification` | `thinking`, `waiting`, or `blocked` | typed Claude-side message or warning surface |
+| `TaskCreated` | `delegating` | typed delegated-task creation state |
 | `SubagentStart` | `delegating` | typed delegation summary |
 | `SubagentStop` | `done` | typed subagent-finished summary |
 | `Stop` / `TaskCompleted` | `done` | typed completion state |
@@ -625,6 +660,7 @@ What Claude still does not provide here:
 - Codex-style resume/open command
 - Codex app-server style live push stream into this process without a user-configured hook bridge
 - Codex-grade parent/subagent hierarchy with stable parent thread ids in the shared snapshot
+- a general thread-steer/reply API comparable to Codex app-server, so Claude session cards are still read-only even though hook-backed approval/input waits are now actionable
 
 ## OpenClaw Gateway Sessions
 
@@ -695,7 +731,7 @@ Primary code path:
 What we read:
 
 - project-owned Cursor hooks from `<project-root>/.cursor/hooks.json`
-- typed hook sidecars in `.codex-agents/cursor-hooks/<conversation-id>.jsonl`
+- typed hook sidecars in the matching per-project Agents Office user-data folder
 
 How we use it:
 
@@ -719,6 +755,7 @@ How we use it:
 
 - normalize both repo URLs into a comparable HTTPS form
 - collapse GitHub/GitLab/Bitbucket PR URLs back to their repository URL before comparison
+- query the documented Cursor cloud API with `Authorization: Bearer <api key>` first, while keeping a legacy Basic-auth retry only for older local setups
 - match Cursor background agents onto the currently selected project
 
 ### Official Cursor cloud surface
@@ -923,10 +960,15 @@ Current representation:
 - durable cross-project queue of agents waiting on the user
 - anchored blocked/waiting notification text on the responsible agent
 - raised-hand desk markers for approval/input waits, light markers for typed thinking before the first visible assistant message, exclamation markers for explicit failure blocks, and clipboard markers for planning
+- local typed Codex approval waits in the browser queue can now send `accept`, `acceptForSession`, `decline`, or `cancel` back over the same app-server observer connection
+- local typed Codex `tool/requestUserInput` waits in the browser queue can now send schema-backed `answers` payloads back over that same observer connection
+- local typed Codex input waits without schema-backed questions can open the browser reply composer only for threads owned by the same app-server connection; observed desktop, VS Code, and CLI threads remain resume-only
+- app-server-owned local typed Codex session cards can send follow-up text back over app-server using `turn/start` for idle/resumed threads and `turn/steer` for active in-flight turns; if an active thread row has no known in-progress turn yet, the monitor rereads the thread and refuses to start a detached side turn when the turn still is not steerable
+- hook-backed Claude `PermissionRequest` waits in the browser queue can now send `accept` or `decline` through the local Agent SDK sidecar bridge
+- hook-backed Claude schema-backed `Elicitation` waits in the browser queue can now submit browser-collected answers through that same local sidecar bridge, with optional Claude fields no longer blocking submit
 
 Missing representation:
 
-- direct action affordances back into the originating Codex surface
 - richer blocked-vs-waiting posture/motion in-scene
 
 ### Claude confidence signaling
@@ -962,11 +1004,11 @@ Today the project already rides:
 - Claude local JSONL discovery
 - Claude tool-use and message inference
 - Claude provenance/confidence signaling
+- hook-backed Claude approval and elicitation responses from the browser queue
 
 Today the project does not yet fully ride:
 
 - richer turn lifecycle motion
-- typed Claude waiting/blocking equivalents
-- direct approval/input action affordances
+- direct Claude or Cursor session reply steering
 
 That is the current observability contract of Codex Agents Office.

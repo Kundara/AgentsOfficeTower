@@ -7,18 +7,275 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
           const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
           const appearanceAgentId = agent.sourceAgentId || agent.id;
+          const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
           const title = displayAgentLabel(snapshot, agent);
+          const replyAction = replyProjectRoot
+            ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
+            : "";
           const appearanceAction = agent.network
             ? ""
             : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
+          const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
           const description = normalizeDisplayText(snapshot.projectRoot, agent.detail)
             || latestAgentMessage(snapshot.projectRoot, agent)
             || \`[\${agent.state}]\`;
           const sourceLabel = agentNetworkLabel(agent);
           const fullDescription = sourceLabel ? \`\${sourceLabel} · \${description}\` : description;
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(title)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(fullDescription)}">\${escapeHtml(fullDescription)}</div></article>\`;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(title)}</strong><div class="card-actions">\${cardActions}</div></div><div class="muted session-card-description" title="\${escapeHtml(fullDescription)}">\${escapeHtml(fullDescription)}</div>\${renderReplyComposer(snapshot, agent)}</article>\`;
         }).join("");
+      }
+
+      function findReplyThreadEntry(projectRoot, threadId) {
+        if (!state.fleet || !projectRoot || !threadId) {
+          return null;
+        }
+        const projects = Array.isArray(state.fleet.projects) ? state.fleet.projects : [];
+        for (const snapshot of projects) {
+          const agent = Array.isArray(snapshot.agents)
+            ? snapshot.agents.find((candidate) =>
+              candidate
+              && candidate.threadId === threadId
+              && replyActionProjectRoot(snapshot, candidate) === projectRoot
+            )
+            : null;
+          if (agent) {
+            return { snapshot, agent };
+          }
+        }
+        return null;
+      }
+
+      function findThreadViewEntry(projectRoot, threadId) {
+        if (!state.fleet || !projectRoot || !threadId) {
+          return null;
+        }
+        const projects = Array.isArray(state.fleet.projects) ? state.fleet.projects : [];
+        for (const snapshot of projects) {
+          const agent = Array.isArray(snapshot.agents)
+            ? snapshot.agents.find((candidate) =>
+              candidate
+              && candidate.threadId === threadId
+              && threadViewProjectRoot(snapshot, candidate) === projectRoot
+            )
+            : null;
+          if (agent) {
+            return { snapshot, agent };
+          }
+        }
+        return null;
+      }
+
+      function agentThreadPanelMatches(snapshot, agent) {
+        if (!state.openAgentThread || !snapshot || !agent || !agent.threadId) {
+          return false;
+        }
+        const projectRoot = threadViewProjectRoot(snapshot, agent);
+        if (!projectRoot) {
+          return false;
+        }
+        return (
+          state.openAgentThread.projectRoot === projectRoot
+          && state.openAgentThread.threadId === agent.threadId
+        );
+      }
+
+      function focusReplyComposer(projectRoot, threadId) {
+        requestAnimationFrame(() => {
+          const textarea = document.querySelector(
+            \`textarea[data-reply-project-root="\${CSS.escape(projectRoot || "")}"][data-reply-thread-id="\${CSS.escape(threadId || "")}"]\`
+          );
+          if (textarea instanceof HTMLTextAreaElement) {
+            textarea.focus();
+            textarea.selectionStart = textarea.value.length;
+            textarea.selectionEnd = textarea.value.length;
+          }
+        });
+      }
+
+      function openReplyComposer(projectRoot, threadId, options = {}) {
+        const previousDraft =
+          state.replyComposer
+          && state.replyComposer.projectRoot === projectRoot
+          && state.replyComposer.threadId === threadId
+            ? state.replyComposer.draft
+            : "";
+        state.replyComposer = {
+          projectRoot,
+          threadId,
+          draft: previousDraft || "",
+          pending: false,
+          error: null
+        };
+        render();
+        if (options.focus !== false) {
+          focusReplyComposer(projectRoot, threadId);
+        }
+      }
+
+      function replyThreadWorkIntentKey(threadId) {
+        return String(threadId || "");
+      }
+
+      function markReplyThreadWorkIntent(threadId, ttlMs = 12000) {
+        const key = replyThreadWorkIntentKey(threadId);
+        if (!key) {
+          return;
+        }
+        state.replyThreadWorkIntents = {
+          ...(state.replyThreadWorkIntents || {}),
+          [key]: Date.now() + ttlMs
+        };
+      }
+
+      function toggleThreadEntryExpanded(stateKey) {
+        const key = String(stateKey || "");
+        if (!key) {
+          return;
+        }
+        state.expandedThreadEntries = {
+          ...(state.expandedThreadEntries || {}),
+          [key]: !Boolean(state.expandedThreadEntries && state.expandedThreadEntries[key])
+        };
+        render();
+      }
+
+      function closeAgentThread(projectRoot = null, threadId = null) {
+        if (
+          !state.openAgentThread
+          || (
+            projectRoot
+            && threadId
+            && (
+              state.openAgentThread.projectRoot !== projectRoot
+              || state.openAgentThread.threadId !== threadId
+            )
+          )
+        ) {
+          return;
+        }
+        const closingThread = state.openAgentThread;
+        state.openAgentThread = null;
+        state.closingAgentThread = closingThread;
+        window.setTimeout(() => {
+          if (
+            state.closingAgentThread
+            && state.closingAgentThread.projectRoot === closingThread.projectRoot
+            && state.closingAgentThread.threadId === closingThread.threadId
+          ) {
+            state.closingAgentThread = null;
+            render();
+          }
+        }, 180);
+        if (
+          state.replyComposer
+          && (
+            !projectRoot
+            || !threadId
+            || (
+              state.replyComposer.projectRoot === projectRoot
+              && state.replyComposer.threadId === threadId
+            )
+          )
+        ) {
+          state.replyComposer = null;
+        }
+        render();
+      }
+
+      function openAgentThread(projectRoot, threadId) {
+        const entry = findThreadViewEntry(projectRoot, threadId);
+        if (!entry) {
+          return;
+        }
+        state.closingAgentThread = null;
+        if (
+          state.openAgentThread
+          && state.openAgentThread.projectRoot === projectRoot
+          && state.openAgentThread.threadId === threadId
+        ) {
+          render();
+          return;
+        }
+        state.openAgentThread = {
+          projectRoot,
+          threadId
+        };
+        render();
+      }
+
+      function replyActionProjectRoot(snapshot, agent) {
+        if (!agent || !agent.threadId) {
+          return null;
+        }
+        if (agent.network || agent.provenance !== "codex" || agent.source !== "local") {
+          return null;
+        }
+        if (agent.sourceKind !== "appServer") {
+          return null;
+        }
+        return threadViewProjectRoot(snapshot, agent);
+      }
+
+      function threadViewProjectRoot(snapshot, agent) {
+        if (!agent || !agent.threadId) {
+          return null;
+        }
+        if (agent.network || agent.provenance !== "codex" || agent.source !== "local") {
+          return null;
+        }
+        const preferredRoot = agent.sourceProjectRoot || snapshot.projectRoot;
+        const localRoots = localProjectRootsForSnapshot(snapshot);
+        if (localRoots.includes(preferredRoot)) {
+          return preferredRoot;
+        }
+        return localRoots[0] || preferredRoot;
+      }
+
+      function replyComposerMatches(snapshot, agent) {
+        if (!state.replyComposer || !agent || !agent.threadId) {
+          return false;
+        }
+        const projectRoot = replyActionProjectRoot(snapshot, agent);
+        if (
+          agent.needsUser
+          && agent.needsUser.kind === "input"
+          && (!Array.isArray(agent.needsUser.questions) || agent.needsUser.questions.length === 0)
+        ) {
+          return false;
+        }
+        return replyComposerMatchesThread(projectRoot, agent.threadId);
+      }
+
+      function replyComposerMatchesThread(projectRoot, threadId) {
+        if (!state.replyComposer || !projectRoot || !threadId) {
+          return false;
+        }
+        return Boolean(
+          state.replyComposer.projectRoot === projectRoot
+          && state.replyComposer.threadId === threadId
+        );
+      }
+
+      function renderReplyComposer(snapshot, agent) {
+        const projectRoot = replyActionProjectRoot(snapshot, agent);
+        if (!replyComposerMatches(snapshot, agent) || !projectRoot) {
+          return "";
+        }
+        return renderReplyComposerForThread(projectRoot, agent.threadId, "Send a follow-up to this session...");
+      }
+
+      function renderReplyComposerForThread(projectRoot, threadId, placeholder = "Send a follow-up to this session...") {
+        if (!replyComposerMatchesThread(projectRoot, threadId)) {
+          return "";
+        }
+        const composer = state.replyComposer;
+        const disabled = composer.pending === true;
+        const errorHtml = composer.error
+          ? \`<div class="chat-composer-error">\${escapeHtml(composer.error)}</div>\`
+          : "";
+        const hasText = Boolean(String(composer.draft || "").trim());
+        return \`<form class="chat-composer" data-chat-composer="reply"><textarea class="chat-composer-field" rows="2" data-reply-project-root="\${escapeHtml(composer.projectRoot)}" data-reply-thread-id="\${escapeHtml(composer.threadId)}" placeholder="\${escapeHtml(placeholder)}"\${disabled ? " disabled" : ""}>\${escapeHtml(composer.draft || "")}</textarea><div class="chat-composer-toolbar"><div class="chat-composer-state">\${escapeHtml(disabled ? "Sending" : (hasText ? "Ready" : "Draft"))}</div><div class="chat-composer-actions"><button type="button" data-action="cancel-reply-composer" data-project-root="\${escapeHtml(composer.projectRoot)}" data-thread-id="\${escapeHtml(composer.threadId)}"\${disabled ? " disabled" : ""}>Cancel</button><button type="button" class="primary-action" data-action="submit-reply-composer" data-project-root="\${escapeHtml(composer.projectRoot)}" data-thread-id="\${escapeHtml(composer.threadId)}"\${disabled || !hasText ? " disabled" : ""}>\${escapeHtml(disabled ? "Sending..." : "Send")}</button></div></div>\${errorHtml}</form>\`;
       }
 
       function renderFleetSessions(projects) {
@@ -34,17 +291,22 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         return renderNeedsAttention(projects) + entries.map(({ snapshot, agent }) => {
           const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
           const appearanceAgentId = agent.sourceAgentId || agent.id;
+          const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
           const title = displayAgentLabel(snapshot, agent);
+          const replyAction = replyProjectRoot
+            ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
+            : "";
           const appearanceAction = agent.network
             ? ""
             : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
+          const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
           const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail)
             || latestAgentMessage(snapshot.projectRoot, agent)
             || \`[\${agent.state}]\`;
           const sourceLabel = agentNetworkLabel(agent);
           const description = projectLabel(snapshot.projectRoot) + " · " + (sourceLabel ? sourceLabel + " · " : "") + detail;
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(title)}</strong><div class="card-actions">\${appearanceAction}</div></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div></article>\`;
+          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(title)}</strong><div class="card-actions">\${cardActions}</div></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${renderReplyComposer(snapshot, agent)}</article>\`;
         }).join("");
       }
 
@@ -138,10 +400,28 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
           }
         }
 
+        for (const snapshot of projects) {
+          if (!snapshot || !snapshot.projectRoot) {
+            continue;
+          }
+          const previousProjectAgentCount = [...liveAgentMemory.values()]
+            .filter((entry) => entry.projectRoot === snapshot.projectRoot)
+            .length;
+          if (previousProjectAgentCount > 0 || (snapshot.agents || []).length > 0) {
+            markProjectHydrated(snapshot.projectRoot, now);
+          }
+        }
+
         enteringAgentKeys = previousKeys.size === 0 || screenshotMode
           ? new Set()
           : new Set(
-              [...nextMemory.keys()].filter((key) => !previousKeys.has(key))
+              [...nextMemory.keys()].filter((key) => {
+                if (previousKeys.has(key)) {
+                  return false;
+                }
+                const entry = nextMemory.get(key) || null;
+                return !(entry && agentLooksHistoricallyHydrated(entry.projectRoot, entry.agent));
+              })
             );
 
         for (const [key, entry] of liveAgentMemory.entries()) {
@@ -260,18 +540,234 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         });
       }
 
-      async function postJson(path, payload = {}) {
-        const response = await fetch(path, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload)
-        });
+      const THREAD_REPLY_TIMEOUT_MS = 90000;
+
+      async function postJson(path, payload = {}, timeoutMs = 15000) {
+        const controller = typeof AbortController === "function" ? new AbortController() : null;
+        const timer = controller
+          ? setTimeout(() => controller.abort(), timeoutMs)
+          : null;
+        let response;
+        try {
+          response = await fetch(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: controller ? controller.signal : undefined
+          });
+        } catch (error) {
+          if (error && error.name === "AbortError") {
+            throw new Error("Request timed out. Try again when the local app-server is responsive.");
+          }
+          throw error;
+        } finally {
+          if (timer) {
+            clearTimeout(timer);
+          }
+        }
 
         if (!response.ok) {
           throw new Error(await response.text());
         }
 
         return response.json();
+      }
+
+      function setNeedsUserRequestError(requestId, message) {
+        state.needsUserActionErrorsByRequestId = {
+          ...(state.needsUserActionErrorsByRequestId || {}),
+          [requestId]: message
+        };
+      }
+
+      function clearNeedsUserRequestError(requestId) {
+        const nextErrors = { ...(state.needsUserActionErrorsByRequestId || {}) };
+        delete nextErrors[requestId];
+        state.needsUserActionErrorsByRequestId = nextErrors;
+      }
+
+      function updateNeedsUserInputDraft(requestId, questionId, patch) {
+        const existingRequestDraft = state.needsUserInputDrafts && state.needsUserInputDrafts[requestId]
+          ? state.needsUserInputDrafts[requestId]
+          : {};
+        const existingQuestionDraft = existingRequestDraft && existingRequestDraft[questionId]
+          ? existingRequestDraft[questionId]
+          : { selected: "", other: "" };
+        state.needsUserInputDrafts = {
+          ...(state.needsUserInputDrafts || {}),
+          [requestId]: {
+            ...existingRequestDraft,
+            [questionId]: {
+              ...existingQuestionDraft,
+              ...patch
+            }
+          }
+        };
+      }
+
+      function dropNeedsUserInputDraft(requestId) {
+        const nextDrafts = { ...(state.needsUserInputDrafts || {}) };
+        delete nextDrafts[requestId];
+        state.needsUserInputDrafts = nextDrafts;
+      }
+
+      function findNeedsUserEntry(requestId) {
+        const projects = state.fleet && Array.isArray(state.fleet.projects) ? state.fleet.projects : [];
+        for (const snapshot of projects) {
+          const agent = Array.isArray(snapshot.agents)
+            ? snapshot.agents.find((candidate) => candidate && candidate.needsUser && candidate.needsUser.requestId === requestId)
+            : null;
+          if (agent && agent.needsUser) {
+            return { snapshot, agent, need: agent.needsUser };
+          }
+        }
+        return null;
+      }
+
+      function syncReplyComposerSubmitButton(projectRoot, threadId) {
+        const button = document.querySelector(
+          \`button[data-action="submit-reply-composer"][data-project-root="\${CSS.escape(projectRoot || "")}"][data-thread-id="\${CSS.escape(threadId || "")}"]\`
+        );
+        if (!(button instanceof HTMLButtonElement) || !state.replyComposer) {
+          return;
+        }
+        button.disabled = state.replyComposer.pending === true || !String(state.replyComposer.draft || "").trim();
+      }
+
+      function syncNeedsUserSubmitButton(requestId) {
+        const button = document.querySelector(
+          \`button[data-action="submit-needs-user-input"][data-request-id="\${CSS.escape(requestId || "")}"]\`
+        );
+        if (!(button instanceof HTMLButtonElement)) {
+          return;
+        }
+        const entry = findNeedsUserEntry(requestId);
+        button.disabled = state.needsUserActionRequestIds.includes(requestId)
+          || !entry
+          || !entry.need
+          || entry.need.kind !== "input"
+          || !needsUserInputReady(entry.need);
+      }
+
+      async function submitNeedsUserInput(projectRoot, requestId) {
+        if (typeof projectRoot !== "string" || projectRoot.length === 0) {
+          setNeedsUserRequestError(requestId, "Project root is unavailable for this input request.");
+          render();
+          return;
+        }
+        if (state.needsUserActionRequestIds.includes(requestId)) {
+          return;
+        }
+
+        const entry = findNeedsUserEntry(requestId);
+        if (!entry || !entry.need || entry.need.kind !== "input") {
+          setNeedsUserRequestError(requestId, "Input request is no longer available.");
+          render();
+          return;
+        }
+
+        const questions = Array.isArray(entry.need.questions) ? entry.need.questions : [];
+        const completion = needsUserInputCompletion(entry.need);
+        if (completion.missingRequired.length > 0) {
+          setNeedsUserRequestError(requestId, completion.missingRequired[0] + " still needs an answer.");
+          render();
+          return;
+        }
+        const answers = {};
+        for (const [questionIndex, question] of questions.entries()) {
+          const draft = needsUserInputDraft(requestId, question.id);
+          const values = needsUserInputAnswerValues(question, draft);
+          if (values.length === 0) {
+            if (question.required === false) {
+              continue;
+            }
+            setNeedsUserRequestError(requestId, needsUserInputQuestionLabel(question, questionIndex) + " still needs an answer.");
+            render();
+            return;
+          }
+          answers[question.id] = { answers: values };
+        }
+
+        state.needsUserActionRequestIds = [...state.needsUserActionRequestIds, requestId];
+        clearNeedsUserRequestError(requestId);
+        render();
+
+        try {
+          await postJson("/api/needs-user/answer", {
+            projectRoot,
+            requestId,
+            answers
+          });
+          dropNeedsUserInputDraft(requestId);
+          clearNeedsUserRequestError(requestId);
+          await refreshFleet();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setNeedsUserRequestError(requestId, "Needs You action failed: " + message);
+        } finally {
+          state.needsUserActionRequestIds = state.needsUserActionRequestIds.filter((value) => value !== requestId);
+          render();
+        }
+      }
+
+      async function submitReplyComposer(projectRoot, threadId) {
+        if (
+          !state.replyComposer
+          || state.replyComposer.projectRoot !== projectRoot
+          || state.replyComposer.threadId !== threadId
+        ) {
+          return;
+        }
+        if (state.replyComposer.pending === true) {
+          return;
+        }
+
+        const text = String(state.replyComposer.draft || "").trim();
+        if (!text) {
+          state.replyComposer = {
+            ...state.replyComposer,
+            error: "Reply text is required."
+          };
+          render();
+          return;
+        }
+
+        state.replyComposer = {
+          ...state.replyComposer,
+          pending: true,
+          error: null
+        };
+        render();
+
+        try {
+          await postJson("/api/thread/reply", {
+            projectRoot,
+            threadId,
+            text
+          }, THREAD_REPLY_TIMEOUT_MS);
+          markReplyThreadWorkIntent(threadId);
+          state.replyComposer = null;
+          if (
+            state.openAgentThread
+            && state.openAgentThread.projectRoot === projectRoot
+            && state.openAgentThread.threadId === threadId
+          ) {
+            state.openAgentThread = null;
+          }
+          state.closingAgentThread = null;
+          await refreshFleet();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          state.replyComposer = {
+            ...state.replyComposer,
+            pending: false,
+            error: "Reply failed: " + message
+          };
+          render();
+          return;
+        }
+
+        render();
       }
 
       function setTextIfChanged(element, value) {
@@ -335,6 +831,20 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         if (!state.fleet) return;
 
         const fleet = state.fleet;
+        if (
+          state.openAgentThread
+          && !findThreadViewEntry(state.openAgentThread.projectRoot, state.openAgentThread.threadId)
+        ) {
+          const staleThread = state.openAgentThread;
+          state.openAgentThread = null;
+          if (
+            state.replyComposer
+            && state.replyComposer.projectRoot === staleThread.projectRoot
+            && state.replyComposer.threadId === staleThread.threadId
+          ) {
+            state.replyComposer = null;
+          }
+        }
         const rawProjects = visibleProjects(fleet);
         const floorProjects = mergeWorktreeProjects(rawProjects);
         const selectableProjects = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)
@@ -454,7 +964,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
             roomsPath,
             snapshot.rooms.generated
               ? \`Auto rooms · floor shows live agents plus \${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`
-              : \`.codex-agents/rooms.xml · floor shows live agents plus \${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`
+              : \`Saved rooms.xml · floor shows live agents plus \${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`
           );
           if (centerChanged) {
             fitScenes();
@@ -559,7 +1069,128 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
             projectRoot: target.dataset.projectRoot,
             agentId: target.dataset.agentId
           });
+          return;
         }
+
+        if (action === "open-reply-composer" && target.dataset.projectRoot && target.dataset.threadId) {
+          openReplyComposer(target.dataset.projectRoot, target.dataset.threadId);
+          return;
+        }
+
+        if (action === "open-agent-thread" && target.dataset.projectRoot && target.dataset.threadId) {
+          openAgentThread(target.dataset.projectRoot, target.dataset.threadId);
+          return;
+        }
+
+        if (action === "close-agent-thread") {
+          closeAgentThread(target.dataset.projectRoot || null, target.dataset.threadId || null);
+          return;
+        }
+
+        if (action === "toggle-thread-entry" && target.dataset.threadEntryStateKey) {
+          toggleThreadEntryExpanded(target.dataset.threadEntryStateKey);
+          return;
+        }
+
+        if (action === "cancel-reply-composer" && target.dataset.projectRoot && target.dataset.threadId) {
+          if (
+            state.replyComposer
+            && state.replyComposer.projectRoot === target.dataset.projectRoot
+            && state.replyComposer.threadId === target.dataset.threadId
+          ) {
+            state.replyComposer = null;
+            render();
+          }
+          return;
+        }
+
+        if (action === "submit-reply-composer" && target.dataset.projectRoot && target.dataset.threadId) {
+          await submitReplyComposer(target.dataset.projectRoot, target.dataset.threadId);
+          return;
+        }
+
+        if (action === "select-needs-user-option" && target.dataset.needsUserRequestId && target.dataset.needsUserQuestionId) {
+          updateNeedsUserInputDraft(target.dataset.needsUserRequestId, target.dataset.needsUserQuestionId, {
+            selected: String(target.dataset.answer || "")
+          });
+          clearNeedsUserRequestError(target.dataset.needsUserRequestId);
+          render();
+          return;
+        }
+
+        if (action === "clear-needs-user-answer" && target.dataset.needsUserRequestId && target.dataset.needsUserQuestionId) {
+          updateNeedsUserInputDraft(target.dataset.needsUserRequestId, target.dataset.needsUserQuestionId, {
+            selected: "",
+            other: ""
+          });
+          clearNeedsUserRequestError(target.dataset.needsUserRequestId);
+          render();
+          return;
+        }
+
+        if (action === "submit-needs-user-input" && target.dataset.projectRoot && target.dataset.requestId) {
+          await submitNeedsUserInput(target.dataset.projectRoot, target.dataset.requestId);
+          return;
+        }
+
+        if (action === "respond-needs-user" && target.dataset.projectRoot && target.dataset.requestId && target.dataset.decision) {
+          const requestId = target.dataset.requestId;
+          if (state.needsUserActionRequestIds.includes(requestId)) {
+            return;
+          }
+
+          state.needsUserActionRequestIds = [...state.needsUserActionRequestIds, requestId];
+          clearNeedsUserRequestError(requestId);
+          render();
+
+          try {
+            await postJson("/api/needs-user/respond", {
+              projectRoot: target.dataset.projectRoot,
+              requestId,
+              decision: target.dataset.decision
+            });
+            await refreshFleet();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setNeedsUserRequestError(requestId, "Needs You action failed: " + message);
+          } finally {
+            state.needsUserActionRequestIds = state.needsUserActionRequestIds.filter((value) => value !== requestId);
+            render();
+          }
+        }
+      });
+
+      document.body.addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLTextAreaElement) && !(target instanceof HTMLInputElement)) {
+          return;
+        }
+        if (target.matches("[data-needs-user-text][data-needs-user-request-id][data-needs-user-question-id]")) {
+          updateNeedsUserInputDraft(target.dataset.needsUserRequestId, target.dataset.needsUserQuestionId, {
+            other: target.value
+          });
+          syncNeedsUserSubmitButton(target.dataset.needsUserRequestId);
+          return;
+        }
+        if (!(target instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        if (!target.matches("textarea[data-reply-project-root][data-reply-thread-id]")) {
+          return;
+        }
+        if (
+          !state.replyComposer
+          || state.replyComposer.projectRoot !== target.dataset.replyProjectRoot
+          || state.replyComposer.threadId !== target.dataset.replyThreadId
+        ) {
+          return;
+        }
+        state.replyComposer = {
+          ...state.replyComposer,
+          draft: target.value,
+          error: null
+        };
+        syncReplyComposerSubmitButton(target.dataset.replyProjectRoot, target.dataset.replyThreadId);
       });
 
       document.body.addEventListener("pointerover", (event) => {
@@ -603,6 +1234,14 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
       });
 
       document.addEventListener("pointerdown", (event) => {
+        if (state.openAgentThread) {
+          const withinThread = event.target instanceof HTMLElement
+            ? event.target.closest("[data-agent-thread-card], .office-map-agent-trigger")
+            : null;
+          if (!withinThread) {
+            closeAgentThread();
+          }
+        }
         if (!state.settingsOpen) {
           return;
         }
@@ -881,9 +1520,44 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
       }
       document.addEventListener("keydown", (event) => {
         if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey) {
+          const target = event.target;
+          if (
+            (event.metaKey || event.ctrlKey)
+            && event.key === "Enter"
+            && target instanceof HTMLTextAreaElement
+            && (
+              target.matches("textarea[data-reply-project-root][data-reply-thread-id]")
+              || target.matches("textarea[data-needs-user-text][data-needs-user-request-id]")
+            )
+          ) {
+            event.preventDefault();
+            if (target.matches("textarea[data-reply-project-root][data-reply-thread-id]")) {
+              void submitReplyComposer(target.dataset.replyProjectRoot, target.dataset.replyThreadId);
+            } else {
+              const card = target.closest("[data-needs-user-project-root]");
+              const projectRoot = card instanceof HTMLElement ? card.dataset.needsUserProjectRoot : null;
+              void submitNeedsUserInput(projectRoot, target.dataset.needsUserRequestId);
+            }
+          }
+          return;
+        }
+        if (
+          event.key === "Enter"
+          && !event.shiftKey
+          && !event.isComposing
+          && event.target instanceof HTMLTextAreaElement
+          && event.target.matches("textarea[data-reply-project-root][data-reply-thread-id]")
+        ) {
+          event.preventDefault();
+          void submitReplyComposer(event.target.dataset.replyProjectRoot, event.target.dataset.replyThreadId);
           return;
         }
         if (isTypingTarget(event.target)) {
+          return;
+        }
+        if (event.key === "Escape" && state.openAgentThread) {
+          event.preventDefault();
+          closeAgentThread();
           return;
         }
         if (event.key === "Escape" && state.settingsOpen) {
@@ -894,6 +1568,15 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         if (event.key === "Escape" && state.workspaceFullscreen) {
           event.preventDefault();
           setWorkspaceFullscreen(false);
+          return;
+        }
+        if (
+          (event.key === "Enter" || event.key === " ")
+          && event.target instanceof HTMLElement
+          && event.target.matches(".office-map-agent-trigger[data-project-root][data-thread-id]")
+        ) {
+          event.preventDefault();
+          openAgentThread(event.target.dataset.projectRoot, event.target.dataset.threadId);
           return;
         }
         if ((event.key === "f" || event.key === "F") && canFocusWorkspace()) {

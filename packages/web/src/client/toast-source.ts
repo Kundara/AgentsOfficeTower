@@ -954,6 +954,9 @@ export const TOAST_SCRIPT = `
             const key = agentKey(snapshot.projectRoot, agent);
             const semanticSubjectKey = notificationSubjectKey(snapshot.projectRoot, agent, agent.threadId);
             const previous = previousAgents.get(key);
+            if (shouldSuppressHistoricalHydrationNotification(snapshot, agent, previous)) {
+              continue;
+            }
             const descriptor = notificationDescriptor(snapshot, agent, previous);
             if (!descriptor) {
               continue;
@@ -1022,6 +1025,9 @@ export const TOAST_SCRIPT = `
             }
             const agent = snapshot.agents.find((candidate) => candidate.threadId && candidate.threadId === event.threadId);
             if (!agent) {
+              continue;
+            }
+            if (shouldSuppressHistoricalHydrationNotification(snapshot, agent, null)) {
               continue;
             }
             if (

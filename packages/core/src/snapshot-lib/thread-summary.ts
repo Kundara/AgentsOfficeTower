@@ -372,6 +372,9 @@ function turnHasFinalAnswer(turn: CodexTurn): boolean {
 }
 
 const FRESH_SPAWNED_THREAD_WINDOW_MS = 2 * 60 * 1000;
+// Just-sent desktop prompts can appear as notLoaded/no-turn rows before hydration catches up.
+const FRESH_NOT_LOADED_THREAD_UPDATE_WINDOW_MS = 8 * 1000;
+const QUIET_LIVE_THREAD_WINDOW_MS = 3 * 60 * 1000;
 
 function isFreshSpawnedDetachedThread(thread: CodexThread): boolean {
   if (thread.status.type !== "notLoaded") {
@@ -390,11 +393,25 @@ function isFreshSpawnedDetachedThread(thread: CodexThread): boolean {
   return Date.now() - createdAtMs <= FRESH_SPAWNED_THREAD_WINDOW_MS;
 }
 
+function isFreshNotLoadedUnhydratedThread(thread: CodexThread): boolean {
+  if (thread.status.type !== "notLoaded") {
+    return false;
+  }
+  if (threadTurns(thread).length > 0) {
+    return false;
+  }
+  const updatedAtMs = thread.updatedAt * 1000;
+  if (!Number.isFinite(updatedAtMs)) {
+    return false;
+  }
+  return Date.now() - updatedAtMs <= FRESH_NOT_LOADED_THREAD_UPDATE_WINDOW_MS;
+}
+
 export function isOngoingThread(thread: CodexThread): boolean {
   if (thread.status.type === "active") {
     return true;
   }
-  if (isFreshSpawnedDetachedThread(thread)) {
+  if (isFreshSpawnedDetachedThread(thread) || isFreshNotLoadedUnhydratedThread(thread)) {
     return true;
   }
   const turns = threadTurns(thread);
@@ -472,14 +489,15 @@ export function summariseThread(thread: CodexThread): {
   if (!lastTurn) {
     const preview = shortenText(thread.preview || "", 88);
     const freshSpawnedDetached = isFreshSpawnedDetachedThread(thread);
+    const freshNotLoadedUnhydrated = isFreshNotLoadedUnhydratedThread(thread);
     const recentState = ageMs <= DONE_WINDOW_MS ? "done" : "idle";
     return {
       state:
-        thread.status.type === "active" || freshSpawnedDetached ? "planning"
+        thread.status.type === "active" || freshSpawnedDetached || freshNotLoadedUnhydrated ? "planning"
         : recentState,
       detail:
         preview
-        || (thread.status.type === "active" || freshSpawnedDetached
+        || (thread.status.type === "active" || freshSpawnedDetached || freshNotLoadedUnhydrated
           ? "No turns yet"
           : recentState === "done"
             ? "Finished recently"
@@ -489,9 +507,15 @@ export function summariseThread(thread: CodexThread): {
     };
   }
 
-  const treatAsInProgress = lastTurn.status === "inProgress";
   const interruptedWithoutFinalAnswer =
     lastTurn.status === "interrupted" && !turnHasFinalAnswer(lastTurn);
+  const treatAsInProgress =
+    lastTurn.status === "inProgress"
+    || (
+      interruptedWithoutFinalAnswer
+      && thread.status.type === "notLoaded"
+      && ageMs <= QUIET_LIVE_THREAD_WINDOW_MS
+    );
 
   if (lastTurn.status === "failed") {
     return {

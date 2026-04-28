@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { AgentRoster, AppearanceProfile } from "./types";
-import { getRosterFilePath } from "./room-config";
+import { getRosterFilePath, resolveReadableRosterFilePath } from "./room-config";
 
 export const APPEARANCES: AppearanceProfile[] = [
   { id: "mint", label: "Mint", body: "#4bd69f", accent: "#dff8ec", shadow: "#1d7c5a" },
@@ -29,7 +29,7 @@ function stableHash(input: string): number {
 }
 
 export async function loadAgentRoster(projectRoot: string): Promise<AgentRoster> {
-  const rosterPath = getRosterFilePath(projectRoot);
+  const rosterPath = await resolveReadableRosterFilePath(projectRoot);
   try {
     const text = await readFile(rosterPath, "utf8");
     const parsed = JSON.parse(text) as Partial<AgentRoster>;

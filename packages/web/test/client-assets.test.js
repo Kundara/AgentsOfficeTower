@@ -4,6 +4,7 @@ const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 
 const { renderHtml } = require("../dist/render-html.js");
+const { renderSceneEffectsAuditHtml } = require("../dist/render/render-scene-effects-audit-html.js");
 const { renderZOrderAuditHtml } = require("../dist/render-z-order-audit-html.js");
 
 function readClientSource(...segments) {
@@ -97,6 +98,20 @@ test("z-order audit html exposes the visual workstation overlap harness", () => 
   assert.match(html, /\/z-order-audit/);
 });
 
+test("scene effects audit html mocks approval and input waits through the normal client bundle", () => {
+  const html = renderSceneEffectsAuditHtml();
+
+  assert.match(html, /Scene Effects Audit/);
+  assert.match(html, /mocked typed Codex approval\/input fleet data/);
+  assert.match(html, /audit-thread-approval-command/);
+  assert.match(html, /audit-request-input/);
+  assert.match(html, /Ready to dry-run publish once you approve the command\./);
+  assert.match(html, /I need launch mode, a note, and the deploy token to proceed\./);
+  assert.match(html, /window\.fetch = \(input, init = undefined\)/);
+  assert.match(html, /window\.EventSource = MockEventSource/);
+  assert.match(html, /\/client\/app\.js\?v=/);
+});
+
 test("client bootstrap runs the generated runtime module instead of evaling a source string", () => {
   const indexSource = readClientSource("index.ts");
   const runtimeModuleSource = readClientSource("app-runtime.ts");
@@ -135,11 +150,11 @@ test("client runtime keeps current local desk-live work on a workstation through
   );
   assert.match(
     seatingSource,
-    /return agent\.isCurrent === true\n\s+&& Number\.isFinite\(updatedAt\)\n\s+&& Date\.now\(\) - updatedAt <= workstationDoneGraceMs\(agent\);/
+    /return agent\.isCurrent === true\n\s+&& Number\.isFinite\(updatedAt\)\n\s+&& Date\.now\(\) - updatedAt <= Math\.max\(workstationDoneGraceMs\(agent\), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS\);/
   );
   assert.match(
     seatingSource,
-    /return agent\.isOngoing === true\n\s+\|\| hasCurrentLocalDeskGrace\(agent, QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS\);/
+    /return agent\.isOngoing === true\n\s+\|\| agent\.isCurrent === true\n\s+\|\| hasCurrentLocalDeskGrace\(agent, QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS\);/
   );
 });
 
@@ -161,12 +176,25 @@ test("client runtime keeps active local desks live, keeps waiting on-desk, and g
     seatingSource,
     /if \(agent\.statusText === "active"\) {\n\s+if \(isRuntimeActiveLocalAgent\(agent\)\) {\n\s+return true;\n\s+}\n\s+if \(\(agent\.state === "idle" \|\| agent\.state === "done"\) && hasCurrentLocalSeatCooldown\(agent\)\) {\n\s+return true;\n\s+}\n\s+return agent\.isCurrent === true\n\s+&& agent\.state !== "idle"\n\s+&& agent\.state !== "done";/
   );
+  assert.match(
+    seatingSource,
+    /if \(agent\.isOngoing === true\) {\n\s+return true;\n\s+}\n\s+if \(agent\.isCurrent === true\) {\n\s+return true;\n\s+}\n\s+if \(agent\.state === "done"\) {\n\s+return agent\.isCurrent === true;\n\s+}/
+  );
+});
+
+test("client runtime seats current local workload even when its latest item summarizes idle", () => {
+  const seatingSource = readRuntimeSource("seating-source.ts");
+
+  assert.match(
+    seatingSource,
+    /if \(agent\.isOngoing === true\) {\n\s+return true;\n\s+}\n\s+if \(agent\.isCurrent === true\) {\n\s+return true;\n\s+}\n\s+if \(agent\.state === "done"\) {/
+  );
 });
 
 test("client runtime gives finished subagents a longer workstation cooldown than leads", () => {
   const seatingSource = readRuntimeSource("seating-source.ts");
 
-  assert.match(seatingSource, /const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;/);
+  assert.match(seatingSource, /const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 3000;/);
   assert.match(seatingSource, /const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;/);
   assert.match(
     seatingSource,
@@ -222,6 +250,263 @@ test("runtime source adds above-head state markers for needs-user, thinking, pla
   assert.ok(navigationSource.includes("const statusMarkerUrl = agent.statusMarkerIconUrl || stateMarkerIconUrlForAgent(agent);"));
   assert.ok(sceneSource.includes("statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),"));
   assert.ok(sceneSource.includes("statusMarkerIconUrl: stateMarkerIconUrlForAgent(entry.agent),"));
+});
+
+test("runtime source adds transient turn-phase badges for started, completed, interrupted, and failed turns", () => {
+  const renderSource = readRuntimeSource("render-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.ok(renderSource.includes("const TURN_SIGNAL_MAX_AGE_MS = 6000;"));
+  assert.ok(renderSource.includes("function recentTurnSignalForAgent(snapshot, agent) {"));
+  assert.ok(renderSource.includes('return "START";'));
+  assert.ok(renderSource.includes('return "DONE";'));
+  assert.ok(renderSource.includes('return "STOP";'));
+  assert.ok(renderSource.includes('return "FAIL";'));
+  assert.ok(sceneSource.includes("turnSignal: recentTurnSignalForAgent(snapshot, agent),"));
+  assert.ok(sceneSource.includes("turnSignal: recentTurnSignalForAgent(snapshot, entry.agent),"));
+  assert.ok(navigationSource.includes("const TURN_SIGNAL_PADDING_X = 4;"));
+  assert.ok(navigationSource.includes("function turnSignalPalette(signal) {"));
+  assert.ok(navigationSource.includes("function syncTurnSignalNode(motionState, turnSignal, liftPx = 0) {"));
+  assert.ok(navigationSource.includes('kind: "turn-signal",'));
+  assert.ok(sceneSource.includes('if (entry.kind === "turn-signal") {'));
+});
+
+test("runtime source maps recent typed plan, command, file, and tool events into transient activity cues", () => {
+  const renderSource = readRuntimeSource("render-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.ok(renderSource.includes("const ACTIVITY_CUE_MAX_AGE_MS = 4800;"));
+  assert.ok(renderSource.includes("function activityCueForEvent(event) {"));
+  assert.ok(renderSource.includes('return { mode: "plan", label: "PLAN" };'));
+  assert.ok(renderSource.includes('return { mode: "command", label: "RUN" };'));
+  assert.ok(renderSource.includes('return { mode: "file", label: "EDIT" };'));
+  assert.ok(renderSource.includes('return { mode: "tool", label: "TOOL" };'));
+  assert.ok(renderSource.includes("function recentActivityCueForAgent(snapshot, agent) {"));
+  assert.ok(sceneSource.includes("activityCue: recentActivityCueForAgent(snapshot, agent),"));
+  assert.ok(sceneSource.includes("activityCue: recentActivityCueForAgent(snapshot, entry.agent),"));
+  assert.ok(navigationSource.includes("function activityCuePalette(cue) {"));
+  assert.ok(navigationSource.includes("function buildActivityCueAdornment(mode, palette) {"));
+  assert.ok(navigationSource.includes('return cue.mode === "plan"'));
+  assert.ok(navigationSource.includes("function syncActivityCueNode(motionState, activityCue, driftX = 0, driftY = 0) {"));
+  assert.ok(navigationSource.includes('kind: "activity-cue",'));
+  assert.ok(sceneSource.includes('if (entry.kind === "activity-cue") {'));
+});
+
+test("runtime source maps approval waits, input waits, and resolved requests into transient lifecycle cues", () => {
+  const renderSource = readRuntimeSource("render-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.ok(renderSource.includes('return { mode: "approval", label: "WAIT" };'));
+  assert.ok(renderSource.includes('return { mode: "input", label: "ASK" };'));
+  assert.ok(renderSource.includes('return { mode: "resolved", label: "OK" };'));
+  assert.ok(navigationSource.includes('if (cue.mode === "approval" || cue.mode === "input") {'));
+  assert.ok(navigationSource.includes('if (cue.mode === "resolved") {'));
+  assert.ok(sceneSource.includes('entry.mode === "approval" ? Math.round(Math.sin((now + entry.phase) / 150) * 1.4)'));
+  assert.ok(sceneSource.includes('entry.mode === "input" ? -Math.round(progress * 3 + Math.sin((now + entry.phase) / 130) * 1.4)'));
+  assert.ok(sceneSource.includes('entry.mode === "resolved" ? -Math.round(progress * 7 + Math.sin((now + entry.phase) / 150) * 1.2)'));
+});
+
+test("activity cues include mode-specific icon adornments and icon-side animation, not just text chips", () => {
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.ok(navigationSource.includes("const ACTIVITY_CUE_ICON_WIDTH = 8;"));
+  assert.ok(navigationSource.includes("const ACTIVITY_CUE_ICON_GAP = 3;"));
+  assert.ok(navigationSource.includes("function activityCueFrameRadius(mode) {"));
+  assert.ok(navigationSource.includes('return mode === "command" || mode === "file" ? 1 : 4;'));
+  assert.ok(navigationSource.includes("fillColor: 0x080c10,"));
+  assert.ok(navigationSource.includes("fillColor: 0x101714,"));
+  assert.ok(navigationSource.includes('if (mode === "plan") {'));
+  assert.ok(navigationSource.includes('} else if (mode === "command") {'));
+  assert.ok(navigationSource.includes('} else if (mode === "file") {'));
+  assert.ok(navigationSource.includes('} else if (mode === "tool") {'));
+  assert.ok(navigationSource.includes('} else if (mode === "approval") {'));
+  assert.ok(navigationSource.includes('} else if (mode === "input") {'));
+  assert.ok(navigationSource.includes('} else if (mode === "resolved") {'));
+  assert.ok(navigationSource.includes("activityCueContainer.addChild(adornment.iconContainer);"));
+  assert.ok(navigationSource.includes("iconContainer,"));
+  assert.ok(sceneSource.includes('if (cueIcon && entry.mode === "plan") {'));
+  assert.ok(sceneSource.includes('} else if (cueIcon && entry.mode === "tool") {'));
+  assert.ok(sceneSource.includes('cueIcon.rotation = (now + entry.phase) / 420;'));
+  assert.ok(sceneSource.includes('cueAccent.rotation = (now + entry.phase) / 260;'));
+});
+
+test("recent workstation activity also creates non-text desk effects beyond the floating cue chip", () => {
+  const renderSource = readRuntimeSource("render-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.ok(renderSource.includes("function requestCueProfileForAgent(agent, cue, event = null) {"));
+  assert.ok(renderSource.includes("requestProfile: requestCueProfileForAgent(agent, cue, event),"));
+  assert.ok(renderSource.includes("decisionCount,"));
+  assert.ok(renderSource.includes("approvalType"));
+  assert.ok(renderSource.includes("questionCount: Math.max(1, Math.min(4, questions.length || 1))"));
+  assert.ok(renderSource.includes("requiredCount: Math.max(0, Math.min(4, requiredCount))"));
+  assert.ok(renderSource.includes("function buildWorkstationCueEffect(cue, absoluteCellX, absoluteCellY, workstationX, workstationY, workstationWidth, workstationHeight, workstationSortRow, workstationSortFootY, options = {}) {"));
+  assert.ok(renderSource.includes('kind: "cue-effect",'));
+  assert.ok(renderSource.includes("requestProfile: cue.requestProfile || null,"));
+  assert.ok(renderSource.includes("const workstationCueEffect = buildWorkstationCueEffect("));
+  assert.ok(renderSource.includes("shell.push(workstationCueEffect);"));
+  assert.ok(navigationSource.includes("function buildWorkstationCueEffectNode(effect) {"));
+  assert.ok(navigationSource.includes("const requestProfile = effect && effect.requestProfile && typeof effect.requestProfile === \"object\""));
+  assert.ok(navigationSource.includes("const decisionCount = Math.max(2, Math.min(4, Number(requestProfile && requestProfile.decisionCount) || 3));"));
+  assert.ok(navigationSource.includes("const questionCount = Math.max(1, Math.min(4, Number(requestProfile && requestProfile.questionCount) || 3));"));
+  assert.ok(navigationSource.includes("detailNodes,"));
+  assert.ok(navigationSource.includes('if (item.kind === "cue-effect") {'));
+  assert.ok(navigationSource.includes('kind: "workstation-cue-effect",'));
+  assert.ok(sceneSource.includes('if (entry.kind === "workstation-cue-effect") {'));
+  assert.ok(sceneSource.includes("const approvalProfile = entry.requestProfile && typeof entry.requestProfile === \"object\""));
+  assert.ok(sceneSource.includes("const inputProfile = entry.requestProfile && typeof entry.requestProfile === \"object\""));
+  assert.ok(sceneSource.includes("index < requiredCount"));
+  assert.ok(sceneSource.includes('entry.mode === "command") {'));
+  assert.ok(sceneSource.includes('entry.mode === "resolved") {'));
+});
+
+test("runtime source lets scene-agent clicks open a stable thread history card", () => {
+  const settingsSource = readRuntimeSource("settings-source.ts");
+  const renderSource = readRuntimeSource("render-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+  const stylesSource = readClientSource("styles.css");
+
+  assert.ok(settingsSource.includes("openAgentThread: null,"));
+  assert.ok(settingsSource.includes("closingAgentThread: null,"));
+  assert.ok(settingsSource.includes("replyThreadWorkIntents: {},"));
+  assert.ok(settingsSource.includes("expandedThreadEntries: {},"));
+  assert.ok(renderSource.includes("function recentThreadHistoryEntries(snapshot, agent) {"));
+  assert.ok(renderSource.includes("function renderAgentThreadCard(snapshot, agent, options = {}) {"));
+  assert.ok(renderSource.includes("function renderThreadHistoryEntry(snapshot, agent, entry) {"));
+  assert.ok(renderSource.includes("function threadEntryLooksLong(body) {"));
+  assert.ok(renderSource.includes('data-action="toggle-thread-entry"'));
+  assert.ok(renderSource.includes('data-thread-entry-key='));
+  assert.ok(renderSource.includes('key: ["latest", agent.threadId].join("::"),'));
+  assert.ok(renderSource.includes('const cardClass = options.closing ? "office-map-thread-card is-closing" : "office-map-thread-card";'));
+  assert.ok(renderSource.includes("Thread history"));
+  assert.ok(!renderSource.includes("office-map-thread-composer"));
+  assert.ok(!renderSource.includes("renderThreadResumeComposerForThread"));
+  assert.ok(sceneSource.includes("threadPanel: null"));
+  assert.ok(sceneSource.includes("function registerThreadPanel(agent) {"));
+  assert.ok(sceneSource.includes("function openThreadStageOffset(agent) {"));
+  assert.ok(sceneSource.includes("renderAgentThreadCard(snapshot, agent, { closing: panelState === \"closing\" })"));
+  assert.ok(sceneSource.includes("const projectRoot = threadViewProjectRoot(snapshot, agent);"));
+  assert.ok(sceneSource.includes("replyProjectRoot: threadViewProjectRoot(snapshot, agent) || \"\","));
+  assert.ok(sceneSource.includes("replyProjectRoot: threadViewProjectRoot(snapshot, entry.agent) || \"\","));
+  assert.ok(sceneSource.includes("threadOpen: Boolean(sceneThreadPanelState(agent))"));
+  assert.ok(sceneSource.includes("hoverHtml: openThreadSuppressesHover ? \"\" : renderAgentHover(snapshot, agent)"));
+  assert.ok(sceneSource.includes('data-office-map-thread-layer'));
+  assert.ok(navigationSource.includes('class="office-map-agent-trigger" data-action="open-agent-thread"'));
+  assert.ok(navigationSource.includes("node.classList.add(\"is-thread-open\");"));
+  assert.ok(navigationSource.includes("renderer.threadLayer"));
+  assert.ok(navigationSource.includes('className = "office-map-thread-panel-slot"'));
+  assert.ok(navigationSource.includes("function syncThreadPanel(renderer, model) {"));
+  assert.ok(navigationSource.includes("function syncThreadHistory(history, nextHistory) {"));
+  assert.ok(navigationSource.includes("function threadHistoryAtBottom(history) {"));
+  assert.ok(navigationSource.includes("fresh.classList.add(\"is-new\");"));
+  assert.ok(navigationSource.includes("function officeSceneRenderToken(snapshot, options = {}) {"));
+  assert.ok(navigationSource.includes("if (renderer.sceneRenderToken !== renderToken) {"));
+  assert.ok(navigationSource.includes("syncOfficeAnchors(renderer, model, renderer.scale || 1);"));
+  assert.ok(uiSource.includes("function openAgentThread(projectRoot, threadId) {"));
+  assert.ok(uiSource.includes("state.openAgentThread.projectRoot === projectRoot"));
+  assert.ok(uiSource.includes("render();\n          return;\n        }\n        state.openAgentThread = {"));
+  assert.ok(uiSource.includes("state.openAgentThread = {\n          projectRoot,\n          threadId\n        };\n        render();"));
+  assert.ok(uiSource.includes("function threadViewProjectRoot(snapshot, agent) {"));
+  assert.ok(uiSource.includes("function findThreadViewEntry(projectRoot, threadId) {"));
+  assert.ok(uiSource.includes('agent.sourceKind !== "appServer"'));
+  assert.ok(uiSource.includes("&& !findThreadViewEntry(state.openAgentThread.projectRoot, state.openAgentThread.threadId)"));
+  assert.ok(uiSource.includes("function markReplyThreadWorkIntent(threadId"));
+  assert.ok(uiSource.includes("function toggleThreadEntryExpanded(stateKey) {"));
+  assert.ok(!uiSource.includes("renderThreadResumeComposerForThread"));
+  assert.ok(!uiSource.includes('data-action="open-thread-resume"'));
+  assert.ok(!uiSource.includes('data-action="copy-resume-command"'));
+  assert.ok(!uiSource.includes("/api/thread/open-resume"));
+  assert.ok(uiSource.includes("const THREAD_REPLY_TIMEOUT_MS = 90000;"));
+  assert.ok(uiSource.includes("}, THREAD_REPLY_TIMEOUT_MS);"));
+  assert.ok(uiSource.includes("if (action === \"open-agent-thread\" && target.dataset.projectRoot && target.dataset.threadId) {"));
+  assert.ok(uiSource.includes("if (action === \"close-agent-thread\") {"));
+  assert.ok(uiSource.includes("if (action === \"toggle-thread-entry\" && target.dataset.threadEntryStateKey) {"));
+  assert.ok(uiSource.includes("event.key === \"Enter\""));
+  assert.ok(uiSource.includes("&& !event.shiftKey"));
+  assert.ok(uiSource.includes("void submitReplyComposer(event.target.dataset.replyProjectRoot, event.target.dataset.replyThreadId);"));
+  assert.ok(uiSource.includes("if (event.key === \"Escape\" && state.openAgentThread) {"));
+  assert.ok(stylesSource.includes(".office-map-thread-card {"));
+  assert.ok(stylesSource.includes(".office-map-thread-layer {"));
+  assert.ok(stylesSource.includes(".office-map-host.has-thread-panel .office-map-agent-hit:hover .agent-hover"));
+  assert.ok(stylesSource.includes("@keyframes officeThreadPanelIn"));
+  assert.ok(stylesSource.includes("@keyframes officeThreadPanelOut"));
+  assert.ok(stylesSource.includes("@keyframes officeThreadMessageIn"));
+  assert.ok(stylesSource.includes(".office-map-thread-body.is-collapsed {"));
+  assert.ok(stylesSource.includes("-webkit-line-clamp: 8;"));
+  assert.ok(stylesSource.includes(".office-map-thread-more {"));
+  assert.ok(stylesSource.includes(".office-map-thread-icon {"));
+  assert.ok(stylesSource.includes(".office-map-thread-window-bar {"));
+  assert.ok(stylesSource.includes(".office-map-agent-trigger {"));
+  assert.ok(stylesSource.includes(".office-map-thread-history {"));
+});
+
+test("runtime source adds stronger state-specific animation for waiting, blocked, and validating work", () => {
+  const renderSource = readRuntimeSource("render-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.ok(renderSource.includes('color: state === "validating" ? 0x69c7ff : 0x4bd69f,'));
+  assert.ok(renderSource.includes('pulse: state === "validating",'));
+  assert.ok(navigationSource.includes("function stateEffectModeForAgent(agent) {"));
+  assert.ok(navigationSource.includes('return "waiting";'));
+  assert.ok(navigationSource.includes('return "blocked";'));
+  assert.ok(navigationSource.includes("function syncStateEffectNode(entry, now) {"));
+  assert.ok(navigationSource.includes('kind: "workstation-glow",'));
+  assert.ok(navigationSource.includes('kind: "state-effect",'));
+  assert.ok(sceneSource.includes('if (entry.kind === "workstation-glow") {'));
+  assert.ok(sceneSource.includes('if (entry.kind === "state-effect") {'));
+});
+
+test("runtime source gives seated active states distinct motion profiles instead of one generic bob", () => {
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.ok(navigationSource.includes('stateValue === "planning" ? "planning"'));
+  assert.ok(navigationSource.includes('stateValue === "scanning" ? "scanning"'));
+  assert.ok(navigationSource.includes('stateValue === "editing" ? "editing"'));
+  assert.ok(navigationSource.includes('stateValue === "running" ? "running"'));
+  assert.ok(navigationSource.includes('stateValue === "validating" ? "validating"'));
+  assert.ok(navigationSource.includes('stateValue === "delegating" ? "delegating"'));
+  assert.ok(navigationSource.includes("baseX: pixelSnap(avatarVisual.avatar && avatarVisual.avatar.x),"));
+  assert.ok(navigationSource.includes("mode,"));
+  assert.ok(sceneSource.includes('bobMode === "planning" ? Math.round(waveSlow * 1)'));
+  assert.ok(sceneSource.includes('bobMode === "scanning" ? Math.round(waveMid * 1.4)'));
+  assert.ok(sceneSource.includes('bobMode === "editing" ? Math.round(waveFast * 1.6)'));
+  assert.ok(sceneSource.includes('bobMode === "running" ? Math.round((waveFast + waveStep * 0.45) * 1.7)'));
+  assert.ok(sceneSource.includes('bobMode === "validating" ? Math.round(waveMid * 0.8)'));
+  assert.ok(sceneSource.includes('bobMode === "delegating" ? Math.round((waveSlow + waveMid * 0.45) * 1.3)'));
+});
+
+test("runtime source adds completion summaries and clear actions for multi-question Needs You inputs", () => {
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+
+  assert.ok(navigationSource.includes("function needsUserInputCompletion(need) {"));
+  assert.ok(navigationSource.includes('return header || "Question " + (questionIndex + 1);'));
+  assert.ok(navigationSource.includes('return "Still needed: " + completion.missingRequired[0];'));
+  assert.ok(navigationSource.includes('data-action="clear-needs-user-answer"'));
+  assert.ok(navigationSource.includes('escapeHtml(needsUserInputSummary(need))'));
+  assert.ok(navigationSource.includes('escapeHtml(needsUserInputSubmitLabel(need, isPending))'));
+  assert.ok(uiSource.includes('if (action === "clear-needs-user-answer" && target.dataset.needsUserRequestId && target.dataset.needsUserQuestionId) {'));
+  assert.ok(uiSource.includes("const completion = needsUserInputCompletion(entry.need);"));
+});
+
+test("runtime source lets queue items open inline reply composers for general local Codex input prompts", () => {
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+
+  assert.ok(navigationSource.includes("const canReplyToInput = Boolean("));
+  assert.ok(navigationSource.includes('data-action="open-reply-composer"'));
+  assert.ok(navigationSource.includes('renderReplyComposerForThread(replyProjectRoot, agent.threadId, "Reply to this input...")'));
+  assert.ok(uiSource.includes("function replyComposerMatchesThread(projectRoot, threadId) {"));
+  assert.ok(uiSource.includes("function renderReplyComposerForThread(projectRoot, threadId, placeholder = \"Send a follow-up to this session...\") {"));
 });
 
 test("runtime source preserves workstation entering-reveal flags for the Pixi flicker animation", () => {
@@ -617,6 +902,7 @@ test("runtime source keeps current agents in the map scene even when they are be
   const seatingSource = readRuntimeSource("seating-source.ts");
 
   assert.ok(layoutSource.includes("function isLiveSceneAgent(agent) {"));
+  assert.ok(layoutSource.includes("return agent.isCurrent === true || agent.isOngoing === true || isRuntimeActiveLocalAgent(agent);"));
   assert.ok(layoutSource.includes("return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;"));
   assert.ok(layoutSource.includes("const liveAgents = snapshot.agents.filter(isLiveSceneAgent);"));
   assert.ok(layoutSource.includes("const seenAgentIds = new Set();"));
@@ -672,6 +958,10 @@ test("toast renderer keeps the message, file-change, and command toast classes a
 
 test("toast runtime preserves read command summaries and text-message priority", () => {
   const renderSource = readRuntimeSource("render-source.ts").replace(/\r\n/g, "\n");
+  const toastSource = readFileSync(
+    join(__dirname, "../src/client/toast-source.ts"),
+    "utf8"
+  ).replace(/\r\n/g, "\n");
 
   assert.match(
     renderSource,
@@ -700,6 +990,18 @@ test("toast runtime preserves read command summaries and text-message priority",
   assert.ok(
     renderSource.includes("if (agentHasTypedEvent(snapshot, agent)) {\n          return null;\n        }"),
     "typed events should suppress the summary-diff notification path so event-native toasts surface first"
+  );
+  assert.ok(
+    renderSource.includes("function shouldSuppressHistoricalHydrationNotification(snapshot, agent, previous) {"),
+    "render runtime should define a historical hydration suppression helper"
+  );
+  assert.ok(
+    toastSource.includes("if (shouldSuppressHistoricalHydrationNotification(snapshot, agent, previous)) {\n              continue;\n            }"),
+    "agent-summary toasts should skip stale first-seen hydrate agents"
+  );
+  assert.ok(
+    toastSource.includes("if (shouldSuppressHistoricalHydrationNotification(snapshot, agent, null)) {\n              continue;\n            }"),
+    "typed event toasts should skip stale first-seen hydrate agents"
   );
 });
 
@@ -792,9 +1094,38 @@ test("spec defines door-based arrivals and departures for visible agents", () =>
 test("runtime source only animates exit ghosts for explicit departures and dedupes them", () => {
   const navigationSource = readRuntimeSource("navigation-source.ts");
   const uiSource = readRuntimeSource("ui-source.ts");
+  const layoutSource = readRuntimeSource("layout-source.ts");
+  const settingsSource = readRuntimeSource("settings-source.ts");
 
   assert.ok(navigationSource.includes("const departingAgentKeys = new Set(departingAgents.map((agent) => agent.key));"));
   assert.ok(navigationSource.includes("!motionState || currentAgentKeys.has(key) || motionState.exiting || !departingAgentKeys.has(key)"));
   assert.ok(uiSource.includes("const existingGhost = departingAgents.find((ghost) => ghost.key === key) || null;"));
   assert.ok(uiSource.includes("existingGhost.expiresAt = now + departingAgentTtlMs(entry.agent);"));
+  assert.ok(settingsSource.includes("const HISTORICAL_HYDRATION_SUPPRESS_MS = 30000;"));
+  assert.ok(layoutSource.includes("function agentLooksHistoricallyHydrated(projectRoot, agent) {"));
+  assert.ok(uiSource.includes("markProjectHydrated(snapshot.projectRoot, now);"));
+  assert.ok(uiSource.includes("return !(entry && agentLooksHistoricallyHydrated(entry.projectRoot, entry.agent));"));
+});
+
+test("runtime source preserves exit ghosts across scene refreshes and reuses the same exit builder", () => {
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.ok(navigationSource.includes("function buildExitGhostMotion(key, motionState, roomNavigation, reservations) {"));
+  assert.ok(navigationSource.includes("if (!motionState || motionState.exiting !== true || currentAgentKeys.has(key) || renderer.motionStates.has(key)) {"));
+  assert.ok(navigationSource.includes("const preservedExitMotion = buildExitGhostMotion(key, motionState, roomNavigation, reservedAgentTiles);"));
+  assert.ok(navigationSource.includes("const ghostMotion = buildExitGhostMotion(key, motionState, roomNavigation, reservedAgentTiles);"));
+  assert.ok(sceneSource.includes("entry.exitFadeAlpha = entry.sprite.alpha;"));
+});
+
+test("runtime source turns room changes into old-room exits plus new-room door entries and ignores tiny same-slot retargets", () => {
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+
+  assert.ok(navigationSource.includes("function shouldReuseMotionTarget(previousState, agent, preserveAutonomyRoute = false) {"));
+  assert.ok(navigationSource.includes("const distance = motionTargetDistance(previousState, agent);"));
+  assert.ok(navigationSource.includes("if (sameSlotAssignment(previousState, agent)) {"));
+  assert.ok(navigationSource.includes("const previousRoomState = previousMotionState && previousMotionState.roomId !== agent.roomId"));
+  assert.ok(navigationSource.includes("const enteringFromDoor = !previousMotionState"));
+  assert.ok(navigationSource.includes("const transitionGhostKey = agentKey + \"::transition-exit::\" + previousRoomState.roomId;"));
+  assert.ok(navigationSource.includes("const transitionGhost = buildExitGhostMotion(transitionGhostKey, previousRoomState, roomNavigation, reservations);"));
 });

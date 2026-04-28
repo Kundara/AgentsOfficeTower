@@ -1,6 +1,8 @@
 import type { ServerResponse } from "node:http";
 
 import {
+  type ApprovalDecision,
+  type UserInputAnswers,
   canonicalizeProjectPath,
   cycleAgentAppearance,
   describeStoredAppearanceSettings,
@@ -10,6 +12,8 @@ import {
   listCloudTasks,
   projectPathIdentityKey,
   ProjectLiveMonitor,
+  respondToClaudeHookInputRequest,
+  respondToClaudeHookPermissionRequest,
   scaffoldRoomsFile,
   setStoredAppearanceSettings,
   setStoredCursorApiKey,
@@ -22,7 +26,6 @@ import { buildProjectDescriptors } from "./server-options";
 import type { FleetResponse, IntegrationSettingsResponse, MultiplayerStatus, ProjectDescriptor } from "./server-types";
 
 export const DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
 export function filterFreshDiscoveredProjects(
   projects: DiscoveredProject[],
   nowMs = Date.now(),
@@ -127,6 +130,71 @@ export class FleetLiveService {
     await this.monitors.get(projectRoot)?.refreshNow();
     await this.publish();
     return filePath;
+  }
+
+  async respondToApprovalRequest(
+    projectRoot: string,
+    requestId: string,
+    decision: ApprovalDecision
+  ): Promise<void> {
+    await this.ensureProjectSet();
+    const monitor = this.monitors.get(projectRoot) ?? null;
+    if (!monitor) {
+      throw new Error(`No live monitor found for ${projectRoot}`);
+    }
+
+    const snapshot = monitor.getSnapshot();
+    const agent = snapshot?.agents.find((entry) => entry.needsUser?.requestId === requestId) ?? null;
+    if (agent?.provenance === "claude" && agent.confidence === "typed" && agent.threadId) {
+      if (decision !== "accept" && decision !== "decline") {
+        throw new Error("Claude approval requests only support accept or decline from Agents Office.");
+      }
+      await respondToClaudeHookPermissionRequest(projectRoot, agent.threadId, requestId, decision);
+      await monitor.refreshNow();
+      await this.publish();
+      return;
+    }
+
+    await monitor.respondToApprovalRequest(requestId, decision);
+    await this.publish();
+  }
+
+  async respondToInputRequest(
+    projectRoot: string,
+    requestId: string,
+    answers: UserInputAnswers
+  ): Promise<void> {
+    await this.ensureProjectSet();
+    const monitor = this.monitors.get(projectRoot) ?? null;
+    if (!monitor) {
+      throw new Error(`No live monitor found for ${projectRoot}`);
+    }
+
+    const snapshot = monitor.getSnapshot();
+    const agent = snapshot?.agents.find((entry) => entry.needsUser?.requestId === requestId) ?? null;
+    if (agent?.provenance === "claude" && agent.confidence === "typed" && agent.threadId) {
+      if (agent.needsUser?.kind !== "input" || !Array.isArray(agent.needsUser.questions)) {
+        throw new Error("Claude input request is not actionable from Agents Office.");
+      }
+      await respondToClaudeHookInputRequest(projectRoot, agent.threadId, requestId, agent.needsUser.questions, answers);
+      await monitor.refreshNow();
+      await this.publish();
+      return;
+    }
+
+    await monitor.respondToInputRequest(requestId, answers);
+    await this.publish();
+  }
+
+  async sendThreadReply(projectRoot: string, threadId: string, text: string): Promise<void> {
+    await this.ensureProjectSet();
+    const monitor = this.monitors.get(projectRoot) ?? null;
+    if (!monitor) {
+      throw new Error(`No live monitor found for ${projectRoot}`);
+    }
+
+    await monitor.sendThreadReply(threadId, text);
+    await this.publish();
   }
 
   getIntegrationSettings(): IntegrationSettingsResponse {
@@ -315,4 +383,5 @@ export class FleetLiveService {
       emittedSharedError = emittedSharedError || Boolean(errorMessage);
     }
   }
+
 }

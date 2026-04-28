@@ -176,6 +176,21 @@ export interface AgentActivityEvent {
 export type AgentProvenanceSource = "codex" | "claude" | "cloud" | "cursor" | "presence" | "openclaw";
 export type AgentConfidence = "typed" | "inferred";
 
+export interface NeedsUserQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface NeedsUserQuestion {
+  header: string;
+  id: string;
+  question: string;
+  required?: boolean;
+  isOther?: boolean;
+  isSecret?: boolean;
+  options?: NeedsUserQuestionOption[] | null;
+}
+
 // Stores live approval/input waits from app-server.
 // Stores live approval/input waits from the app-server observer.
 export interface NeedsUserState {
@@ -187,6 +202,9 @@ export interface NeedsUserState {
   command?: string;
   cwd?: string;
   grantRoot?: string;
+  availableDecisions?: string[];
+  questions?: NeedsUserQuestion[];
+  networkApprovalContext?: Record<string, unknown> | null;
 }
 
 export interface DashboardEvent {

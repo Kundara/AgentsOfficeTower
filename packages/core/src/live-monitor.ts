@@ -4,16 +4,18 @@ import { watch, watchFile, unwatchFile, type FSWatcher } from "node:fs";
 import {
   type AppServerNotification,
   type AppServerServerRequest,
-  CodexAppServerClient
+  CodexAppServerClient,
+  type ToolRequestUserInputResponse
 } from "./app-server";
 import { listCloudTasks } from "./cloud";
 import { canonicalizeProjectPath, filterThreadsForProject } from "./project-paths";
-import { getRoomsFilePath } from "./room-config";
+import { getRoomsFilePath, resolveReadableRoomsFilePath } from "./room-config";
 import {
   buildDashboardSnapshotFromState,
   filterProjectCloudTasks,
   isOngoingThread,
-  parentThreadIdForThread
+  parentThreadIdForThread,
+  parseThreadSourceMeta
 } from "./snapshot";
 import { selectProjectThreadsWithParents } from "./local-thread-selection";
 import type {
@@ -32,6 +34,7 @@ import {
   collectPaths,
   extractThreadId,
   hasEquivalentRecentMessageEvent,
+  isFinalAgentMessageNotification,
   latestThreadAgentMessage,
   type PendingUserRequest,
   shouldMarkThreadLiveFromAppServerNotification,
@@ -75,6 +78,10 @@ const CLOUD_NOTE_PREFIX = "Codex cloud ";
 const STOPPED_THREAD_REMOVAL_BUFFER_MS = 1000;
 const NOT_LOADED_STOP_DEBOUNCE_MS = 3000;
 const DEFAULT_LOCAL_THREAD_LIMIT = 24;
+const APPROVAL_DECISIONS = new Set(["accept", "acceptForSession", "decline", "cancel"]);
+
+export type ApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
+export type UserInputAnswers = ToolRequestUserInputResponse["answers"];
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return await Promise.race([
@@ -83,9 +90,44 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
       const timer = setTimeout(() => {
         reject(new Error(`${label} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
+      timer.unref?.();
       promise.finally(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
     })
   ]);
+}
+
+function latestInProgressTurn(thread: CodexThread): CodexThread["turns"][number] | null {
+  return [...thread.turns].reverse().find((turn) => turn.status === "inProgress") ?? null;
+}
+
+function notificationTurn(params: unknown): CodexThread["turns"][number] | null {
+  const turn = asRecord(asRecord(params)?.turn);
+  const id = asString(turn?.id);
+  const status = asString(turn?.status);
+  if (!id || !status || !["completed", "interrupted", "failed", "inProgress"].includes(status)) {
+    return null;
+  }
+
+  return {
+    id,
+    status: status as CodexThread["turns"][number]["status"],
+    error: asRecord(turn?.error) as CodexThread["turns"][number]["error"],
+    items: Array.isArray(turn?.items) ? turn.items as CodexThread["turns"][number]["items"] : []
+  };
+}
+
+function upsertThreadTurn(thread: CodexThread, turn: CodexThread["turns"][number]): CodexThread {
+  const turns = thread.turns.filter((entry) => entry.id !== turn.id);
+  turns.push({
+    ...turn,
+    items: turn.items.length > 0
+      ? turn.items
+      : thread.turns.find((entry) => entry.id === turn.id)?.items ?? []
+  });
+  return {
+    ...thread,
+    turns
+  };
 }
 
 export interface ProjectLiveMonitorOptions {
@@ -103,7 +145,7 @@ export class ProjectLiveMonitor extends EventEmitter {
   private readonly threadReadTimers = new Map<string, NodeJS.Timeout>();
   private readonly threadPaths = new Map<string, string>();
   private readonly notes = new Set<string>();
-  private readonly roomConfigPath: string;
+  private roomConfigPath: string;
   private readonly pendingUserRequests = new Map<string, PendingUserRequest>();
   private readonly subscribedThreadIds = new Set<string>();
   private readonly ongoingThreadIds = new Set<string>();
@@ -139,6 +181,7 @@ export class ProjectLiveMonitor extends EventEmitter {
   async start(): Promise<void> {
     await this.ensureClient();
     await this.discoverThreads();
+    this.roomConfigPath = await resolveReadableRoomsFilePath(this.projectRoot);
     this.watchRoomsFile();
     this.discoveryTimer = setInterval(() => {
       void this.discoverThreads();
@@ -159,6 +202,137 @@ export class ProjectLiveMonitor extends EventEmitter {
       await this.refreshCloudTasks();
     }
     await this.discoverThreads();
+    await this.rebuildSnapshot();
+  }
+
+  async respondToApprovalRequest(requestId: string, decision: ApprovalDecision): Promise<void> {
+    if (!APPROVAL_DECISIONS.has(decision)) {
+      throw new Error(`Unsupported approval decision: ${decision}`);
+    }
+
+    await this.ensureClient();
+    if (!this.client) {
+      throw new Error("Local Codex app-server unavailable.");
+    }
+
+    const pending = this.pendingUserRequests.get(requestId) ?? null;
+    if (!pending) {
+      throw new Error("Approval request not found or already resolved.");
+    }
+    if (pending.kind !== "approval") {
+      throw new Error("Only approval requests are actionable from Agents Office right now.");
+    }
+
+    const numericRequestId = Number.parseInt(requestId, 10);
+    if (!Number.isFinite(numericRequestId)) {
+      throw new Error(`Invalid approval request id: ${requestId}`);
+    }
+
+    if (pending.responseKind === "legacyReview") {
+      this.client.respondToServerRequest(numericRequestId, {
+        decision: legacyReviewDecision(decision)
+      });
+    } else if (pending.responseKind === "permissionsApproval") {
+      if (decision !== "accept" && decision !== "acceptForSession") {
+        throw new Error("Permission-profile requests only support accept or acceptForSession from Agents Office.");
+      }
+      this.client.respondToServerRequest(numericRequestId, {
+        permissions: pending.requestedPermissions ?? { network: null, fileSystem: null },
+        scope: decision === "acceptForSession" ? "session" : "turn"
+      });
+    } else {
+      this.client.respondToApprovalRequest(numericRequestId, decision);
+    }
+    this.pendingUserRequests.delete(requestId);
+    this.markThreadLive(pending.threadId);
+    this.scheduleThreadRefresh(pending.threadId);
+    await this.rebuildSnapshot();
+  }
+
+  async sendThreadReply(threadId: string, text: string): Promise<void> {
+    const normalizedText = text.trim();
+    if (!normalizedText) {
+      throw new Error("Reply text is required.");
+    }
+
+    await this.ensureClient();
+    if (!this.client) {
+      throw new Error("Local Codex app-server unavailable.");
+    }
+
+    let thread = this.threads.get(threadId) ?? null;
+    if (!thread || thread.status.type === "notLoaded") {
+      thread = await this.client.resumeThread(threadId);
+      this.threads.set(threadId, thread);
+    }
+
+    const threadProjectRoot = canonicalizeProjectPath(thread.cwd) ?? thread.cwd;
+    if (!(threadProjectRoot === this.projectRoot || threadProjectRoot.startsWith(`${this.projectRoot}/`))) {
+      throw new Error("Thread does not belong to this project.");
+    }
+
+    const sourceKind = parseThreadSourceMeta(thread).sourceKind;
+    if (sourceKind !== "appServer") {
+      throw new Error(
+        "Browser replies are only supported for Codex app-server-owned threads. Continue this observed desktop/CLI thread in Codex instead."
+      );
+    }
+
+    let activeTurn = latestInProgressTurn(thread);
+    if (!activeTurn && thread.status.type === "active") {
+      thread = await this.client.readThread(threadId);
+      this.threads.set(threadId, thread);
+      activeTurn = latestInProgressTurn(thread);
+    }
+
+    if (activeTurn?.id) {
+      this.client.steerTurnNoWait(threadId, activeTurn.id, normalizedText);
+    } else if (thread.status.type === "active") {
+      throw new Error("Active Codex thread has no steerable turn yet. Wait for the live turn to load, then retry.");
+    } else {
+      this.client.startTurnNoWait(threadId, normalizedText, thread.cwd);
+    }
+
+    this.markThreadLive(threadId);
+    this.scheduleThreadRefresh(threadId);
+    this.scheduleThreadSubscriptions();
+    await this.rebuildSnapshot();
+  }
+
+  async respondToInputRequest(requestId: string, answers: UserInputAnswers): Promise<void> {
+    await this.ensureClient();
+    if (!this.client) {
+      throw new Error("Local Codex app-server unavailable.");
+    }
+
+    const pending = this.pendingUserRequests.get(requestId) ?? null;
+    if (!pending) {
+      throw new Error("Input request not found or already resolved.");
+    }
+    if (pending.kind !== "input") {
+      throw new Error("Only input requests can be answered with browser input.");
+    }
+
+    const normalizedAnswers = normalizeUserInputAnswers(pending.questions ?? [], answers);
+    const numericRequestId = Number.parseInt(requestId, 10);
+    if (!Number.isFinite(numericRequestId)) {
+      throw new Error(`Invalid input request id: ${requestId}`);
+    }
+
+    if (pending.responseKind === "mcpElicitation") {
+      this.client.respondToServerRequest(numericRequestId, {
+        action: "accept",
+        content: normalizeMcpElicitationContent(pending.requestedSchema ?? null, normalizedAnswers),
+        _meta: null
+      });
+    } else {
+      this.client.respondToToolRequestUserInput(numericRequestId, {
+        answers: normalizedAnswers
+      });
+    }
+    this.pendingUserRequests.delete(requestId);
+    this.markThreadLive(pending.threadId);
+    this.scheduleThreadRefresh(pending.threadId);
     await this.rebuildSnapshot();
   }
 
@@ -277,6 +451,27 @@ export class ProjectLiveMonitor extends EventEmitter {
         selectProjectThreadsWithParents(this.projectRoot, allThreads, this.localLimit)
           .map((thread) => [thread.id, thread])
       );
+      const loadedThreadIds = await this.client.listLoadedThreads().catch(() => []);
+      for (const threadId of loadedThreadIds) {
+        if (projectThreadsById.has(threadId) || trackedThreads.has(threadId)) {
+          continue;
+        }
+        let loadedThread: CodexThread | null = null;
+        try {
+          loadedThread = await this.client.readThread(threadId);
+        } catch {
+          loadedThread = null;
+        }
+        if (!loadedThread) {
+          continue;
+        }
+        const canonicalCwd = canonicalizeProjectPath(loadedThread.cwd) ?? loadedThread.cwd;
+        if (!(canonicalCwd === this.projectRoot || canonicalCwd.startsWith(`${this.projectRoot}/`))) {
+          continue;
+        }
+        projectThreadsById.set(loadedThread.id, loadedThread);
+        trackedThreads.set(loadedThread.id, loadedThread);
+      }
       const pendingAncestors = [...trackedThreads.values()];
       while (pendingAncestors.length > 0) {
         const thread = pendingAncestors.shift();
@@ -316,7 +511,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         [...trackedThreads.values()].map(async (listedThread) => {
           const known = this.threads.get(listedThread.id);
           if (!known || known.updatedAt !== listedThread.updatedAt || known.path !== listedThread.path) {
-            await this.refreshThread(listedThread.id);
+            await this.refreshThread(listedThread.id, listedThread);
             return;
           }
 
@@ -384,6 +579,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         !this.stoppedAtByThreadId.has(thread.id)
         && (
         thread.status.type === "active"
+        || isOngoingThread(thread)
         || (now - thread.updatedAt * 1000) <= ACTIVE_SUBSCRIPTION_WINDOW_MS
         )
       ))
@@ -463,6 +659,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       this.threadReadTimers.delete(threadId);
       void this.refreshThread(threadId);
     }, THREAD_READ_DEBOUNCE_MS);
+    timer.unref?.();
     this.threadReadTimers.set(threadId, timer);
   }
 
@@ -483,7 +680,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     this.threadPaths.set(threadId, path);
     try {
-      const watcher = watch(path, () => {
+      const watcher = watch(path, { persistent: false }, () => {
         this.scheduleThreadRefresh(threadId);
       });
       this.threadWatchers.set(threadId, watcher);
@@ -493,7 +690,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     watchFile(
       path,
-      { interval: FILE_WATCH_INTERVAL_MS },
+      { interval: FILE_WATCH_INTERVAL_MS, persistent: false },
       () => {
         this.scheduleThreadRefresh(threadId);
       }
@@ -574,7 +771,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     const threadId = extractThreadId(notification.params);
     if (threadId) {
-      const knownThread = this.threads.get(threadId) ?? null;
+      let knownThread = this.threads.get(threadId) ?? null;
       const wasOngoing =
         this.ongoingThreadIds.has(threadId)
         || (knownThread ? isOngoingThread(knownThread) : false);
@@ -582,6 +779,14 @@ export class ProjectLiveMonitor extends EventEmitter {
         ? asRecord(asRecord(notification.params)?.status)
         : null;
       const statusType = asString(status?.type);
+      const hasFinalAgentMessage = isFinalAgentMessageNotification(notification);
+      const turn = notification.method === "turn/started" || notification.method === "turn/completed"
+        ? notificationTurn(notification.params)
+        : null;
+      if (knownThread && turn) {
+        knownThread = upsertThreadTurn(knownThread, turn);
+        this.threads.set(threadId, knownThread);
+      }
       if (knownThread && notification.method === "thread/status/changed" && statusType) {
         const nextStatus =
           statusType === "active"
@@ -604,6 +809,8 @@ export class ProjectLiveMonitor extends EventEmitter {
       }
       if (shouldMarkThreadLiveFromAppServerNotification(notification.method, statusType)) {
         this.markThreadLive(threadId);
+      } else if (hasFinalAgentMessage) {
+        this.markThreadStopped(threadId);
       } else if (shouldMarkThreadStoppedFromAppServerNotification(notification.method, statusType)) {
         this.markThreadStopped(threadId);
       } else if (shouldStopDormantThreadAfterAppServerNotification({
@@ -682,7 +889,7 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.scheduleSnapshot();
   }
 
-  private async refreshThread(threadId: string): Promise<void> {
+  private async refreshThread(threadId: string, listedThread: CodexThread | null = null): Promise<void> {
     if (!this.client) {
       return;
     }
@@ -691,29 +898,44 @@ export class ProjectLiveMonitor extends EventEmitter {
       const wasHydrated = this.hydratedThreadIds.has(threadId);
       const hasLiveSubscription = this.subscribedThreadIds.has(threadId);
       const previousThread = this.threads.get(threadId) ?? null;
-      const thread = await this.client.readThread(threadId);
+      const readThread = await this.client.readThread(threadId);
+      const thread = listedThread
+        ? {
+          ...readThread,
+          status: listedThread.status,
+          updatedAt: Math.max(readThread.updatedAt, listedThread.updatedAt),
+          path: listedThread.path ?? readThread.path
+        }
+        : readThread;
       this.clearMatchingNote(`Thread refresh failed (${threadId.slice(0, 8)}):`);
       this.threads.set(threadId, thread);
       if (isOngoingThread(thread)) {
         this.markThreadLive(threadId);
       } else if (previousThread && isOngoingThread(previousThread)) {
+        const nextMessage = latestThreadAgentMessage(thread);
+        const hasFinalAnswer = nextMessage?.phase === "final_answer";
         const pendingNotLoadedStop =
           thread.status.type === "notLoaded" && this.pendingNotLoadedStopTimers.has(threadId);
-        if (!pendingNotLoadedStop) {
+        if (pendingNotLoadedStop) {
+          // Wait for the scheduled reread confirmation before releasing a desk.
+        } else if (thread.status.type === "systemError" || hasFinalAnswer) {
           this.markThreadStopped(threadId);
+        } else {
+          this.markThreadLive(threadId);
         }
       }
       const previousMessage = previousThread ? latestThreadAgentMessage(previousThread) : null;
       const nextMessage = latestThreadAgentMessage(thread);
       if (
         wasHydrated
-        && !hasLiveSubscription
         && nextMessage
         && (
           nextMessage.itemId !== previousMessage?.itemId
           || nextMessage.text !== previousMessage?.text
         )
       ) {
+        // Even subscribed desktop sessions can miss a terminal message notification;
+        // rereads backfill the toast event while equivalent live events still dedupe.
         const messageEvent = buildThreadReadAgentMessageEvent({ projectRoot: this.projectRoot }, thread);
         if (messageEvent && !hasEquivalentRecentMessageEvent(this.recentEvents, messageEvent)) {
           this.pushRecentEvent(messageEvent);
@@ -735,7 +957,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
   private watchRoomsFile(): void {
     try {
-      this.roomWatcher = watch(this.roomConfigPath, () => {
+      this.roomWatcher = watch(this.roomConfigPath, { persistent: false }, () => {
         this.scheduleSnapshot();
       });
     } catch {
@@ -744,7 +966,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     watchFile(
       this.roomConfigPath,
-      { interval: FILE_WATCH_INTERVAL_MS },
+      { interval: FILE_WATCH_INTERVAL_MS, persistent: false },
       () => {
         this.scheduleSnapshot();
       }
@@ -777,6 +999,7 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.snapshotTimer = setTimeout(() => {
       void this.rebuildSnapshot();
     }, SNAPSHOT_DEBOUNCE_MS);
+    this.snapshotTimer.unref?.();
   }
 
   private async rebuildSnapshot(): Promise<void> {
@@ -826,11 +1049,13 @@ export class ProjectLiveMonitor extends EventEmitter {
     if (removalTimer) {
       clearTimeout(removalTimer);
     }
-    this.threadRemovalTimers.set(threadId, setTimeout(() => {
+    const timer = setTimeout(() => {
       this.threadRemovalTimers.delete(threadId);
       this.removeThread(threadId);
       this.scheduleSnapshot();
-    }, RECENT_DONE_GRACE_MS + STOPPED_THREAD_REMOVAL_BUFFER_MS));
+    }, RECENT_DONE_GRACE_MS + STOPPED_THREAD_REMOVAL_BUFFER_MS);
+    timer.unref?.();
+    this.threadRemovalTimers.set(threadId, timer);
   }
 
   private clearPendingNotLoadedStop(threadId: string): void {
@@ -851,6 +1076,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       this.pendingNotLoadedStopTimers.delete(threadId);
       void this.confirmDormantNotLoadedThread(threadId);
     }, NOT_LOADED_STOP_DEBOUNCE_MS);
+    timer.unref?.();
     this.pendingNotLoadedStopTimers.set(threadId, timer);
   }
 
@@ -871,4 +1097,115 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.markThreadStopped(threadId);
     this.scheduleSnapshot();
   }
+}
+
+function normalizeUserInputAnswers(
+  questions: NeedsUserState["questions"],
+  rawAnswers: UserInputAnswers
+): UserInputAnswers {
+  if (!rawAnswers || typeof rawAnswers !== "object" || Array.isArray(rawAnswers)) {
+    throw new Error("Input answers must be an object keyed by question id.");
+  }
+
+  const questionsById = new Map((questions ?? []).map((question) => [question.id, question]));
+  const requiredQuestions = [...questionsById.values()].filter((question) => question.required !== false);
+  const answerEntries = Object.entries(rawAnswers);
+  if (requiredQuestions.length > 0 && answerEntries.length === 0) {
+    throw new Error("Answer at least one required question before sending input.");
+  }
+
+  const normalized: UserInputAnswers = {};
+  for (const [questionId, answer] of answerEntries) {
+    const question = questionsById.get(questionId) ?? null;
+    const answerRecord = typeof answer === "object" && answer && !Array.isArray(answer)
+      ? answer as { answers?: unknown }
+      : null;
+    const values = Array.isArray(answerRecord?.answers)
+      ? answerRecord.answers
+        .map((value) => typeof value === "string" ? value.trim() : "")
+        .filter((value) => value.length > 0)
+      : [];
+
+    if (values.length === 0) {
+      throw new Error(`Question ${questionId} requires at least one answer.`);
+    }
+
+    if (question?.options && question.isOther !== true) {
+      const allowed = new Set(question.options.map((option) => option.label));
+      const invalid = values.find((value) => !allowed.has(value));
+      if (invalid) {
+        throw new Error(`Question ${question.header} contains an unsupported answer.`);
+      }
+    }
+
+    normalized[questionId] = { answers: values };
+  }
+
+  if (questionsById.size > 0) {
+    for (const question of questionsById.values()) {
+      if (question.required === false) {
+        continue;
+      }
+      if (!normalized[question.id]) {
+        throw new Error(`Question ${question.header} is still unanswered.`);
+      }
+    }
+  }
+
+  return normalized;
+}
+
+function legacyReviewDecision(decision: ApprovalDecision): string {
+  switch (decision) {
+    case "accept":
+      return "approved";
+    case "acceptForSession":
+      return "approved_for_session";
+    case "decline":
+      return "denied";
+    case "cancel":
+      return "abort";
+  }
+}
+
+function normalizeMcpElicitationContent(
+  requestedSchema: Record<string, unknown> | null,
+  answers: UserInputAnswers
+): Record<string, unknown> {
+  const content: Record<string, unknown> = {};
+  const properties =
+    requestedSchema && typeof requestedSchema.properties === "object" && requestedSchema.properties && !Array.isArray(requestedSchema.properties)
+      ? requestedSchema.properties as Record<string, unknown>
+      : {};
+
+  for (const [questionId, answer] of Object.entries(answers)) {
+    const values = answer.answers;
+    const firstValue = values[0] ?? "";
+    const propertySchema =
+      typeof properties[questionId] === "object" && properties[questionId] && !Array.isArray(properties[questionId])
+        ? properties[questionId] as Record<string, unknown>
+        : null;
+    if (propertySchema?.type === "number" || propertySchema?.type === "integer") {
+      const numeric = Number(firstValue);
+      if (!Number.isFinite(numeric)) {
+        throw new Error(`Question ${questionId} requires a numeric answer.`);
+      }
+      content[questionId] = propertySchema.type === "integer" ? Math.trunc(numeric) : numeric;
+      continue;
+    }
+    if (propertySchema?.type === "boolean") {
+      if (firstValue !== "true" && firstValue !== "false") {
+        throw new Error(`Question ${questionId} requires true or false.`);
+      }
+      content[questionId] = firstValue === "true";
+      continue;
+    }
+    if (propertySchema?.type === "array") {
+      content[questionId] = values;
+      continue;
+    }
+    content[questionId] = firstValue;
+  }
+
+  return content;
 }

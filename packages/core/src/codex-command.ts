@@ -47,6 +47,7 @@ export function buildCodexCommandCandidates(input: {
   };
 
   pushCandidate(input.codexCliPath, "CODEX_CLI_PATH override");
+  pushCandidate(input.platform === "win32" ? "codex.cmd" : "codex", "Codex CLI on PATH");
   if (input.platform === "win32") {
     const windowsWslCommand = input.windowsWslCommand ?? null;
     pushCandidate(
@@ -60,7 +61,6 @@ export function buildCodexCommandCandidates(input: {
       windowsWslCommand
     );
   }
-  pushCandidate(input.platform === "win32" ? "codex.cmd" : "codex", "Codex CLI on PATH");
 
   if (input.platform === "darwin") {
     for (const bundlePath of input.macAppBundlePaths ?? []) {

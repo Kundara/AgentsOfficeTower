@@ -3,6 +3,13 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 
 import { XMLParser } from "fast-xml-parser";
 
+import {
+  getLegacyProjectStorageDir,
+  getLegacyProjectStoragePath,
+  getProjectStorageDir,
+  getProjectStoragePath,
+  resolveReadableProjectStoragePath
+} from "./project-storage";
 import type { RoomConfig, RoomDefinition } from "./types";
 
 export const CONFIG_DIRECTORY = ".codex-agents";
@@ -119,23 +126,51 @@ async function discoverSuggestedRooms(projectRoot: string): Promise<RoomDefiniti
 }
 
 export function getConfigDir(projectRoot: string): string {
-  return join(projectRoot, CONFIG_DIRECTORY);
+  return getProjectStorageDir(projectRoot);
+}
+
+export function getLegacyConfigDir(projectRoot: string): string {
+  return getLegacyProjectStorageDir(projectRoot);
 }
 
 export function getRoomsFilePath(projectRoot: string): string {
-  return join(getConfigDir(projectRoot), ROOMS_FILE_NAME);
+  return getProjectStoragePath(projectRoot, ROOMS_FILE_NAME);
+}
+
+export async function resolveReadableRoomsFilePath(projectRoot: string): Promise<string> {
+  return resolveReadableProjectStoragePath(projectRoot, ROOMS_FILE_NAME);
+}
+
+export function getLegacyRoomsFilePath(projectRoot: string): string {
+  return getLegacyProjectStoragePath(projectRoot, ROOMS_FILE_NAME);
 }
 
 export function getRosterFilePath(projectRoot: string): string {
-  return join(getConfigDir(projectRoot), ROSTER_FILE_NAME);
+  return getProjectStoragePath(projectRoot, ROSTER_FILE_NAME);
+}
+
+export async function resolveReadableRosterFilePath(projectRoot: string): Promise<string> {
+  return resolveReadableProjectStoragePath(projectRoot, ROSTER_FILE_NAME);
+}
+
+export function getLegacyRosterFilePath(projectRoot: string): string {
+  return getLegacyProjectStoragePath(projectRoot, ROSTER_FILE_NAME);
 }
 
 export function getPresenceFilePath(projectRoot: string): string {
-  return join(getConfigDir(projectRoot), PRESENCE_FILE_NAME);
+  return getProjectStoragePath(projectRoot, PRESENCE_FILE_NAME);
+}
+
+export async function resolveReadablePresenceFilePath(projectRoot: string): Promise<string> {
+  return resolveReadableProjectStoragePath(projectRoot, PRESENCE_FILE_NAME);
+}
+
+export function getLegacyPresenceFilePath(projectRoot: string): string {
+  return getLegacyProjectStoragePath(projectRoot, PRESENCE_FILE_NAME);
 }
 
 export async function loadRoomConfig(projectRoot: string): Promise<RoomConfig> {
-  const filePath = getRoomsFilePath(projectRoot);
+  const filePath = await resolveReadableRoomsFilePath(projectRoot);
   try {
     const xml = await readFile(filePath, "utf8");
     return parseRoomDocument(filePath, xml);

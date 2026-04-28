@@ -33,13 +33,60 @@ async function buildLocalAgents(
       if (!readThreads) {
         return threads;
       }
-      return Promise.all(threads.map((thread) => client.readThread(thread.id)));
+      return Promise.all(threads.map(async (thread) =>
+        mergeListedThreadMetadata(await client.readThread(thread.id), thread)
+      ));
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     notes.push(`Local Codex app-server unavailable: ${message}`);
     return [];
   }
+}
+
+function mergeListedThreadMetadata(thread: CodexThread, listedThread: CodexThread): CodexThread {
+  return {
+    ...thread,
+    status: listedThread.status,
+    updatedAt: Math.max(thread.updatedAt, listedThread.updatedAt),
+    path: listedThread.path ?? thread.path
+  };
+}
+
+function latestAgentMessagePhase(thread: CodexThread): string | null {
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  for (const turn of [...turns].reverse()) {
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    for (const item of [...items].reverse()) {
+      if (!item || item.type !== "agentMessage") {
+        continue;
+      }
+      return typeof item.phase === "string" ? item.phase : null;
+    }
+  }
+  return null;
+}
+
+function recentWorkloadEventTimeMs(events: DashboardEvent[], latestMessagePhase: string | null): number {
+  const hasNonFinalMessage = Boolean(latestMessagePhase && latestMessagePhase !== "final_answer");
+  return events.reduce((latest, event) => {
+    if (!event || event.kind === "status") {
+      return latest;
+    }
+    if (event.kind === "message" && event.phase === "completed") {
+      return latest;
+    }
+    const isWorkloadEvent = hasNonFinalMessage
+      || event.phase === "started"
+      || event.phase === "updated"
+      || event.phase === "waiting"
+      || event.phase === "failed";
+    if (!isWorkloadEvent) {
+      return latest;
+    }
+    const createdAtMs = Date.parse(event.createdAt);
+    return Number.isFinite(createdAtMs) ? Math.max(latest, createdAtMs) : latest;
+  }, 0);
 }
 
 export async function buildCodexLocalAdapterSnapshotFromState(input: {
@@ -85,6 +132,10 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
           recentThreadEvents
         );
         const syncedMessageSummary = syncSummaryWithLatestThreadMessage(thread, summary, recentThreadEvents);
+        const updatedAtMs = Math.max(
+          thread.updatedAt * 1000,
+          recentWorkloadEventTimeMs(recentThreadEvents, latestAgentMessagePhase(thread))
+        );
         const stoppedAtMs =
           inferredOngoing ? null
           : input.stoppedAtByThreadId
@@ -113,7 +164,7 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
           cwd: thread.cwd,
           roomId: null,
           appearance,
-          updatedAt: new Date(thread.updatedAt * 1000).toISOString(),
+          updatedAt: new Date(updatedAtMs).toISOString(),
           stoppedAt: stoppedAtMs ? new Date(stoppedAtMs).toISOString() : null,
           paths: syncedMessageSummary.summary.paths,
           activityEvent: syncedMessageSummary.summary.activityEvent,

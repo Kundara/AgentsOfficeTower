@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { parseAppServerMessage } = require("../dist/app-server.js");
+const { CodexAppServerClient, parseAppServerMessage } = require("../dist/app-server.js");
 const {
   buildDashboardEventFromAppServerMessage,
   buildRolloutHookEvent,
@@ -102,6 +102,314 @@ test("command approval requests become typed approval events", () => {
   assert.deepEqual(event.availableDecisions, ["accept", "decline"]);
 });
 
+test("approval responses use the current app-server response envelope", async () => {
+  const sent = [];
+  const client = Object.create(CodexAppServerClient.prototype);
+  client.send = (payload) => {
+    sent.push(payload);
+  };
+  client.respondToApprovalRequest(41, "accept");
+  assert.deepEqual(sent, [{ id: 41, result: { decision: "accept" } }]);
+});
+
+test("monitor routes command approval decisions through the app-server approval helper", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const capturedResponses = [];
+
+  monitor.client = {
+    respondToApprovalRequest(requestId, decision) {
+      capturedResponses.push({ requestId, decision });
+    }
+  };
+  monitor.threads.set("thr_123", {
+    ...sampleThread(),
+    id: "thr_123",
+    cwd: "/tmp/CodexAgentsOffice"
+  });
+  monitor.scheduleThreadRefresh = () => {};
+  monitor.rebuildSnapshot = async () => {};
+
+  monitor.handleAppServerServerRequest({
+    id: 41,
+    method: "item/commandExecution/requestApproval",
+    params: {
+      threadId: "thr_123",
+      turnId: "turn_9",
+      itemId: "item_cmd",
+      command: "npm publish",
+      cwd: "/tmp/CodexAgentsOffice",
+      reason: "needs publish access"
+    }
+  });
+
+  await monitor.respondToApprovalRequest("41", "accept");
+
+  assert.deepEqual(capturedResponses, [
+    {
+      requestId: 41,
+      decision: "accept"
+    }
+  ]);
+});
+
+test("turn replies send Codex UserInput text_elements required by current app-server", async () => {
+  const capturedRequests = [];
+  const client = Object.create(CodexAppServerClient.prototype);
+  client.request = async (method, params) => {
+    capturedRequests.push({ method, params });
+    return method === "turn/start"
+      ? { turn: { id: "turn_123", status: "inProgress", items: [], error: null } }
+      : { turnId: "turn_123" };
+  };
+
+  await client.startTurn("thr_123", "Follow up", "/tmp/CodexAgentsOffice");
+  await client.steerTurn("thr_123", "turn_123", "Nudge");
+
+  assert.deepEqual(capturedRequests, [
+    {
+      method: "turn/start",
+      params: {
+        threadId: "thr_123",
+        input: [{ type: "text", text: "Follow up", text_elements: [] }],
+        cwd: "/tmp/CodexAgentsOffice"
+      }
+    },
+    {
+      method: "turn/steer",
+      params: {
+        threadId: "thr_123",
+        input: [{ type: "text", text: "Nudge", text_elements: [] }],
+        expectedTurnId: "turn_123"
+      }
+    }
+  ]);
+});
+
+test("turn replies can dispatch without waiting for slow app-server turn responses", () => {
+  const capturedFrames = [];
+  const client = Object.create(CodexAppServerClient.prototype);
+  client.nextId = 11;
+  client.send = (payload) => {
+    capturedFrames.push(payload);
+  };
+
+  assert.equal(client.startTurnNoWait("thr_123", "Follow up", "/tmp/CodexAgentsOffice"), 11);
+  assert.equal(client.steerTurnNoWait("thr_123", "turn_123", "Nudge"), 12);
+
+  assert.deepEqual(capturedFrames, [
+    {
+      id: 11,
+      method: "turn/start",
+      params: {
+        threadId: "thr_123",
+        input: [{ type: "text", text: "Follow up", text_elements: [] }],
+        cwd: "/tmp/CodexAgentsOffice"
+      }
+    },
+    {
+      id: 12,
+      method: "turn/steer",
+      params: {
+        threadId: "thr_123",
+        input: [{ type: "text", text: "Nudge", text_elements: [] }],
+        expectedTurnId: "turn_123"
+      }
+    }
+  ]);
+});
+
+test("thread replies hydrate active listed threads before steering", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const listedThread = {
+    ...sampleThread(),
+    id: "thr_active",
+    source: "appServer",
+    status: { type: "active", activeFlags: [] },
+    turns: []
+  };
+  const hydratedThread = {
+    ...listedThread,
+    turns: [
+      {
+        id: "turn_live",
+        status: "inProgress",
+        error: null,
+        items: []
+      }
+    ]
+  };
+  const capturedCalls = [];
+  monitor.threads.set(listedThread.id, listedThread);
+  monitor.client = {
+    readThread: async (threadId) => {
+      capturedCalls.push(["readThread", threadId]);
+      return hydratedThread;
+    },
+    steerTurnNoWait: (threadId, turnId, text) => {
+      capturedCalls.push(["steerTurnNoWait", threadId, turnId, text]);
+    },
+    startTurnNoWait: () => {
+      capturedCalls.push(["startTurnNoWait"]);
+      throw new Error("startTurnNoWait should not run for an active thread");
+    }
+  };
+
+  await monitor.sendThreadReply(listedThread.id, "Keep going");
+
+  assert.deepEqual(capturedCalls.slice(0, 2), [
+    ["readThread", listedThread.id],
+    ["steerTurnNoWait", listedThread.id, "turn_live", "Keep going"]
+  ]);
+  assert.equal(capturedCalls.some(([method]) => method === "startTurnNoWait"), false);
+});
+
+test("thread replies refuse to start detached turns for active threads without a steerable turn", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const activeThread = {
+    ...sampleThread(),
+    id: "thr_active",
+    source: "appServer",
+    status: { type: "active", activeFlags: [] },
+    turns: []
+  };
+  const capturedCalls = [];
+  monitor.threads.set(activeThread.id, activeThread);
+  monitor.client = {
+    readThread: async (threadId) => {
+      capturedCalls.push(["readThread", threadId]);
+      return activeThread;
+    },
+    steerTurnNoWait: () => {
+      capturedCalls.push(["steerTurnNoWait"]);
+    },
+    startTurnNoWait: () => {
+      capturedCalls.push(["startTurnNoWait"]);
+    }
+  };
+
+  await assert.rejects(
+    () => monitor.sendThreadReply(activeThread.id, "Do not split this thread"),
+    /no steerable turn/
+  );
+  assert.deepEqual(capturedCalls, [["readThread", activeThread.id]]);
+});
+
+test("thread replies start idle app-server-owned threads without waiting for a slow turn response", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const observedThread = {
+    ...sampleThread(),
+    id: "thr_app_server_idle",
+    source: "appServer",
+    status: { type: "idle" },
+    turns: []
+  };
+  const capturedCalls = [];
+  monitor.threads.set(observedThread.id, observedThread);
+  monitor.client = {
+    readThread: async () => {
+      capturedCalls.push(["readThread"]);
+      throw new Error("readThread should not run for a loaded idle thread");
+    },
+    steerTurnNoWait: () => capturedCalls.push(["steerTurnNoWait"]),
+    startTurnNoWait: (threadId, text, cwd) => capturedCalls.push(["startTurnNoWait", threadId, text, cwd])
+  };
+
+  await monitor.sendThreadReply(observedThread.id, "Start this idle thread");
+
+  assert.deepEqual(capturedCalls, [
+    ["startTurnNoWait", observedThread.id, "Start this idle thread", observedThread.cwd]
+  ]);
+});
+
+test("thread replies reject observed desktop threads instead of creating side turns", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const observedThread = {
+    ...sampleThread(),
+    id: "thr_desktop",
+    source: "vscode",
+    status: { type: "idle" },
+    turns: []
+  };
+  const capturedCalls = [];
+  monitor.threads.set(observedThread.id, observedThread);
+  monitor.client = {
+    readThread: async () => {
+      capturedCalls.push(["readThread"]);
+      throw new Error("readThread should not run for a loaded observed thread");
+    },
+    steerTurnNoWait: () => capturedCalls.push(["steerTurnNoWait"]),
+    startTurnNoWait: () => capturedCalls.push(["startTurnNoWait"])
+  };
+
+  await assert.rejects(
+    () => monitor.sendThreadReply(observedThread.id, "This should stay in Codex desktop"),
+    /app-server-owned threads/
+  );
+  assert.deepEqual(capturedCalls, []);
+});
+
+test("turn started notifications keep active reply steering attached to the live turn", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const activeThread = {
+    ...sampleThread(),
+    id: "thr_active",
+    source: "appServer",
+    status: { type: "active", activeFlags: [] },
+    turns: []
+  };
+  const capturedCalls = [];
+  monitor.threads.set(activeThread.id, activeThread);
+  monitor.handleAppServerNotification({
+    method: "turn/started",
+    params: {
+      threadId: activeThread.id,
+      turn: {
+        id: "turn_live",
+        status: "inProgress",
+        error: null,
+        items: []
+      }
+    }
+  });
+  monitor.client = {
+    readThread: async () => {
+      capturedCalls.push(["readThread"]);
+      throw new Error("readThread should not be needed after turn/started");
+    },
+    steerTurnNoWait: (threadId, turnId, text) => {
+      capturedCalls.push(["steerTurnNoWait", threadId, turnId, text]);
+    },
+    startTurnNoWait: () => {
+      capturedCalls.push(["startTurnNoWait"]);
+      throw new Error("startTurnNoWait should not run for an active thread");
+    }
+  };
+
+  await monitor.sendThreadReply(activeThread.id, "Nudge the live turn");
+
+  assert.deepEqual(capturedCalls, [
+    ["steerTurnNoWait", activeThread.id, "turn_live", "Nudge the live turn"]
+  ]);
+});
+
 test("file change completion events keep final file metadata", () => {
   const event = buildDashboardEventFromAppServerMessage(
     { projectRoot: "/tmp/CodexAgentsOffice" },
@@ -129,6 +437,7 @@ test("file change completion events keep final file metadata", () => {
 
   assert.equal(event.kind, "fileChange");
   assert.equal(event.phase, "completed");
+  assert.equal(event.title, "File edited");
   assert.equal(event.itemId, "item_file");
   assert.equal(event.action, "edited");
   assert.equal(event.linesAdded, 12);
@@ -186,16 +495,282 @@ test("resolved requests clear as completed events when pending request context i
   assert.equal(event.title, "Input resolved");
 });
 
+test("requestUserInput server requests preserve typed questions and allow optional answers to be omitted", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const capturedResponses = [];
+  const scheduledThreadRefreshes = [];
+
+  monitor.client = {
+    respondToToolRequestUserInput(requestId, response) {
+      capturedResponses.push({ requestId, response });
+    }
+  };
+  monitor.threads.set("thr_123", {
+    ...sampleThread(),
+    id: "thr_123",
+    cwd: "/tmp/CodexAgentsOffice"
+  });
+  monitor.scheduleThreadRefresh = (threadId) => {
+    scheduledThreadRefreshes.push(threadId);
+  };
+  monitor.rebuildSnapshot = async () => {};
+
+  monitor.handleAppServerServerRequest({
+    id: 77,
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId: "thr_123",
+      turnId: "turn_9",
+      itemId: "item_prompt",
+      questions: [
+        {
+          header: "Mode",
+          id: "mode",
+          question: "Choose a mode",
+          options: [
+            { label: "Fast", description: "Finish quickly" },
+            { label: "Safe", description: "Take the safer path" }
+          ]
+        },
+        {
+          header: "Notes",
+          id: "notes",
+          question: "Add any extra context",
+          required: false,
+          isOther: true,
+          options: null
+        }
+      ]
+    }
+  });
+
+  const pending = monitor.pendingUserRequests.get("77");
+  assert.equal(pending.kind, "input");
+  assert.equal(pending.questions.length, 2);
+  assert.equal(pending.questions[0].header, "Mode");
+  assert.equal(pending.questions[0].options[0].label, "Fast");
+  assert.equal(pending.questions[1].required, false);
+  assert.equal(pending.questions[1].isOther, true);
+
+  await monitor.respondToInputRequest("77", {
+    mode: { answers: ["Fast"] }
+  });
+
+  assert.deepEqual(capturedResponses, [
+    {
+      requestId: 77,
+      response: {
+        answers: {
+          mode: { answers: ["Fast"] }
+        }
+      }
+    }
+  ]);
+  assert.deepEqual(scheduledThreadRefreshes, ["thr_123", "thr_123"]);
+  assert.equal(monitor.pendingUserRequests.has("77"), false);
+});
+
+test("requestUserInput accepts an empty answer payload when every question is optional", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const capturedResponses = [];
+
+  monitor.client = {
+    respondToToolRequestUserInput(requestId, response) {
+      capturedResponses.push({ requestId, response });
+    }
+  };
+  monitor.threads.set("thr_123", {
+    ...sampleThread(),
+    id: "thr_123",
+    cwd: "/tmp/CodexAgentsOffice"
+  });
+  monitor.scheduleThreadRefresh = () => {};
+  monitor.rebuildSnapshot = async () => {};
+
+  monitor.handleAppServerServerRequest({
+    id: 78,
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId: "thr_123",
+      turnId: "turn_10",
+      itemId: "item_prompt_optional",
+      questions: [
+        {
+          header: "Notes",
+          id: "notes",
+          question: "Add any extra context",
+          required: false,
+          isOther: true,
+          options: null
+        }
+      ]
+    }
+  });
+
+  await monitor.respondToInputRequest("78", {});
+
+  assert.deepEqual(capturedResponses, [
+    {
+      requestId: 78,
+      response: {
+        answers: {}
+      }
+    }
+  ]);
+});
+
+test("MCP elicitation requests become actionable typed input and respond with MCP content", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const capturedResponses = [];
+
+  monitor.client = {
+    respondToServerRequest(requestId, response) {
+      capturedResponses.push({ requestId, response });
+    }
+  };
+  monitor.threads.set("thr_123", {
+    ...sampleThread(),
+    id: "thr_123",
+    cwd: "/tmp/CodexAgentsOffice"
+  });
+  monitor.scheduleThreadRefresh = () => {};
+  monitor.rebuildSnapshot = async () => {};
+
+  monitor.handleAppServerServerRequest({
+    id: 79,
+    method: "mcpServer/elicitation/request",
+    params: {
+      threadId: "thr_123",
+      turnId: "turn_11",
+      serverName: "test-server",
+      mode: "form",
+      message: "Pick deployment settings",
+      requestedSchema: {
+        type: "object",
+        required: ["environment", "dryRun"],
+        properties: {
+          environment: {
+            type: "string",
+            title: "Environment",
+            enum: ["staging", "production"]
+          },
+          dryRun: {
+            type: "boolean",
+            title: "Dry run"
+          },
+          retries: {
+            type: "integer",
+            title: "Retries"
+          }
+        }
+      }
+    }
+  });
+
+  const pending = monitor.pendingUserRequests.get("79");
+  assert.equal(pending.kind, "input");
+  assert.equal(pending.responseKind, "mcpElicitation");
+  assert.deepEqual(pending.questions.map((question) => question.id), ["environment", "dryRun", "retries"]);
+  assert.deepEqual(pending.questions[1].options.map((option) => option.label), ["true", "false"]);
+
+  await monitor.respondToInputRequest("79", {
+    environment: { answers: ["staging"] },
+    dryRun: { answers: ["true"] },
+    retries: { answers: ["2"] }
+  });
+
+  assert.deepEqual(capturedResponses, [
+    {
+      requestId: 79,
+      response: {
+        action: "accept",
+        content: {
+          environment: "staging",
+          dryRun: true,
+          retries: 2
+        },
+        _meta: null
+      }
+    }
+  ]);
+});
+
+test("permission-profile approvals grant the requested permissions for the chosen scope", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const capturedResponses = [];
+  const permissions = {
+    network: { enabled: true },
+    fileSystem: { read: ["/tmp/CodexAgentsOffice"], write: ["/tmp/CodexAgentsOffice"], globScanMaxDepth: 3 }
+  };
+
+  monitor.client = {
+    respondToServerRequest(requestId, response) {
+      capturedResponses.push({ requestId, response });
+    }
+  };
+  monitor.threads.set("thr_123", {
+    ...sampleThread(),
+    id: "thr_123",
+    cwd: "/tmp/CodexAgentsOffice"
+  });
+  monitor.scheduleThreadRefresh = () => {};
+  monitor.rebuildSnapshot = async () => {};
+
+  monitor.handleAppServerServerRequest({
+    id: 80,
+    method: "item/permissions/requestApproval",
+    params: {
+      threadId: "thr_123",
+      turnId: "turn_12",
+      itemId: "item_permissions",
+      cwd: "/tmp/CodexAgentsOffice",
+      reason: "Need broader workspace access",
+      permissions
+    }
+  });
+
+  const pending = monitor.pendingUserRequests.get("80");
+  assert.equal(pending.kind, "approval");
+  assert.equal(pending.responseKind, "permissionsApproval");
+  assert.deepEqual(pending.availableDecisions, ["accept", "acceptForSession"]);
+
+  await monitor.respondToApprovalRequest("80", "acceptForSession");
+
+  assert.deepEqual(capturedResponses, [
+    {
+      requestId: 80,
+      response: {
+        permissions,
+        scope: "session"
+      }
+    }
+  ]);
+});
+
 test("observer unload notifications do not masquerade as thread completion", () => {
   assert.equal(shouldMarkThreadLiveFromAppServerNotification("thread/status/changed", "active"), true);
-  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("turn/completed"), true);
+  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("turn/completed"), false);
+  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("turn/interrupted"), false);
+  assert.equal(shouldMarkThreadStoppedFromAppServerNotification("turn/failed"), true);
   assert.equal(shouldMarkThreadStoppedFromAppServerNotification("thread/archived"), true);
   assert.equal(shouldMarkThreadStoppedFromAppServerNotification("thread/closed"), false);
   assert.equal(shouldMarkThreadStoppedFromAppServerNotification("thread/status/changed", "idle"), false);
   assert.equal(shouldMarkThreadStoppedFromAppServerNotification("thread/status/changed", "notLoaded"), false);
 });
 
-test("thread closed marks an ongoing monitored thread stopped immediately", () => {
+test("thread closed does not stop an ongoing monitored thread by itself", () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
     includeCloud: false
@@ -212,6 +787,36 @@ test("thread closed marks an ongoing monitored thread stopped immediately", () =
     method: "thread/closed",
     params: {
       threadId: thread.id
+    }
+  });
+
+  assert.equal(monitor.ongoingThreadIds.has(thread.id), true);
+  assert.equal(monitor.stoppedAtByThreadId.has(thread.id), false);
+});
+
+test("final agent message notification stops an ongoing monitored thread", () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const thread = {
+    ...sampleThread(),
+    status: { type: "active" },
+    updatedAt: Math.floor(Date.now() / 1000)
+  };
+
+  monitor.threads.set(thread.id, thread);
+  monitor.markThreadLive(thread.id);
+  monitor.handleAppServerNotification({
+    method: "item/completed",
+    params: {
+      threadId: thread.id,
+      item: {
+        id: "item_final",
+        type: "agentMessage",
+        phase: "final_answer",
+        text: "Done."
+      }
     }
   });
 
@@ -309,6 +914,203 @@ test("pending notLoaded cooldown suppresses an early stop during reread confirma
   assert.equal(monitor.ongoingThreadIds.has(thread.id), true);
   assert.equal(monitor.stoppedAtByThreadId.has(thread.id), false);
   monitor.clearPendingNotLoadedStop(thread.id);
+});
+
+test("completed non-final turns keep the monitored thread live until final answer", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const thread = {
+    ...sampleThread(),
+    status: { type: "active" },
+    updatedAt: Math.floor(Date.now() / 1000)
+  };
+  const completedCommentaryThread = {
+    ...thread,
+    status: { type: "idle" },
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_commentary",
+            type: "agentMessage",
+            text: "I am still working through the next step.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(thread.id, thread);
+  monitor.markThreadLive(thread.id);
+  monitor.client = {
+    readThread: async () => completedCommentaryThread
+  };
+
+  await monitor.refreshThread(thread.id);
+
+  assert.equal(monitor.ongoingThreadIds.has(thread.id), true);
+  assert.equal(monitor.stoppedAtByThreadId.has(thread.id), false);
+});
+
+test("read-only Codex hydration preserves fresh list timestamps for current workload seating", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const staleUpdatedAt = Math.floor((Date.now() - 15 * 60 * 1000) / 1000);
+  const freshUpdatedAt = Math.floor(Date.now() / 1000);
+  const listedThread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: freshUpdatedAt,
+    turns: []
+  };
+  const hydratedThread = {
+    ...listedThread,
+    updatedAt: staleUpdatedAt,
+    turns: [
+      {
+        id: "turn_current",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            id: "item_status",
+            type: "agentMessage",
+            text: "Working through the live seating check",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(listedThread.id, {
+    ...listedThread,
+    updatedAt: staleUpdatedAt
+  });
+  monitor.client = {
+    readThread: async () => hydratedThread
+  };
+
+  await monitor.refreshThread(listedThread.id, listedThread);
+  await monitor.rebuildSnapshot();
+
+  const snapshot = monitor.getSnapshot();
+  const agent = snapshot.agents.find((entry) => entry.threadId === listedThread.id);
+  assert.ok(agent);
+  assert.equal(agent.updatedAt, new Date(freshUpdatedAt * 1000).toISOString());
+  assert.equal(agent.state, "thinking");
+  assert.equal(agent.isCurrent, true);
+});
+
+test("fresh interrupted read-only turns without a final answer remain live through text gaps", () => {
+  const freshThread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor((Date.now() - 30_000) / 1000),
+    turns: [
+      {
+        id: "turn_current",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            id: "item_cmd",
+            type: "commandExecution",
+            command: "npm test",
+            cwd: "/tmp/CodexAgentsOffice",
+            status: "completed"
+          }
+        ]
+      }
+    ]
+  };
+  const staleThread = {
+    ...freshThread,
+    updatedAt: Math.floor((Date.now() - 4 * 60 * 1000) / 1000)
+  };
+
+  assert.equal(summariseThread(freshThread).state, "validating");
+  assert.equal(isCurrentWorkloadAgent({
+    source: "local",
+    state: "validating",
+    updatedAt: new Date(freshThread.updatedAt * 1000).toISOString(),
+    stoppedAt: null,
+    isOngoing: false,
+    statusText: "notLoaded",
+    liveSubscription: "readOnly",
+    needsUser: null,
+    activityEvent: null,
+    latestMessage: ""
+  }), true);
+  assert.equal(summariseThread(staleThread).state, "done");
+  assert.equal(isCurrentWorkloadAgent({
+    source: "local",
+    state: "done",
+    updatedAt: new Date(staleThread.updatedAt * 1000).toISOString(),
+    stoppedAt: null,
+    isOngoing: false,
+    statusText: "notLoaded",
+    liveSubscription: "readOnly",
+    needsUser: null,
+    activityEvent: null,
+    latestMessage: "Finished"
+  }), false);
+});
+
+test("fresh unhydrated notLoaded desktop thread after a user prompt reserves a desk briefly", async () => {
+  const promptedThread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor(Date.now() / 1000),
+    turns: []
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    threads: [promptedThread],
+    events: [],
+    stoppedAtByThreadId: new Map(),
+    ongoingThreadIds: new Set()
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.statusText, "notLoaded");
+  assert.equal(agent.state, "planning");
+  assert.equal(agent.isOngoing, true);
+  assert.equal(agent.isCurrent, true);
+});
+
+test("stale unhydrated notLoaded desktop threads cool out of desk seating", async () => {
+  const staleThread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor((Date.now() - 15 * 1000) / 1000),
+    turns: []
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    threads: [staleThread],
+    events: [],
+    stoppedAtByThreadId: new Map(),
+    ongoingThreadIds: new Set()
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.statusText, "notLoaded");
+  assert.equal(agent.state, "done");
+  assert.equal(agent.isOngoing, false);
+  assert.equal(agent.isCurrent, false);
 });
 
 test("tool call server requests become typed tool events", () => {
@@ -437,7 +1239,8 @@ test("thread rereads synthesize assistant message events for desktop replies", (
   assert.equal(event.method, "thread/read/agentMessage");
   assert.equal(event.threadId, "thr_123");
   assert.equal(event.itemId, "item_msg_1");
-  assert.equal(event.phase, "completed");
+  assert.equal(event.phase, "updated");
+  assert.equal(event.title, "Reply updated");
   assert.equal(event.confidence, "typed");
   assert.equal(event.detail, "Preview bridge reply from the desktop thread.");
 });
@@ -825,6 +1628,58 @@ test("quiet subscribed local thinking agents remain current through a longer Cod
   assert.equal(isCurrentWorkloadAgent(agent, now), true);
 });
 
+test("fresh local command activity reserves a desk even when Codex reports idle", () => {
+  const now = Date.parse("2026-03-24T00:00:00.000Z");
+  const agent = {
+    id: "thr_live_command",
+    label: "Live command worker",
+    source: "local",
+    sourceKind: "vscode",
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "idle",
+    role: null,
+    nickname: null,
+    isSubagent: false,
+    state: "done",
+    detail: "npm run build",
+    cwd: "/tmp/ProjectAtlas",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-23T23:59:20.000Z",
+    stoppedAt: null,
+    paths: ["/tmp/ProjectAtlas"],
+    activityEvent: {
+      type: "commandExecution",
+      action: "ran",
+      path: "/tmp/ProjectAtlas",
+      title: "npm run build",
+      isImage: false
+    },
+    latestMessage: "Still working",
+    threadId: "thr_live_command",
+    taskId: null,
+    resumeCommand: "codex resume thr_live_command",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "subscribed"
+  };
+
+  assert.equal(isCurrentWorkloadAgent(agent, now), true);
+
+  assert.equal(isCurrentWorkloadAgent({
+    ...agent,
+    id: "thr_readonly_command",
+    threadId: "thr_readonly_command",
+    liveSubscription: "readOnly"
+  }, now), true);
+});
+
 test("quiet subscribed local desk-live work still settles after the longer pause window", () => {
   const now = Date.parse("2026-03-24T00:00:00.000Z");
   const agent = {
@@ -1129,7 +1984,7 @@ test("stopped local live states settle to done immediately for rendering", () =>
   assert.equal(snapshot.agents[0].isCurrent, true);
 });
 
-test("recently finished top-level threads stay current for a 5 second cooldown window", () => {
+test("recently finished top-level threads stay current for a 3 second cooldown window", () => {
   const agent = {
     id: "thr_done_top_level",
     label: "Finished lead",
@@ -1164,8 +2019,8 @@ test("recently finished top-level threads stay current for a 5 second cooldown w
     liveSubscription: "readOnly"
   };
 
-  assert.equal(isCurrentWorkloadAgent(agent, Date.parse("2026-03-24T00:00:04.999Z")), true);
-  assert.equal(isCurrentWorkloadAgent(agent, Date.parse("2026-03-24T00:00:05.001Z")), false);
+  assert.equal(isCurrentWorkloadAgent(agent, Date.parse("2026-03-24T00:00:02.999Z")), true);
+  assert.equal(isCurrentWorkloadAgent(agent, Date.parse("2026-03-24T00:00:03.001Z")), false);
 });
 
 test("recently finished subagents leave current workload faster than top-level threads", () => {
@@ -1883,6 +2738,57 @@ test("fresh completed reply events keep final reply activity without reactivatin
   assert.equal(agent.detail, "Final reply text");
 });
 
+test("fresh non-final subscribed events refresh stale desktop thread clocks for desk seating", async () => {
+  const staleLiveThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor((Date.now() - 12 * 60 * 60 * 1000) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            id: "item_msg",
+            type: "agentMessage",
+            text: "Still checking the live desk seating.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+
+  const snapshot = await buildDashboardSnapshotFromState({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    threads: [staleLiveThread],
+    events: [
+      {
+        id: "evt_file",
+        source: "codex",
+        confidence: "typed",
+        threadId: "thr_123",
+        createdAt: new Date().toISOString(),
+        method: "rollout/apply_patch/completed",
+        kind: "fileChange",
+        phase: "completed",
+        title: "File edited",
+        detail: "/tmp/CodexAgentsOffice/CHANGELOG.md",
+        path: "/tmp/CodexAgentsOffice/CHANGELOG.md"
+      }
+    ],
+    subscribedThreadIds: new Set(["thr_123"]),
+    stoppedAtByThreadId: new Map(),
+    ongoingThreadIds: new Set()
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.equal(agent.isCurrent, true);
+  assert.equal(agent.liveSubscription, "subscribed");
+});
+
 test("shared cloud rate-limit notes stay human readable", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
@@ -2168,6 +3074,72 @@ test("initial discovery still subscribes active older threads before their first
   assert.equal(agent.detail, "Still working before the next delta lands.");
 });
 
+test("initial discovery recovers a loaded current thread missing from cwd-scoped thread/list", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false,
+    localLimit: 1
+  });
+  const now = Math.floor(Date.now() / 1000);
+  const listedIdleThread = {
+    ...sampleThread(),
+    id: "thr_listed_idle",
+    status: { type: "idle" },
+    updatedAt: now,
+    turns: []
+  };
+  const loadedCurrentThread = {
+    ...sampleThread(),
+    id: "thr_loaded_current",
+    status: { type: "notLoaded" },
+    updatedAt: now - 7200,
+    turns: [
+      {
+        id: "turn_live",
+        status: "inProgress",
+        error: null,
+        items: [
+          {
+            id: "item_commentary",
+            type: "agentMessage",
+            text: "Still active after restart.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+
+  const resumedThreadIds = [];
+  const readThreadIds = [];
+  monitor.client = {
+    listThreads: async () => [listedIdleThread],
+    listLoadedThreads: async () => [loadedCurrentThread.id],
+    resumeThread: async (threadId) => {
+      resumedThreadIds.push(threadId);
+    },
+    readThread: async (threadId) => {
+      readThreadIds.push(threadId);
+      if (threadId === loadedCurrentThread.id) {
+        return loadedCurrentThread;
+      }
+      return listedIdleThread;
+    }
+  };
+
+  await monitor.discoverThreads();
+  await monitor.rebuildSnapshot();
+
+  const snapshot = monitor.getSnapshot();
+  const agent = snapshot.agents.find((entry) => entry.threadId === loadedCurrentThread.id);
+  assert.ok(agent);
+  assert.ok(readThreadIds.includes(loadedCurrentThread.id));
+  assert.ok(resumedThreadIds.includes(loadedCurrentThread.id));
+  assert.equal(agent.liveSubscription, "subscribed");
+  assert.equal(agent.isCurrent, true);
+  assert.equal(agent.state, "thinking");
+});
+
 test("discoverThreads scopes app-server thread listing to the current project root", async () => {
   const projectRoot = "/tmp/CodexAgentsOffice";
   const monitor = new ProjectLiveMonitor({
@@ -2201,7 +3173,139 @@ test("discoverThreads scopes app-server thread listing to the current project ro
   ]);
 });
 
-test("hydrated thread rereads do not synthesize assistant replies as fresh events", async () => {
+test("recent read-only notLoaded local replies stay current briefly after restart recovery stalls", () => {
+  const now = Date.now();
+  const agent = {
+    id: "thr_recent_restart",
+    label: "run the app",
+    source: "local",
+    sourceKind: "vscode",
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "notLoaded",
+    role: null,
+    nickname: null,
+    isSubagent: false,
+    state: "done",
+    detail: "Reply completed",
+    cwd: "/tmp/CodexAgentsOffice",
+    roomId: null,
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: new Date(now - 2 * 1000).toISOString(),
+    stoppedAt: null,
+    paths: ["/tmp/CodexAgentsOffice"],
+    activityEvent: { type: "agentMessage" },
+    latestMessage: "Still working after restart.",
+    threadId: "thr_recent_restart",
+    taskId: null,
+    resumeCommand: "codex resume thr_recent_restart",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly",
+    network: null
+  };
+
+  assert.equal(isCurrentWorkloadAgent(agent, now), true);
+  assert.equal(isCurrentWorkloadAgent({
+    ...agent,
+    updatedAt: new Date(now - 5 * 1000).toISOString()
+  }, now), false);
+});
+
+test("applyCurrentWorkloadState keeps the newest top-level notLoaded reply current when restart recovery leaves no local current agent", () => {
+  const now = Date.now();
+  const snapshot = {
+    projectRoot: "/tmp/CodexAgentsOffice",
+    projectLabel: "Codex Agents Office",
+    projectIdentity: null,
+    generatedAt: new Date(now).toISOString(),
+    rooms: { version: 1, generated: true, filePath: "", rooms: [] },
+    cloudTasks: [],
+    events: [],
+    notes: [],
+    agents: [
+      {
+        id: "thr_old",
+        label: "Older thread",
+        source: "local",
+        sourceKind: "vscode",
+        parentThreadId: null,
+        depth: 0,
+        isCurrent: false,
+        isOngoing: false,
+        statusText: "notLoaded",
+        role: null,
+        nickname: null,
+        isSubagent: false,
+        state: "idle",
+        detail: "Older reply",
+        cwd: "/tmp/CodexAgentsOffice",
+        roomId: null,
+        appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+        updatedAt: new Date(now - 5 * 60 * 1000).toISOString(),
+        stoppedAt: null,
+        paths: ["/tmp/CodexAgentsOffice"],
+        activityEvent: { type: "agentMessage" },
+        latestMessage: "Older reply",
+        threadId: "thr_old",
+        taskId: null,
+        resumeCommand: "codex resume thr_old",
+        url: null,
+        git: null,
+        provenance: "codex",
+        confidence: "typed",
+        needsUser: null,
+        liveSubscription: "readOnly",
+        network: null
+      },
+      {
+        id: "thr_recent",
+        label: "Recent thread",
+        source: "local",
+        sourceKind: "vscode",
+        parentThreadId: null,
+        depth: 0,
+        isCurrent: false,
+        isOngoing: false,
+        statusText: "notLoaded",
+        role: null,
+        nickname: null,
+        isSubagent: false,
+        state: "done",
+        detail: "Recent reply",
+        cwd: "/tmp/CodexAgentsOffice",
+        roomId: null,
+        appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+        updatedAt: new Date(now - 2 * 1000).toISOString(),
+        stoppedAt: null,
+        paths: ["/tmp/CodexAgentsOffice"],
+        activityEvent: { type: "agentMessage" },
+        latestMessage: "Recent reply",
+        threadId: "thr_recent",
+        taskId: null,
+        resumeCommand: "codex resume thr_recent",
+        url: null,
+        git: null,
+        provenance: "codex",
+        confidence: "typed",
+        needsUser: null,
+        liveSubscription: "readOnly",
+        network: null
+      }
+    ]
+  };
+
+  const result = applyCurrentWorkloadState(snapshot, now);
+  assert.equal(result.agents.find((agent) => agent.id === "thr_recent")?.isCurrent, true);
+  assert.equal(result.agents.find((agent) => agent.id === "thr_old")?.isCurrent, false);
+});
+
+test("hydrated thread rereads backfill fresh assistant replies when live events are missing", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
     includeCloud: false
@@ -2281,7 +3385,8 @@ test("hydrated thread rereads do not synthesize assistant replies as fresh event
   await monitor.refreshThread(listedThread.id);
 
   const messageEvents = monitor.recentEvents.filter((event) => event.method === "thread/read/agentMessage");
-  assert.equal(messageEvents.length, 0);
+  assert.equal(messageEvents.length, 1);
+  assert.equal(messageEvents[0].detail, "Fresh follow-up reply");
 });
 
 test("unsubscribed thread rereads still synthesize assistant replies as fallback events", async () => {

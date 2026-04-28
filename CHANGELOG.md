@@ -9,21 +9,88 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added browser-side approval actions to the durable `Needs You` queue for local typed Codex approval waits, allowing `Accept`, `Always for session`, `Decline`, and `Cancel` decisions to flow back through the app-server observer connection.
+- Added inline `Needs You` input composers for local typed Codex `tool/requestUserInput` waits, sending schema-backed `answers` payloads back through the app-server observer connection.
+- Added inline `Reply` composers to app-server-owned local typed Codex session cards, routing follow-up text through app-server so idle threads resume with `turn/start` and active turns accept nudges through `turn/steer`.
+- Added hook-backed Claude `Needs You` actions for typed `PermissionRequest` and schema-backed `Elicitation` waits, using a local response-file bridge plus synthetic queue-clearing sidecar markers so browser approvals and form answers can flow back into the Agent SDK hooks.
+- Added scene-click thread cards for local Codex agents, exposing recent typed thread history directly from the office map with reply controls only when the thread is owned by the same app-server connection.
+
 - Added a machine-local image-only hat selector in the browser `Settings` popup, with a first `no hat` option and immediate application across the local player's visible agents.
 - Added hat manifest entries under `packages/web/src/config/pixel-office-manifest.json`, including shared default scale/offset values plus per-hat override hooks for outlier sprites.
 
 ### Changed
 
+- Changed Codex app-server reply payloads to match the current generated schema, including `text_elements: []` on text turn inputs, `{ decision }` approval responses, MCP elicitation responses, and permission-profile approval responses.
+- Changed Claude Agent SDK integration to `@anthropic-ai/claude-agent-sdk` `^0.2.118` and added typed coverage for newer hook events including `PostToolBatch`, `UserPromptExpansion`, `PermissionDenied`, and `TaskCreated`.
+- Changed Cursor cloud API requests to prefer the documented Bearer-token authorization path before falling back to the older Basic-auth compatibility path.
+- Changed per-project Agents Office state so room configs, appearance rosters, presence snapshots, Claude hook bridges, and Cursor hook sidecars now write into machine-local Agents Office user data keyed by project root instead of creating or mutating `.codex-agents/` inside the tracked project.
+- Changed the browser `Needs You` input cards to show required/optional question labels, per-request completion summaries, clearer missing-answer guidance, and explicit clear actions so multi-question prompts read more like structured forms than raw field dumps.
+- Changed the browser chat surfaces so scene thread cards, reply composers, and `Needs You` input cards use compact message bubbles, grouped controls, and consistent field styling instead of inline raw form fragments.
+- Changed scene agent chat so the thread panel is a compact right-edge floor dock with slide motion instead of an avatar-follow card, suppressing hover tooltips while open and staging resting agents slightly left/down until close or send.
+- Changed scene chat refresh handling so an already-open thread panel is reconciled in place instead of recreated, with keyed message bubbles, bottom-follow scrolling, new-message-only animation, eight-line `Show more` clamps, and toast-inspired command/icon styling.
+- Changed the browser `Needs You` queue so app-server-owned local Codex input waits without schema-backed questions can open the inline reply composer directly, while observed desktop, VS Code, and CLI threads keep the raw `codex resume ...` fallback.
+- Changed local Codex workstation seating so fresh read-only turns without a final answer stay desk-seated through quiet text gaps and only release after the finished-workstation cooldown.
+- Changed the browser office scene so recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events now raise short above-head Pixi badges (`START`, `DONE`, `STOP`, `FAIL`) in addition to the existing toast treatment.
+- Changed the browser office animation so waiting desk work now pulses its cue, blocked desk work gets a subtle shake treatment, and validating desk work uses a brighter pulsing workstation glow instead of the generic busy glow.
+- Changed seated active desk animation so planning, scanning, editing, running, validating, and delegating work now use distinct micro-motion profiles instead of one shared bob.
+- Changed scene movement so visible room changes now render as a doorway exit in the old room plus a doorway entry in the destination room, instead of retargeting one live sprite across rooms.
+- Changed motion reuse so tiny same-slot refresh deltas now keep the settled target instead of triggering unnecessary reroutes on ordinary polling.
+- Changed scene event visibility so recent typed plan, command, file/diff, and tool-call events now raise short animated `PLAN`, `RUN`, `EDIT`, and `TOOL` cues near the actor in addition to their toast treatment.
+- Changed request lifecycle visibility so typed approval waits, input waits, and request resolution now raise short animated `WAIT`, `ASK`, and `OK` cues near the actor in addition to the durable queue and toast surfaces.
+- Changed activity/request cue rendering so those chips now include mode-specific icon adornments and icon-side motion instead of relying on color and text alone.
+- Changed workstation activity rendering so recent typed command, edit, tool, approval, input, and resolve events now also raise short mode-specific desk-side Pixi effects instead of depending only on floating cue chips.
+- Changed request workstation effects so approval waits now reflect decision breadth/type and input waits now reflect question and required-answer load instead of reusing one generic approval/input pulse.
+- Added a `/scene-effects-audit` browser route that runs the normal client bundle against mocked typed approval/input fleet data so the new request-specific scene effects can be visually checked on demand.
+- Changed the scene audit fixture so mocked request threads now include typed message history, making the new click-open thread cards visually inspectable on the audit route as well.
 - Changed shared-room fleet payloads so each peer now broadcasts its selected `hatId`, letting merged remote agents keep their own hat styling instead of collapsing to the viewer's local cosmetic choice.
 - Changed avatar rendering so hats are now attached to the same Pixi motion/depth pipeline as the base avatar sprite, keeping hats aligned through seating, walking, fading, and workstation occlusion.
+- Changed Codex scene thread panels to read-only history only, removing browser Send fields and local resume/launch/copy controls from the in-scene agent chat.
 
 ### Fixed
 
+- Fixed browser `Needs You` approval actions for current Codex app-server builds by sending approval responses as structured JSON-RPC results instead of bare decision strings.
+- Fixed browser Codex replies for current app-server builds by sending the required `text_elements` field on text turn inputs.
+- Fixed browser chat action submissions so a stalled local app-server request times out with a visible error instead of leaving the composer stuck in a permanent sending state.
+- Fixed browser Codex reply submissions so desktop thread attach/reread/steer work gets a longer dedicated timeout instead of aborting after the generic 15-second action budget.
+- Fixed browser Codex reply routing so observed desktop, VS Code, and CLI threads are rejected server-side instead of attempting `turn/start` / `turn/steer` from the observer connection and hanging or creating a detached side turn.
+- Fixed command and file activity cue styling so the in-scene `RUN` / `EDIT` chips use the existing dark pixel toast palette instead of a bright rounded badge that looked unrelated to the rest of the office UI.
+- Fixed scene chat opening so clicking an agent renders the thread panel immediately and repeated clicks on the same character keep it open instead of toggling it closed.
+- Fixed local Codex currentness when `thread/list` reports a fresh desktop-backed thread but `thread/read` returns a stale transcript timestamp, preserving the fresher list timestamp for workload classification.
+- Fixed local Codex threads that are still producing fresh non-final command/tool/file activity so they reserve a workstation even when the observer is temporarily `readOnly` or the app-server top-level thread status temporarily reads `idle`.
+- Fixed desktop reread fallback messages so commentary stays `Reply updated` and only `final_answer` assistant messages become `Reply completed`, preventing active work from starting the finished-workstation cooldown too early.
+- Fixed subscribed desktop final replies that update `latestMessage` but miss the live message event by letting hydrated rereads backfill a deduped `thread/read/agentMessage` toast event.
+- Fixed active Codex workstation release so `thread/closed`, non-final `turn/completed`, and non-final `turn/interrupted` no longer send an active desktop session back to the rec area between assistant progress updates.
+- Fixed desktop `notLoaded` prompt handling so fresh unhydrated rows reserve a desk for about 8 seconds after the user types, while stale finished fallback rows use the 3-second cooldown instead of keeping completed threads looking active for about a minute.
+- Fixed Codex request parsing so MCP elicitation requests, permission-profile approval requests, and legacy approval request names surface as typed waiting or blocked work instead of disappearing from the durable queue.
+- Fixed Windows Codex runtime candidate ordering so a native `codex.cmd` on `PATH` is tried before WSL fallbacks, matching the documented CLI-first behavior.
+- Fixed workspace discovery path normalization so Codex desktop wrapper roots like `/mnt/c/.../app/resources/\\?\F:\...`, nested drive roots like `/some/project/F:/...`, and Windows extended-drive roots like `\\?\F:\...` now collapse onto the real WSL project root instead of showing duplicate empty workspace floors.
+- Fixed existing project setups after the storage move by keeping legacy project-local `.codex-agents` room, roster, and hook files readable as a fallback until they are regenerated in user data.
+- Fixed local Codex `tool/requestUserInput` validation so questions marked `required: false` can actually be omitted from the submitted `answers` payload, matching the browser queue and Claude hook behavior.
 - Fixed browser message toast timing so typed Codex reply events now surface from `snapshot.events` immediately, instead of waiting for per-agent summary fields like `latestMessage` to catch up first.
+- Fixed browser message toast replacement scope so a new reply toast now clears older toasts only for that same agent/thread, instead of wiping unrelated active toasts globally.
 - Fixed browser workstation seating so local Codex sessions in a `waiting` state now still count as desk-live during read-only or transient `notLoaded` gaps, preventing in-progress agents from dropping into the rec room between subagent/input waits and the next reply chunk.
+- Fixed browser Codex replies for app-server-owned active threads so the monitor rereads missing turn state and uses `turn/steer`, refusing to fall back to `turn/start` when no live turn is steerable instead of creating a detached side turn.
 - Fixed shared-room self-duplication so the browser view and VS Code panel now reuse the same machine-local multiplayer device identity, preventing the same user's Codex agents from reappearing as remote peers when both clients join the same room.
+- Fixed exit-scene continuity so doorway departure ghosts now survive scene refreshes long enough to finish their walk-and-fade instead of getting reset mid-exit.
 
 ### Docs
+
+- Updated integration-hook and reference docs with the verified current Codex app-server request/response payloads, newer Claude hook-event coverage, and Cursor cloud Bearer-auth behavior.
+- Updated AGENTS, README, product spec, architecture notes, integration hooks, and self-development guidance to describe the move from project-local `.codex-agents` writes to machine-local per-project Agents Office storage.
+- Updated the README, architecture notes, product spec, integration hooks, and self-development roadmap to document actionable local approval handling in the browser `Needs You` queue and to narrow the remaining gap to general input/reply flows.
+- Updated the README, architecture notes, product spec, integration hooks, and self-development roadmap to document actionable local `tool/requestUserInput` handling in the browser `Needs You` queue.
+- Updated the README, architecture notes, product spec, and self-development roadmap to document the new scene-native turn lifecycle badges and to promote them into the acceptance checks.
+- Updated the docs to record the verified `tool/requestUserInput` response schema, queue submit gating, and the end-to-end mock app-server validation path used to confirm the browser action flow.
+- Updated the README, architecture notes, product spec, integration hooks, and self-development roadmap to document that scene thread panels are read-only history, while inline browser Codex replies remain limited to app-server-owned non-scene controls.
+- Updated the README, architecture notes, product spec, integration hooks, and self-development roadmap to document the new hook-backed Claude browser action path and to clarify that Cursor remains read-only.
+- Updated the README, product spec, architecture notes, and self-development roadmap to document doorway-based room-change motion, preserved exit ghosts across refreshes, and the tighter no-op motion reuse rule.
+- Updated the README, product spec, architecture notes, and self-development roadmap to document the new typed `PLAN`/`RUN`/`EDIT`/`TOOL` activity cues and their acceptance checks.
+- Updated the README, product spec, architecture notes, and self-development roadmap to document the new typed `WAIT`/`ASK`/`OK` request lifecycle cues and their acceptance checks.
+- Updated the README, product spec, architecture notes, and self-development roadmap to document the richer icon-and-motion treatment for typed activity/request cues.
+- Updated the README, product spec, architecture notes, and self-development roadmap to document the new workstation-side non-text activity effects and their acceptance checks.
+- Updated the README, product spec, architecture notes, and self-development roadmap to document the new structured request signatures inside workstation-side approval/input effects.
+- Updated the README, architecture notes, and self-development checks to document the new `/scene-effects-audit` visual verification route.
+- Updated AGENTS, README, architecture notes, integration hooks, product spec, and self-development checks to document read-only Codex desktop seating through quiet text gaps, `thread/list` freshness preservation, the 8-second unhydrated prompt reserve, and the 3-second top-level desk cooldown.
 
 - Updated the README, product spec, architecture notes, and self-development checks to describe the new hat selector, config-driven hat placement, and shared-room hat propagation.
 
@@ -35,8 +102,17 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed restarted live Codex recovery so startup now seeds project discovery from the app-server loaded-thread set and continues subscribing older in-progress threads, preventing the office from settling on historical rows while missing the actually current desktop thread.
+- Fixed current-workload bridging for recent local `notLoaded` Codex replies after restart so a stalled `thread/resume` attach does not immediately cool the just-active desktop thread out of the office before recovery has a chance to catch up.
+- Fixed the browser workstation policy so those same restart-bridged current local `notLoaded` replies stay seated on-desk for the quiet-live window instead of dropping into rec-room behavior after the short done cooldown.
+- Fixed local Codex workstation seating so threads that are still in progress stay at their desks through quiet gaps between messages instead of bouncing into the rec area until the next event arrives.
+- Fixed busy-session classification so ongoing local Codex threads stay treated as active in session-oriented browser views even when transport status briefly lags behind the underlying in-progress thread.
 - Fixed Windows-hosted Codex runtime selection so mixed Windows+WSL setups prefer the WSL-backed Codex CLI when available, keeping the VS Code panel aligned with browser-visible WSL Codex activity instead of silently falling back to a narrower Windows-local view.
 - Fixed Windows-backed WSL project identity matching so the VS Code embedded office no longer splits the same repo across mixed-case `/mnt/...` paths, which had been hiding Codex activity on a duplicate floor and could make local Cursor sessions appear twice.
+
+### Changed
+
+- Changed the file-size guard so generated `packages/web/src/client/app-runtime.ts` no longer blocks the release gate as if it were hand-authored source, while the remaining oversized transitional web runtime/style files now use explicit temporary ceilings instead of one blanket limit.
 - Fixed the VS Code embedded server launch on Windows+WSL so it runs inside a login shell with `CODEX_HOME` preserved, restoring Codex session visibility in the activity-bar panel.
 - Fixed `/api/server-meta` and home-route startup timing so those endpoints return immediately from the in-memory project list instead of blocking on project discovery.
 - Fixed live monitor startup so the first snapshot is no longer blocked on thread subscription sync, reducing empty-office warmup stalls.
@@ -160,7 +236,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed typed Codex `Needs You` handling so approval waits surface as blocked desk work, input waits surface as waiting work, and browser workstation seating now respects those visible states instead of treating every `status.type = active` thread as desk-active.
 - Fixed browser desk motion so `running` and `validating` workers stay in the seated workstation pose, and current local desk-live work now gets a short grace window through transient `status.type = notLoaded` gaps instead of bouncing into the rec area between live updates.
 - Fixed Codex local live-monitor stop detection so `thread/status/changed -> notLoaded` now waits about 3 seconds and confirms with a reread before clearing ongoing desk work, reducing brief unload/reload desk bounce between live messages.
-- Fixed long quiet Codex pauses between reply chunks so subscribed or transiently `notLoaded` desk-live local agents now remain current and workstation-seated for about 3 minutes before they cool into rec-room behavior.
+- Fixed long quiet Codex pauses between reply chunks so recent non-final, subscribed, or transiently `notLoaded` desk-live local agents now remain current and workstation-seated for about 3 minutes before they cool into rec-room behavior.
 - Fixed Pixi workstation reveal flicker so newly occupied desks once again carry their `enteringReveal` flags through the assembled scene runtime, and desk returns now blink based on workstation slot transitions instead of only firing for brand-new agent keys.
 - Fixed browser scene continuity so current local threads remain visible in the map while they transition between desk and rec-area placement, and active local `idle`/`done` wobbles now get a short desk settle window instead of making the agent and workstation pop out between updates.
 - Fixed rec-room rendering so only the 4 most recent top-level resting lead sessions occupy the rec seats, preventing older hidden resters and subagents from wrapping onto duplicate sofa coordinates.
@@ -186,7 +262,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed Codex local startup hydration so the first full `thread/read` no longer replays preloaded assistant history as a fresh live reply, while later rereads still surface genuinely new replies.
 - Fixed local Cursor active/inactive inference so stale `selectedComposerIds` no longer outrank the most recently focused composer when tab order and actual chat focus diverge.
 - Fixed Cursor message toasts so user-authored prompts no longer render as if the Cursor agent said them.
-- Fixed workstation occupancy so waiting leads cool down into the rec area while finished top-level threads keep a 5-second desk cooldown for final-message readability before returning to rec-area idle visibility.
+- Fixed workstation occupancy so waiting leads stay on-desk while finished top-level threads keep a 3-second desk cooldown for final-message readability before returning to rec-area idle visibility.
 - Fixed workload currentness so future-skewed source timestamps no longer keep finished local threads marked active indefinitely, while genuinely live local sessions still remain visible.
 - Fixed Codex local startup hydration so the first fleet snapshot now waits for initial `thread/resume` hydration and immediately rereads resumed threads, preventing an actively replying desktop thread from appearing as stale `readOnly/notLoaded` rec-room idle after a web-server restart.
 - Fixed Codex local thread discovery so `status.type = active` sessions are always kept in the tracked startup/refresh set even when newer idle threads would otherwise consume the recent-thread limit, preventing a real active desktop session from appearing only after its first fresh update.

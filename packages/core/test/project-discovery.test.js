@@ -5,6 +5,7 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 
 const {
+  canonicalizeProjectPath,
   codexProjectDiscoveryThreadLimit,
   discoverCodexConfiguredProjects,
   extractCodexConfiguredProjectRoots,
@@ -49,9 +50,35 @@ trust_level = "trusted"
   );
 });
 
+test("canonicalizeProjectPath unwraps Codex desktop wrapper cwd values", () => {
+  assert.equal(
+    canonicalizeProjectPath("/mnt/c/Program Files/WindowsApps/OpenAI.Codex_26.409.1734.0_x64__2p2nqsd0c76g0/app/resources/\\\\?\\F:\\mnt\\f\\AI\\CodexAgentsOffice"),
+    "/mnt/f/AI/CodexAgentsOffice"
+  );
+  assert.equal(
+    canonicalizeProjectPath("/mnt/c/Program Files/WindowsApps/OpenAI.Codex_26.409.1734.0_x64__2p2nqsd0c76g0/app/resources/?/F:/mnt/f/AI/CodexAgentsOffice"),
+    "/mnt/f/AI/CodexAgentsOffice"
+  );
+  assert.equal(
+    canonicalizeProjectPath("\\\\?\\F:\\Unity\\ChickenCoop"),
+    "/mnt/f/Unity/ChickenCoop"
+  );
+  assert.equal(
+    canonicalizeProjectPath("/mnt/f/AI/CodexAgentsOffice/F:/Unity/ChickenCoop"),
+    "/mnt/f/Unity/ChickenCoop"
+  );
+});
+
 test("sameProjectPath treats Windows-backed WSL paths as case-insensitive", () => {
   assert.equal(
     sameProjectPath("/mnt/f/AI/CodexAgentsOffice", "/mnt/f/ai/codexagentsoffice"),
+    true
+  );
+  assert.equal(
+    sameProjectPath(
+      "/mnt/c/Program Files/WindowsApps/OpenAI.Codex_26.409.1734.0_x64__2p2nqsd0c76g0/app/resources/\\\\?\\F:\\mnt\\f\\AI\\CodexAgentsOffice",
+      "/mnt/f/AI/CodexAgentsOffice"
+    ),
     true
   );
   assert.equal(

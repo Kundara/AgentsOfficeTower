@@ -6,7 +6,9 @@ const ACTIVE_PRESENCE_WINDOW_MS = 3 * 60 * 1000;
 const ACTIVE_CLOUD_WINDOW_MS = 8 * 60 * 60 * 1000;
 const ACTIVE_FRESH_LOCAL_WINDOW_MS = 30 * 1000;
 const QUIET_LIVE_LOCAL_WINDOW_MS = 3 * 60 * 1000;
-export const RECENT_DONE_GRACE_MS = 5 * 1000;
+export const RECENT_DONE_GRACE_MS = 3 * 1000;
+// Read-only notLoaded fallback is only a bridge for the final toast/readability cooldown.
+const RECENT_NOT_LOADED_RECOVERY_WINDOW_MS = RECENT_DONE_GRACE_MS;
 const SUBAGENT_DONE_GRACE_MS = 1200;
 const FUTURE_TIMESTAMP_TOLERANCE_MS = 5 * 1000;
 
@@ -53,6 +55,43 @@ function hasMeaningfulAgentReply(agent: Pick<DashboardAgent, "latestMessage" | "
     return true;
   }
   return agent.activityEvent?.type === "agentMessage";
+}
+
+function hasFreshLocalWorkActivity(agent: DashboardAgent, now: number): boolean {
+  if (
+    agent.source !== "local"
+    || agent.parentThreadId
+    || agent.stoppedAt
+    || agent.needsUser !== null
+  ) {
+    return false;
+  }
+  const activityType = agent.activityEvent?.type;
+  if (
+    activityType === "agentMessage"
+    || activityType === "userMessage"
+    || !activityType
+  ) {
+    return false;
+  }
+  const updatedAtAgeMs = ageSince(parseUpdatedAt(agent.updatedAt), now);
+  return Number.isFinite(updatedAtAgeMs) && updatedAtAgeMs <= QUIET_LIVE_LOCAL_WINDOW_MS;
+}
+
+function shouldBridgeRecentTopLevelNotLoadedReply(agent: DashboardAgent, now: number): boolean {
+  if (
+    agent.source !== "local"
+    || agent.parentThreadId
+    || agent.isOngoing
+    || agent.statusText !== "notLoaded"
+    || agent.liveSubscription !== "readOnly"
+    || (agent.state !== "done" && agent.state !== "idle")
+    || !hasMeaningfulAgentReply(agent)
+  ) {
+    return false;
+  }
+  const updatedAtAgeMs = ageSince(parseUpdatedAt(agent.updatedAt), now);
+  return Number.isFinite(updatedAtAgeMs) && updatedAtAgeMs <= RECENT_NOT_LOADED_RECOVERY_WINDOW_MS;
 }
 
 function settleDormantLocalState(
@@ -139,6 +178,18 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
     if (agent.state === "waiting" || agent.state === "blocked") {
       return updatedAtAgeMs <= WAITING_LOCAL_WINDOW_MS;
     }
+    if (
+      agent.statusText === "notLoaded"
+      && agent.liveSubscription === "readOnly"
+      && updatedAtAgeMs <= RECENT_NOT_LOADED_RECOVERY_WINDOW_MS
+      && (agent.state === "done" || agent.state === "idle")
+      && hasMeaningfulAgentReply(agent)
+    ) {
+      return true;
+    }
+    if (hasFreshLocalWorkActivity(agent, now)) {
+      return true;
+    }
     if (agent.state === "done") {
       return updatedAtAgeMs <= doneGraceMs;
     }
@@ -187,15 +238,32 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
 }
 
 export function applyCurrentWorkloadState(snapshot: DashboardSnapshot, now = Date.now()): DashboardSnapshot {
+  const agents = snapshot.agents.map((agent) => {
+    const isCurrent = isCurrentWorkloadAgent(agent, now);
+    return settleDormantLocalState({
+      ...agent,
+      isCurrent
+    }, isCurrent);
+  });
+
+  const hasCurrentLocalAgent = agents.some((agent) => agent.source === "local" && agent.isCurrent);
+  if (!hasCurrentLocalAgent) {
+    const fallbackAgent = [...agents]
+      .filter((agent) => shouldBridgeRecentTopLevelNotLoadedReply(agent, now))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+    if (fallbackAgent) {
+      const fallbackId = fallbackAgent.id;
+      return {
+        ...snapshot,
+        agents: agents.map((agent) => agent.id === fallbackId ? { ...agent, isCurrent: true } : agent),
+        cloudTasks: snapshot.cloudTasks.filter((task) => isCurrentCloudTask(task, now))
+      };
+    }
+  }
+
   return {
     ...snapshot,
-    agents: snapshot.agents.map((agent) => {
-      const isCurrent = isCurrentWorkloadAgent(agent, now);
-      return settleDormantLocalState({
-        ...agent,
-        isCurrent
-      }, isCurrent);
-    }),
+    agents,
     cloudTasks: snapshot.cloudTasks.filter((task) => isCurrentCloudTask(task, now))
   };
 }

@@ -46,28 +46,53 @@ function isWindowsBackedWslPath(value: string): boolean {
   return /^\/mnt\/[a-z]\//i.test(value);
 }
 
+function unwrapCodexDesktopProjectPath(raw: string): string {
+  const normalized = raw.replace(/\\/g, "/");
+  const embeddedWindowsDriveMatch = normalized.match(/(?:^|\/)([a-zA-Z]:\/.*)$/);
+  if (embeddedWindowsDriveMatch) {
+    return embeddedWindowsDriveMatch[1];
+  }
+
+  const embeddedWslMatches = normalized.match(/\/mnt\/[a-z]\/[^?]*/ig);
+  if (embeddedWslMatches && embeddedWslMatches.length > 0) {
+    return embeddedWslMatches[embeddedWslMatches.length - 1];
+  }
+
+  return raw;
+}
+
 export function canonicalizeProjectPath(input: string | null | undefined): string | null {
   if (typeof input !== "string") {
     return null;
   }
 
-  const raw = input.trim();
+  const raw = unwrapCodexDesktopProjectPath(input.trim());
   if (!raw) {
     return null;
   }
 
-  const windowsDriveMatch = raw.match(/^([a-zA-Z]):[\\/](.*)$/);
+  const extendedWindowsRaw = raw.replace(/^[/\\]+\?[/\\]/, "");
+  const nestedWindowsMountMatch = extendedWindowsRaw.match(/^[a-zA-Z]:[\\/]+mnt[\\/]+([a-zA-Z])[\\/](.*)$/);
+  if (nestedWindowsMountMatch) {
+    const drive = nestedWindowsMountMatch[1].toLowerCase();
+    const rest = nestedWindowsMountMatch[2].replace(/\\/g, "/");
+    return trimTrailingSlash(normalize(`/mnt/${drive}/${rest}`));
+  }
+
+  const rawWithoutExtendedPrefix = extendedWindowsRaw;
+
+  const windowsDriveMatch = rawWithoutExtendedPrefix.match(/^([a-zA-Z]):[\\/](.*)$/);
   if (windowsDriveMatch) {
     const drive = windowsDriveMatch[1].toLowerCase();
     const rest = windowsDriveMatch[2].replace(/\\/g, "/");
     return trimTrailingSlash(normalize(`/mnt/${drive}/${rest}`));
   }
 
-  if (raw.startsWith("/")) {
-    return trimTrailingSlash(normalize(raw.replace(/\\/g, "/")));
+  if (rawWithoutExtendedPrefix.startsWith("/")) {
+    return trimTrailingSlash(normalize(rawWithoutExtendedPrefix.replace(/\\/g, "/")));
   }
 
-  return trimTrailingSlash(raw.replace(/\\/g, "/"));
+  return trimTrailingSlash(rawWithoutExtendedPrefix.replace(/\\/g, "/"));
 }
 
 export function projectPathIdentityKey(input: string | null | undefined): string | null {

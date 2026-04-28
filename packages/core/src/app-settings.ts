@@ -102,7 +102,7 @@ function normalizeAppSettings(input: unknown): AppSettings {
   };
 }
 
-function configRootDirectory(): string {
+export function getAppDataDirectory(): string {
   const codexHome = normalizeSecret(process.env.CODEX_HOME);
   if (codexHome) {
     return join(codexHome, "codex-agents-office");
@@ -124,7 +124,7 @@ function configRootDirectory(): string {
 }
 
 export function getAppSettingsFilePath(): string {
-  return join(configRootDirectory(), "settings.json");
+  return join(getAppDataDirectory(), "settings.json");
 }
 
 function readStoredAppSettingsSync(): AppSettings {

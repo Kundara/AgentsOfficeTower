@@ -141,7 +141,7 @@ async function fetchCursorListPage(
 
 async function fetchCursorJson<T>(apiKey: string, url: URL): Promise<T> {
   let firstFailure: Error | null = null;
-  for (const scheme of ["basic", "bearer"] as const) {
+  for (const scheme of ["bearer", "basic"] as const) {
     const response = await fetch(url, {
       headers: {
         Accept: "application/json",
@@ -164,7 +164,7 @@ async function fetchCursorJson<T>(apiKey: string, url: URL): Promise<T> {
       firstFailure = error;
     }
 
-    if (scheme === "basic" && (response.status === 401 || response.status === 403)) {
+    if (scheme === "bearer" && (response.status === 401 || response.status === 403)) {
       continue;
     }
     throw error;

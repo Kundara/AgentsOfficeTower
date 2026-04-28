@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const os = require("node:os");
 const path = require("node:path");
 const { execFile, spawnSync } = require("node:child_process");
-const { mkdir, mkdtemp, readFile, writeFile } = require("node:fs/promises");
+const { mkdir, mkdtemp, readFile, rm, writeFile } = require("node:fs/promises");
 const { pathToFileURL } = require("node:url");
 const { promisify } = require("node:util");
 
@@ -15,7 +15,9 @@ const {
 const {
   claudeHooksFilePath,
   createClaudeSdkSidecarHooks,
-  normalizeClaudeSdkMessageForTest
+  normalizeClaudeSdkMessageForTest,
+  respondToClaudeHookInputRequest,
+  respondToClaudeHookPermissionRequest
 } = require("../dist/claude-agent-sdk.js");
 const {
   describeStoredAppearanceSettings,
@@ -39,6 +41,32 @@ const {
 const { cursorCloudAdapter } = require("../dist/adapters/cursor-cloud.js");
 
 const execFileAsync = promisify(execFile);
+
+async function withTempAppData(prefix, fn) {
+  const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
+  const configHome = await mkdtemp(path.join(os.tmpdir(), prefix));
+  process.env.XDG_CONFIG_HOME = configHome;
+  delete process.env.CODEX_HOME;
+  resetAppSettingsCacheForTest();
+
+  try {
+    return await fn(configHome);
+  } finally {
+    await rm(configHome, { recursive: true, force: true });
+    if (previousXdgConfigHome !== undefined) {
+      process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+    } else {
+      delete process.env.XDG_CONFIG_HOME;
+    }
+    if (previousCodexHome !== undefined) {
+      process.env.CODEX_HOME = previousCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
+    }
+    resetAppSettingsCacheForTest();
+  }
+}
 
 test("typed Claude permission hooks become approval-backed blocked state", () => {
   const summary = summariseClaudeHookRecord({
@@ -73,6 +101,70 @@ test("typed Claude permission hooks become approval-backed blocked state", () =>
   assert.equal(summary.isOngoing, true);
 });
 
+test("typed Claude elicitation hooks expose actionable questions from requested schema", () => {
+  const summary = summariseClaudeHookRecord({
+    sessionId: "session-123",
+    model: "claude-sonnet-4-5",
+    fallbackCwd: "/workspaces/CodexAgentsOffice",
+    gitBranch: "main",
+    fallbackUpdatedAt: Date.parse("2026-03-24T00:00:00.000Z"),
+    record: {
+      hook_event_name: "Elicitation",
+      hook_source: "claude-agent-sdk",
+      cwd: "/workspaces/CodexAgentsOffice",
+      request_id: "elicitation-42",
+      message: "Pick a mode and add notes",
+      requested_schema: {
+        type: "object",
+        required: ["mode"],
+        properties: {
+          mode: {
+            type: "string",
+            title: "Mode",
+            description: "Choose the operating mode",
+            enum: ["Fast", "Safe"]
+          },
+          notes: {
+            type: "string",
+            title: "Notes",
+            description: "Anything the agent should keep in mind"
+          }
+        }
+      }
+    }
+  });
+
+  assert.ok(summary);
+  assert.equal(summary.state, "waiting");
+  assert.deepEqual(summary.needsUser, {
+    kind: "input",
+    requestId: "elicitation-42",
+    reason: "Pick a mode and add notes",
+    cwd: "/workspaces/CodexAgentsOffice",
+    questions: [
+      {
+        header: "Mode",
+        id: "mode",
+        question: "Choose the operating mode",
+        required: true,
+        isSecret: false,
+        options: [
+          { label: "Fast", description: "Fast" },
+          { label: "Safe", description: "Safe" }
+        ]
+      },
+      {
+        header: "Notes",
+        id: "notes",
+        question: "Anything the agent should keep in mind",
+        required: false,
+        isSecret: false,
+        options: null
+      }
+    ]
+  });
+});
+
 test("typed Claude user prompt hooks become planning state with user-message activity", () => {
   const summary = summariseClaudeHookRecord({
     sessionId: "session-123",
@@ -93,6 +185,47 @@ test("typed Claude user prompt hooks become planning state with user-message act
   assert.equal(summary.activityEvent?.action, "said");
   assert.match(summary.detail, /README\.md/);
   assert.deepEqual(summary.paths, ["/workspaces/CodexAgentsOffice/README.md"]);
+});
+
+test("newer Claude SDK hook events are summarized as typed workload states", () => {
+  const base = {
+    sessionId: "session-123",
+    model: "claude-sonnet-4-5",
+    fallbackCwd: "/workspaces/CodexAgentsOffice",
+    gitBranch: "main",
+    fallbackUpdatedAt: Date.parse("2026-03-24T00:00:00.000Z")
+  };
+
+  const taskCreated = summariseClaudeHookRecord({
+    ...base,
+    record: {
+      hook_event_name: "TaskCreated",
+      cwd: "/workspaces/CodexAgentsOffice",
+      task_subject: "Investigate flaky tests"
+    }
+  });
+  const permissionDenied = summariseClaudeHookRecord({
+    ...base,
+    record: {
+      hook_event_name: "PermissionDenied",
+      cwd: "/workspaces/CodexAgentsOffice",
+      reason: "Auto mode denied this command"
+    }
+  });
+  const postToolBatch = summariseClaudeHookRecord({
+    ...base,
+    record: {
+      hook_event_name: "PostToolBatch",
+      cwd: "/workspaces/CodexAgentsOffice"
+    }
+  });
+
+  assert.equal(taskCreated.state, "delegating");
+  assert.equal(taskCreated.isOngoing, true);
+  assert.equal(permissionDenied.state, "blocked");
+  assert.equal(permissionDenied.isOngoing, false);
+  assert.equal(postToolBatch.state, "thinking");
+  assert.equal(postToolBatch.isOngoing, true);
 });
 
 test("synthetic Claude model placeholders do not leak into agent labels", () => {
@@ -389,36 +522,188 @@ test("synthetic Claude command wrapper user records do not override assistant re
 });
 
 test("Claude SDK sidecar hooks append typed hook records per session", async () => {
-  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "claude-hooks-"));
-  const hooks = createClaudeSdkSidecarHooks({
-    projectRoot,
-    watchPaths: [projectRoot]
-  });
-  const matcher = hooks.SessionStart?.[0];
-  assert.ok(matcher);
+  await withTempAppData("claude-hooks-storage-", async () => {
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), "claude-hooks-"));
+    const hooks = createClaudeSdkSidecarHooks({
+      projectRoot,
+      watchPaths: [projectRoot]
+    });
+    const matcher = hooks.SessionStart?.[0];
+    assert.ok(matcher);
 
-  const output = await matcher.hooks[0]({
-    hook_event_name: "SessionStart",
-    session_id: "session-123",
-    transcript_path: "/tmp/transcript.jsonl",
-    cwd: projectRoot,
-    source: "startup"
-  }, undefined, {
-    signal: AbortSignal.timeout(1000)
-  });
+    const output = await matcher.hooks[0]({
+      hook_event_name: "SessionStart",
+      session_id: "session-123",
+      transcript_path: "/tmp/transcript.jsonl",
+      cwd: projectRoot,
+      source: "startup"
+    }, undefined, {
+      signal: AbortSignal.timeout(1000)
+    });
 
-  assert.equal(output.continue, true);
-  assert.deepEqual(output.hookSpecificOutput, {
-    hookEventName: "SessionStart",
-    watchPaths: [projectRoot]
-  });
+    assert.equal(output.continue, true);
+    assert.deepEqual(output.hookSpecificOutput, {
+      hookEventName: "SessionStart",
+      watchPaths: [projectRoot]
+    });
 
-  const sidecar = await readFile(claudeHooksFilePath(projectRoot, "session-123"), "utf8");
-  const [recordText] = sidecar.trim().split("\n");
-  const record = JSON.parse(recordText);
-  assert.equal(record.hook_source, "claude-agent-sdk");
-  assert.equal(record.hook_event_name, "SessionStart");
-  assert.equal(record.session_id, "session-123");
+    const sidecar = await readFile(claudeHooksFilePath(projectRoot, "session-123"), "utf8");
+    const [recordText] = sidecar.trim().split("\n");
+    const record = JSON.parse(recordText);
+    assert.equal(record.hook_source, "claude-agent-sdk");
+    assert.equal(record.hook_event_name, "SessionStart");
+    assert.equal(record.session_id, "session-123");
+  });
+});
+
+test("Claude SDK permission hooks can be answered from Agents Office", async () => {
+  await withTempAppData("claude-permission-storage-", async () => {
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), "claude-permission-response-"));
+    const hooks = createClaudeSdkSidecarHooks({
+      projectRoot
+    });
+    const matcher = hooks.PermissionRequest?.[0];
+    assert.ok(matcher);
+
+    const pending = matcher.hooks[0]({
+      hook_event_name: "PermissionRequest",
+      session_id: "session-123",
+      cwd: projectRoot,
+      tool_name: "Bash",
+      tool_input: {
+        command: "npm publish",
+        cwd: projectRoot
+      }
+    }, undefined, {
+      signal: AbortSignal.timeout(2_000)
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const sidecarBefore = await readFile(claudeHooksFilePath(projectRoot, "session-123"), "utf8");
+    const requestRecord = JSON.parse(sidecarBefore.trim().split("\n")[0]);
+    await respondToClaudeHookPermissionRequest(projectRoot, "session-123", requestRecord.request_id, "accept");
+    const output = await pending;
+
+    assert.equal(output.continue, true);
+    assert.deepEqual(output.hookSpecificOutput, {
+      hookEventName: "PermissionRequest",
+      decision: {
+        behavior: "allow"
+      }
+    });
+  });
+});
+
+test("Claude SDK elicitation hooks can be answered from Agents Office", async () => {
+  await withTempAppData("claude-input-storage-", async () => {
+    const projectRoot = await mkdtemp(path.join(os.tmpdir(), "claude-input-response-"));
+    const hooks = createClaudeSdkSidecarHooks({
+      projectRoot
+    });
+    const matcher = hooks.Elicitation?.[0];
+    assert.ok(matcher);
+
+    const pending = matcher.hooks[0]({
+      hook_event_name: "Elicitation",
+      session_id: "session-123",
+      cwd: projectRoot,
+      message: "Choose a mode",
+      requested_schema: {
+        type: "object",
+        required: ["mode"],
+        properties: {
+          mode: {
+            type: "string",
+            title: "Mode",
+            enum: ["Fast", "Safe"]
+          },
+          notes: {
+            type: "string",
+            title: "Notes"
+          }
+        }
+      }
+    }, undefined, {
+      signal: AbortSignal.timeout(2_000)
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const sidecar = await readFile(claudeHooksFilePath(projectRoot, "session-123"), "utf8");
+    const requestRecord = JSON.parse(sidecar.trim().split("\n")[0]);
+    await respondToClaudeHookInputRequest(
+      projectRoot,
+      "session-123",
+      requestRecord.request_id,
+      [
+        {
+          header: "Mode",
+          id: "mode",
+          question: "Mode",
+          required: true,
+          options: [
+            { label: "Fast", description: "Fast" },
+            { label: "Safe", description: "Safe" }
+          ]
+        },
+        {
+          header: "Notes",
+          id: "notes",
+          question: "Notes",
+          required: false,
+          options: null
+        }
+      ],
+      {
+        mode: { answers: ["Fast"] }
+      }
+    );
+    const output = await pending;
+
+    assert.equal(output.continue, true);
+    assert.deepEqual(output.hookSpecificOutput, {
+      hookEventName: "Elicitation",
+      action: "accept",
+      content: {
+        mode: "Fast"
+      }
+    });
+  });
+});
+
+test("synthetic Agents Office Claude resolution records clear needsUser state", () => {
+  const now = Date.now();
+  const summary = summariseClaudeSession(
+    "session-123",
+    "/workspaces/CodexAgentsOffice",
+    [],
+    now,
+    [
+      {
+        hook_event_name: "PermissionRequest",
+        hook_source: "claude-agent-sdk",
+        request_id: "req_42",
+        timestamp: new Date(now - 1_000).toISOString(),
+        cwd: "/workspaces/CodexAgentsOffice",
+        tool_name: "Bash",
+        tool_input: {
+          command: "npm publish",
+          cwd: "/workspaces/CodexAgentsOffice"
+        }
+      },
+      {
+        hook_event_name: "AgentsOfficePermissionDecision",
+        hook_source: "agents-office",
+        request_id: "req_42",
+        action: "accept",
+        timestamp: new Date(now).toISOString(),
+        cwd: "/workspaces/CodexAgentsOffice"
+      }
+    ]
+  );
+
+  assert.equal(summary.state, "planning");
+  assert.equal(summary.needsUser, null);
+  assert.equal(summary.detail, "Permission approved");
 });
 
 test("cursor repository URLs normalize across ssh and https forms", () => {
@@ -529,6 +814,41 @@ test("cursor cloud snapshot maps conversation messages into typed activity and e
       delete process.env.CURSOR_API_KEY;
     }
     global.fetch = previousFetch;
+  }
+});
+
+test("cursor cloud API uses documented bearer auth before legacy fallback", { concurrency: false }, async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-cloud-auth-"));
+  await execFileAsync("git", ["init", projectRoot]);
+  await execFileAsync("git", ["-C", projectRoot, "remote", "add", "origin", "https://github.com/example-org/CodexAgentsOffice.git"]);
+
+  const previousCursorApiKey = process.env.CURSOR_API_KEY;
+  const previousFetch = global.fetch;
+  const authorizations = [];
+  process.env.CURSOR_API_KEY = "cursor_test_12345678";
+  global.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    authorizations.push(init?.headers?.Authorization);
+    if (url.includes("/v0/agents?")) {
+      return new Response(JSON.stringify({ agents: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    await loadCursorCloudProjectSnapshotData(projectRoot);
+    assert.deepEqual(authorizations, ["Bearer cursor_test_12345678"]);
+  } finally {
+    if (previousCursorApiKey === undefined) {
+      delete process.env.CURSOR_API_KEY;
+    } else {
+      process.env.CURSOR_API_KEY = previousCursorApiKey;
+    }
+    global.fetch = previousFetch;
+    await rm(projectRoot, { recursive: true, force: true });
   }
 });
 

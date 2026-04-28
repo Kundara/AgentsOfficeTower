@@ -87,6 +87,14 @@ export function startClientApp(): void {
         integrationSettingsPending: false,
         appearanceSettingsPending: false,
         integrationSettingsError: null,
+        needsUserActionRequestIds: [],
+        needsUserActionErrorsByRequestId: {},
+        needsUserInputDrafts: {},
+        openAgentThread: null,
+        closingAgentThread: null,
+        replyComposer: null,
+        replyThreadWorkIntents: {},
+        expandedThreadEntries: {},
         multiplayerSettings: { ...defaultIntegrationSettings().multiplayer },
         multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },
         multiplayerDraftDirty: false,
@@ -134,11 +142,13 @@ export function startClientApp(): void {
       const RESTING_DORMANT_MS = 15 * 60 * 1000;
       const DEPARTING_AGENT_TTL_MS = 900;
       const SUBAGENT_DEPARTING_AGENT_TTL_MS = 3200;
+      const HISTORICAL_HYDRATION_SUPPRESS_MS = 30000;
       let lastSceneRenderToken = null;
       let lastFleetSemanticToken = null;
       const recentLeadDisplayMemory = new Map();
       const activeRecentLeadReservations = new Map();
       const recSlotMemory = new Map();
+      const baselineProjectHydrationAt = new Map();
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));
       function projectInfo(projectRoot) {
@@ -1689,6 +1699,9 @@ export function startClientApp(): void {
             const key = agentKey(snapshot.projectRoot, agent);
             const semanticSubjectKey = notificationSubjectKey(snapshot.projectRoot, agent, agent.threadId);
             const previous = previousAgents.get(key);
+            if (shouldSuppressHistoricalHydrationNotification(snapshot, agent, previous)) {
+              continue;
+            }
             const descriptor = notificationDescriptor(snapshot, agent, previous);
             if (!descriptor) {
               continue;
@@ -1757,6 +1770,9 @@ export function startClientApp(): void {
             }
             const agent = snapshot.agents.find((candidate) => candidate.threadId && candidate.threadId === event.threadId);
             if (!agent) {
+              continue;
+            }
+            if (shouldSuppressHistoricalHydrationNotification(snapshot, agent, null)) {
               continue;
             }
             if (
@@ -3369,7 +3385,7 @@ export function startClientApp(): void {
       }
 
       function isBusyAgent(agent) {
-        return agent.isCurrent === true || isRuntimeActiveLocalAgent(agent);
+        return agent.isCurrent === true || agent.isOngoing === true || isRuntimeActiveLocalAgent(agent);
       }
 
       function parseAgentUpdatedAt(value) {
@@ -3501,6 +3517,32 @@ export function startClientApp(): void {
           return `${projectRoot}::thread::${subjectThreadId}`;
         }
         return `${projectRoot}::agent::${agent && agent.id ? agent.id : "unknown"}`;
+      }
+
+      function projectHydrationBaselineAt(projectRoot) {
+        return baselineProjectHydrationAt.get(projectRoot) ?? 0;
+      }
+
+      function markProjectHydrated(projectRoot, atMs = Date.now()) {
+        if (!projectRoot || baselineProjectHydrationAt.has(projectRoot)) {
+          return;
+        }
+        baselineProjectHydrationAt.set(projectRoot, atMs);
+      }
+
+      function agentLooksHistoricallyHydrated(projectRoot, agent) {
+        if (!projectRoot || !agent) {
+          return false;
+        }
+        const baselineAt = projectHydrationBaselineAt(projectRoot);
+        if (!Number.isFinite(baselineAt) || baselineAt <= 0) {
+          return false;
+        }
+        const updatedAt = Date.parse(agent.updatedAt || "");
+        if (!Number.isFinite(updatedAt)) {
+          return false;
+        }
+        return baselineAt - updatedAt >= HISTORICAL_HYDRATION_SUPPRESS_MS;
       }
 
       function sceneAgentToken(agent) {
@@ -4213,7 +4255,7 @@ export function startClientApp(): void {
 
   // src/client/runtime/seating-source.ts
 
-      const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;
+      const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 3000;
       const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;
       const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
       const QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS = 3 * 60 * 1000;
@@ -4228,6 +4270,22 @@ export function startClientApp(): void {
         return agent && agent.parentThreadId
           ? SUBAGENT_DONE_WORKSTATION_GRACE_MS
           : TOP_LEVEL_DONE_WORKSTATION_GRACE_MS;
+      }
+
+      function hasReplyThreadWorkIntent(agent) {
+        const threadId = agent && agent.threadId ? String(agent.threadId) : "";
+        if (!threadId || !state.replyThreadWorkIntents) {
+          return false;
+        }
+        const expiresAt = Number(state.replyThreadWorkIntents[threadId]);
+        if (!Number.isFinite(expiresAt)) {
+          return false;
+        }
+        if (Date.now() > expiresAt) {
+          delete state.replyThreadWorkIntents[threadId];
+          return false;
+        }
+        return true;
       }
 
       function hasCurrentLocalDeskGrace(agent, maxAgeMs = CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS) {
@@ -4251,6 +4309,9 @@ export function startClientApp(): void {
           return false;
         }
         if (agent.source === "local") {
+          if (hasReplyThreadWorkIntent(agent)) {
+            return true;
+          }
           const stoppedAt = parseAgentUpdatedAt(agent.stoppedAt);
           if (Number.isFinite(stoppedAt)) {
             return Date.now() - stoppedAt <= workstationDoneGraceMs(agent);
@@ -4260,9 +4321,10 @@ export function startClientApp(): void {
               const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
               return agent.isCurrent === true
                 && Number.isFinite(updatedAt)
-                && Date.now() - updatedAt <= workstationDoneGraceMs(agent);
+                && Date.now() - updatedAt <= Math.max(workstationDoneGraceMs(agent), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS);
             }
             return agent.isOngoing === true
+              || agent.isCurrent === true
               || hasCurrentLocalDeskGrace(agent, QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS);
           }
           if (agent.statusText === "active") {
@@ -4275,6 +4337,12 @@ export function startClientApp(): void {
             return agent.isCurrent === true
               && agent.state !== "idle"
               && agent.state !== "done";
+          }
+          if (agent.isOngoing === true) {
+            return true;
+          }
+          if (agent.isCurrent === true) {
+            return true;
           }
           if (agent.state === "done") {
             return agent.isCurrent === true;
@@ -4613,6 +4681,270 @@ export function startClientApp(): void {
         return null;
       }
 
+      const TURN_SIGNAL_MAX_AGE_MS = 6000;
+      const ACTIVITY_CUE_MAX_AGE_MS = 4800;
+
+      function turnSignalDurationMs(phase) {
+        switch (phase) {
+          case "started":
+            return 2800;
+          case "completed":
+            return 3400;
+          case "interrupted":
+            return 4200;
+          case "failed":
+            return 4800;
+          default:
+            return TURN_SIGNAL_MAX_AGE_MS;
+        }
+      }
+
+      function turnSignalLabelForPhase(phase) {
+        switch (phase) {
+          case "started":
+            return "START";
+          case "completed":
+            return "DONE";
+          case "interrupted":
+            return "STOP";
+          case "failed":
+            return "FAIL";
+          default:
+            return "";
+        }
+      }
+
+      function turnSignalToneForPhase(phase) {
+        switch (phase) {
+          case "started":
+            return "started";
+          case "completed":
+            return "completed";
+          case "interrupted":
+            return "interrupted";
+          case "failed":
+            return "failed";
+          default:
+            return "started";
+        }
+      }
+
+      function recentTurnSignalForAgent(snapshot, agent) {
+        if (!snapshot || !agent || !agent.threadId) {
+          return null;
+        }
+        const now = Date.now();
+        const recentTurnEvents = (snapshot.events || [])
+          .filter((event) =>
+            event
+            && event.threadId === agent.threadId
+            && event.kind === "turn"
+            && ["started", "completed", "interrupted", "failed"].includes(event.phase)
+          )
+          .sort((left, right) => {
+            const leftAt = Date.parse(left.createdAt || "");
+            const rightAt = Date.parse(right.createdAt || "");
+            return (Number.isFinite(rightAt) ? rightAt : 0) - (Number.isFinite(leftAt) ? leftAt : 0);
+          });
+        for (const event of recentTurnEvents) {
+          const createdAtMs = Date.parse(event.createdAt || "");
+          const durationMs = turnSignalDurationMs(event.phase);
+          if (
+            !Number.isFinite(createdAtMs)
+            || now - createdAtMs > durationMs
+            || createdAtMs > now + TURN_SIGNAL_MAX_AGE_MS
+          ) {
+            continue;
+          }
+          const label = turnSignalLabelForPhase(event.phase);
+          if (!label) {
+            continue;
+          }
+          return {
+            key: typedNotificationKey(event) || ["turn-signal", agent.threadId, event.phase, event.createdAt || ""].join("::"),
+            label,
+            tone: turnSignalToneForPhase(event.phase),
+            startedAtMs: createdAtMs,
+            durationMs,
+            title: event.title || "",
+            detail: event.detail || ""
+          };
+        }
+        return null;
+      }
+
+      function activityCueDurationMs(mode) {
+        switch (mode) {
+          case "plan":
+            return 2600;
+          case "command":
+            return 2200;
+          case "file":
+            return 2400;
+          case "tool":
+            return 2200;
+          case "approval":
+            return 3200;
+          case "input":
+            return 3400;
+          case "resolved":
+            return 2200;
+          default:
+            return ACTIVITY_CUE_MAX_AGE_MS;
+        }
+      }
+
+      function activityCueForEvent(event) {
+        if (!event) {
+          return null;
+        }
+        if (event.method === "turn/plan/updated" || event.method === "item/plan/delta") {
+          return { mode: "plan", label: "PLAN" };
+        }
+        if (
+          event.method === "item/commandExecution/outputDelta"
+          || (event.method === "item/started" && event.kind === "command")
+        ) {
+          return { mode: "command", label: "RUN" };
+        }
+        if (
+          event.method === "turn/diff/updated"
+          || event.method === "item/fileChange/outputDelta"
+          || (event.method === "item/started" && event.kind === "fileChange")
+        ) {
+          return { mode: "file", label: "EDIT" };
+        }
+        if (
+          event.method === "item/tool/call"
+          || (event.method === "item/started" && event.kind === "tool")
+        ) {
+          return { mode: "tool", label: "TOOL" };
+        }
+        if (
+          event.method === "item/commandExecution/requestApproval"
+          || event.method === "item/fileChange/requestApproval"
+        ) {
+          return { mode: "approval", label: "WAIT" };
+        }
+        if (event.method === "item/tool/requestUserInput") {
+          return { mode: "input", label: "ASK" };
+        }
+        if (event.method === "serverRequest/resolved" && (event.kind === "approval" || event.kind === "input")) {
+          return { mode: "resolved", label: "OK" };
+        }
+        return null;
+      }
+
+      function requestCueProfileForAgent(agent, cue, event = null) {
+        if (!cue) {
+          return null;
+        }
+        const need = agent && agent.needsUser ? agent.needsUser : null;
+        if (cue.mode === "approval" || (cue.mode === "resolved" && event && event.kind === "approval")) {
+          const decisionCount = Math.max(
+            2,
+            Math.min(
+              4,
+              Array.isArray(need && need.availableDecisions) && need.availableDecisions.length > 0
+                ? need.availableDecisions.length
+                : 3
+            )
+          );
+          const approvalType =
+            need && need.networkApprovalContext ? "network"
+            : event && event.method === "item/fileChange/requestApproval" ? "file"
+            : need && need.command ? "command"
+            : "general";
+          return {
+            kind: "approval",
+            decisionCount,
+            approvalType
+          };
+        }
+        if (cue.mode === "input" || (cue.mode === "resolved" && event && event.kind === "input")) {
+          const questions = Array.isArray(need && need.questions) ? need.questions : [];
+          const requiredCount = questions.filter((question) => question && question.required !== false).length;
+          const optionCount = questions.filter((question) => question && Array.isArray(question.options) && question.options.length > 0).length;
+          const secretCount = questions.filter((question) => question && question.isSecret === true).length;
+          return {
+            kind: "input",
+            questionCount: Math.max(1, Math.min(4, questions.length || 1)),
+            requiredCount: Math.max(0, Math.min(4, requiredCount)),
+            optionCount: Math.max(0, Math.min(4, optionCount)),
+            secretCount: Math.max(0, Math.min(2, secretCount))
+          };
+        }
+        return null;
+      }
+
+      function recentActivityCueForAgent(snapshot, agent) {
+        if (!snapshot || !agent || !agent.threadId) {
+          return null;
+        }
+        const now = Date.now();
+        const recentEvents = (snapshot.events || [])
+          .filter((event) => event && event.threadId === agent.threadId)
+          .sort((left, right) => {
+            const leftAt = Date.parse(left.createdAt || "");
+            const rightAt = Date.parse(right.createdAt || "");
+            return (Number.isFinite(rightAt) ? rightAt : 0) - (Number.isFinite(leftAt) ? leftAt : 0);
+          });
+        for (const event of recentEvents) {
+          const cue = activityCueForEvent(event);
+          if (!cue) {
+            continue;
+          }
+          const createdAtMs = Date.parse(event.createdAt || "");
+          const durationMs = activityCueDurationMs(cue.mode);
+          if (
+            !Number.isFinite(createdAtMs)
+            || now - createdAtMs > durationMs
+            || createdAtMs > now + ACTIVITY_CUE_MAX_AGE_MS
+          ) {
+            continue;
+          }
+          return {
+            key: typedNotificationKey(event) || ["activity-cue", agent.threadId, cue.mode, event.createdAt || ""].join("::"),
+            mode: cue.mode,
+            label: cue.label,
+            startedAtMs: createdAtMs,
+            durationMs,
+            requestProfile: requestCueProfileForAgent(agent, cue, event),
+            title: event.title || "",
+            detail: event.detail || ""
+          };
+        }
+        return null;
+      }
+
+      function buildWorkstationCueEffect(cue, absoluteCellX, absoluteCellY, workstationX, workstationY, workstationWidth, workstationHeight, workstationSortRow, workstationSortFootY, options = {}) {
+        if (!cue || !cue.mode || !options.slotId) {
+          return null;
+        }
+        const effectX = absoluteCellX + Math.round(workstationX + workstationWidth * 0.1);
+        const effectY = absoluteCellY + Math.round(workstationY + workstationHeight * 0.08);
+        const effectWidth = Math.max(12, Math.round(workstationWidth * 0.56));
+        const effectHeight = Math.max(9, Math.round(workstationHeight * 0.34));
+        return {
+          kind: "cue-effect",
+          key: cue.key || ["workstation-cue", options.slotId, cue.mode, cue.startedAtMs || ""].join("::"),
+          mode: cue.mode,
+          x: effectX,
+          y: effectY,
+          width: effectWidth,
+          height: effectHeight,
+          flipX: options.mirrored === true,
+          z: 10.5,
+          startedAtMs: Number.isFinite(cue.startedAtMs) ? Number(cue.startedAtMs) : Date.now(),
+          durationMs: Number.isFinite(cue.durationMs) ? Number(cue.durationMs) : 2200,
+          requestProfile: cue.requestProfile || null,
+          depthBaseY: Number.isFinite(options.depthBaseY) ? Math.round(options.depthBaseY) : null,
+          depthRow: Number.isFinite(workstationSortRow) ? Math.round(workstationSortRow) : null,
+          depthFootY: Number.isFinite(workstationSortFootY) ? Math.round(workstationSortFootY) : null,
+          enteringReveal: options.enteringReveal === true
+        };
+      }
+
       function splitShellWords(command) {
         const text = String(command || "").trim();
         const parts = [];
@@ -4903,6 +5235,10 @@ export function startClientApp(): void {
         return null;
       }
 
+      function shouldSuppressHistoricalHydrationNotification(snapshot, agent, previous) {
+        return !previous && agentLooksHistoricallyHydrated(snapshot && snapshot.projectRoot, agent);
+      }
+
 
       function renderAgentHover(snapshot, agent, options = {}) {
         const lead = parentLabelFor(snapshot, agent);
@@ -4935,6 +5271,243 @@ export function startClientApp(): void {
         const meta = metaParts.join('<span class="agent-hover-separator"> · </span>');
 
         return `<div class="${escapeHtml(className)}"${styleAttr}><div class="agent-hover-title"><strong>${escapeHtml(hoverTitle)}</strong></div>${worktreeHtml}<div class="${escapeHtml(summaryClass)}">${escapeHtml(summary.text)}</div><div class="agent-hover-meta">${meta}</div></div>`;
+      }
+
+      function threadHistoryEntryTimeMs(entry) {
+        if (!entry || typeof entry.createdAt !== "string") {
+          return 0;
+        }
+        const value = Date.parse(entry.createdAt);
+        return Number.isFinite(value) ? value : 0;
+      }
+
+      function historyToneForEvent(event) {
+        if (!event) {
+          return { tone: "system", label: "Note" };
+        }
+        if (event.kind === "message") {
+          if (
+            event.method === "thread/read/agentMessage"
+            || event.method === "item/agentMessage/delta"
+            || event.itemType === "agentMessage"
+          ) {
+            return { tone: "agent", label: "Agent" };
+          }
+          if (event.method && event.method.startsWith("item/reasoning/")) {
+            return { tone: "thinking", label: "Think" };
+          }
+          return { tone: "agent", label: "Agent" };
+        }
+        if (event.kind === "approval") {
+          return { tone: "waiting", label: "Wait" };
+        }
+        if (event.kind === "input") {
+          return { tone: "input", label: "Ask" };
+        }
+        if (event.kind === "command") {
+          return { tone: "run", label: "Run" };
+        }
+        if (event.kind === "fileChange") {
+          return { tone: "edit", label: "Edit" };
+        }
+        if (event.kind === "tool") {
+          return { tone: "tool", label: "Tool" };
+        }
+        if (event.kind === "turn") {
+          return { tone: "plan", label: "Turn" };
+        }
+        return { tone: "system", label: "Note" };
+      }
+
+      function historyBodyForEvent(event) {
+        if (!event) {
+          return "";
+        }
+        if (event.kind === "approval" || event.kind === "input") {
+          return event.detail || event.title || "Waiting for input.";
+        }
+        if (event.kind === "command" || event.kind === "fileChange" || event.kind === "tool" || event.kind === "turn") {
+          return event.detail || event.title || event.method || "Updated.";
+        }
+        return event.detail || event.title || "Updated.";
+      }
+
+      function threadHistoryIconUrl(entry) {
+        if (entry && entry.iconUrl) {
+          return entry.iconUrl;
+        }
+        switch (entry && entry.tone) {
+          case "agent":
+            return eventIconUrlForActivityType("agentMessage");
+          case "user":
+            return eventIconUrlForThreadItemType("userMessage");
+          case "waiting":
+            return eventIconUrlForActivityType("approval");
+          case "input":
+            return eventIconUrlForActivityType("input");
+          case "run":
+            return eventIconUrlForActivityType("commandExecution", { isCommand: true });
+          case "edit":
+            return eventIconUrlForActivityType("fileChange");
+          case "tool":
+            return eventIconUrlForActivityType("mcpToolCall");
+          case "plan":
+          case "thinking":
+            return eventIconUrlForThreadItemType("plan") || eventIconUrlForMethod("turn/plan/updated");
+          default:
+            return eventIconUrlForThreadItemType("agentMessage");
+        }
+      }
+
+      function threadEntryExpansionStateKey(threadId, entryKey) {
+        return [threadId || "", entryKey || ""].join("::");
+      }
+
+      function threadEntryLooksLong(body) {
+        const text = String(body || "");
+        if (!text.trim()) {
+          return false;
+        }
+        const explicitLines = text.split(/\r\n|\r|\n/).length;
+        return explicitLines > 8 || text.length > 520;
+      }
+
+      function threadEntryExpanded(threadId, entryKey) {
+        const key = threadEntryExpansionStateKey(threadId, entryKey);
+        return Boolean(state.expandedThreadEntries && state.expandedThreadEntries[key]);
+      }
+
+      function renderThreadHistoryEntry(snapshot, agent, entry) {
+        const entryKey = String(entry.key || [entry.tone || "entry", entry.createdAt || "", entry.body || ""].join("::"));
+        const iconUrl = threadHistoryIconUrl(entry);
+        const collapsible = threadEntryLooksLong(entry.body);
+        const expanded = collapsible && threadEntryExpanded(agent.threadId, entryKey);
+        const bodyClass = `office-map-thread-body${collapsible && !expanded ? " is-collapsed" : ""}`;
+        const expandedStateKey = threadEntryExpansionStateKey(agent.threadId, entryKey);
+        const commandBar = entry.tone === "run"
+          ? '<div class="office-map-thread-window-bar"><span>cmd.exe</span><span class="office-map-thread-window-lights"><i></i><i></i><i></i></span></div>'
+          : "";
+        const moreHtml = collapsible
+          ? `<button type="button" class="office-map-thread-more" data-action="toggle-thread-entry" data-thread-entry-state-key="${escapeHtml(expandedStateKey)}" aria-expanded="${expanded ? "true" : "false"}">${expanded ? "Show less" : "Show more"}</button>`
+          : "";
+        return `<article class="office-map-thread-entry is-${escapeHtml(entry.tone)}" data-thread-entry-key="${escapeHtml(entryKey)}" data-thread-entry-state-key="${escapeHtml(expandedStateKey)}">${commandBar}<div class="office-map-thread-entry-meta">${iconUrl ? `<img class="office-map-thread-icon" src="${escapeHtml(iconUrl)}" alt="" aria-hidden="true" />` : ""}<span class="office-map-thread-pill is-${escapeHtml(entry.tone)}">${escapeHtml(entry.label)}</span><span class="office-map-thread-time">${escapeHtml(formatUpdatedAt(entry.createdAt || agent.updatedAt))}</span></div><div class="${bodyClass}" data-thread-entry-body="true">${escapeHtml(entry.body)}</div>${moreHtml}</article>`;
+      }
+
+      function recentThreadHistoryEntries(snapshot, agent) {
+        if (!snapshot || !agent || !agent.threadId) {
+          return [];
+        }
+        const entries = [];
+        const seenKeys = new Set();
+        const seenFingerprints = new Set();
+        const pushEntry = (entry) => {
+          if (!entry || !entry.body) {
+            return;
+          }
+          const key = String(entry.key || "");
+          const fingerprint = [entry.tone || "", String(entry.body || "").trim().toLowerCase()].join("::");
+          if (key && seenKeys.has(key)) {
+            return;
+          }
+          if (fingerprint && seenFingerprints.has(fingerprint)) {
+            return;
+          }
+          if (key) {
+            seenKeys.add(key);
+          }
+          if (fingerprint) {
+            seenFingerprints.add(fingerprint);
+          }
+          entries.push(entry);
+        };
+        const activityText = normalizeDisplayText(
+          snapshot.projectRoot,
+          agent && agent.activityEvent && typeof agent.activityEvent.title === "string"
+            ? agent.activityEvent.title
+            : ""
+        );
+        if (agent.activityEvent && agent.activityEvent.type === "userMessage" && activityText) {
+          pushEntry({
+            key: ["user", agent.threadId, activityText].join("::"),
+            tone: "user",
+            label: "You",
+            body: activityText,
+            createdAt: agent.updatedAt,
+            iconUrl: eventIconUrlForThreadItemType("userMessage")
+          });
+        }
+        (snapshot.events || [])
+          .filter((event) => event && event.threadId === agent.threadId && event.kind !== "status")
+          .sort((left, right) => threadHistoryEntryTimeMs(left) - threadHistoryEntryTimeMs(right))
+          .forEach((event) => {
+            const body = normalizeDisplayText(snapshot.projectRoot, historyBodyForEvent(event));
+            const tone = historyToneForEvent(event);
+            pushEntry({
+              key: event.id || [event.threadId || agent.threadId, event.kind, event.method, event.createdAt || ""].join("::"),
+              tone: tone.tone,
+              label: tone.label,
+              body,
+              createdAt: event.createdAt,
+              title: event.title || "",
+              iconUrl: eventIconUrlForMethod(event.method) || eventIconUrlForThreadItemType(event.itemType) || threadHistoryIconUrl({ tone: tone.tone })
+            });
+          });
+        const latestMessage = latestAgentMessage(snapshot.projectRoot, agent);
+        if (latestMessage) {
+          pushEntry({
+            key: ["latest", agent.threadId].join("::"),
+            tone: "agent",
+            label: "Agent",
+            body: latestMessage,
+            createdAt: agent.updatedAt,
+            iconUrl: eventIconUrlForActivityType("agentMessage")
+          });
+        }
+        if (agent.needsUser && (agent.needsUser.kind === "approval" || agent.needsUser.kind === "input")) {
+          const hasMatchingRequestEvent = (snapshot.events || []).some((event) =>
+            event
+            && event.threadId === agent.threadId
+            && event.kind === agent.needsUser.kind
+            && (
+              !agent.needsUser.requestId
+              || !event.requestId
+              || event.requestId === agent.needsUser.requestId
+            )
+          );
+          const requestBody = normalizeDisplayText(
+            snapshot.projectRoot,
+            agent.needsUser.command || agent.needsUser.reason || agent.detail || "Waiting on you."
+          );
+          if (!hasMatchingRequestEvent) {
+            pushEntry({
+              key: ["needs-user", agent.needsUser.requestId, requestBody].join("::"),
+              tone: agent.needsUser.kind === "approval" ? "waiting" : "input",
+              label: agent.needsUser.kind === "approval" ? "Wait" : "Ask",
+              body: requestBody,
+              createdAt: agent.updatedAt,
+              iconUrl: eventIconUrlForActivityType(agent.needsUser.kind)
+            });
+          }
+        }
+        return entries
+          .sort((left, right) => threadHistoryEntryTimeMs(left) - threadHistoryEntryTimeMs(right))
+          .slice(-8);
+      }
+
+      function renderAgentThreadCard(snapshot, agent, options = {}) {
+        const projectRoot = threadViewProjectRoot(snapshot, agent) || "";
+        const historyEntries = recentThreadHistoryEntries(snapshot, agent);
+        const historyHtml = historyEntries.length > 0
+          ? historyEntries.map((entry) => renderThreadHistoryEntry(snapshot, agent, entry)).join("")
+          : '<div class="office-map-thread-empty">No recent thread activity yet.</div>';
+        const lead = parentLabelFor(snapshot, agent);
+        const subtitle = [
+          titleCaseWords(agentKindLabel(snapshot, agent)),
+          lead ? "with " + lead : "",
+          formatUpdatedAt(agent.updatedAt)
+        ].filter(Boolean).join(" · ");
+        const cardClass = options.closing ? "office-map-thread-card is-closing" : "office-map-thread-card";
+        return `<section class="${cardClass}" data-agent-thread-card="true"><div class="office-map-thread-card-header"><div><div class="office-map-thread-card-title">${escapeHtml(displayAgentLabel(snapshot, agent))}</div><div class="office-map-thread-card-subtitle">${escapeHtml(subtitle)}</div></div><button type="button" class="office-map-thread-close" data-action="close-agent-thread" data-project-root="${escapeHtml(projectRoot)}" data-thread-id="${escapeHtml(agent.threadId || "")}" aria-label="Close history">×</button></div><div class="office-map-thread-card-tag">Thread history</div><div class="office-map-thread-history">${historyHtml}</div></section>`;
       }
 
       function flattenRooms(rooms) {
@@ -5363,39 +5936,59 @@ export function startClientApp(): void {
         const workstationSortRow = Math.floor((workstationSortFootY - depthBaseY) / sceneTile);
         const anchorX = absoluteCellX + Math.round(workstationX + workstationWidth * 0.5);
         const anchorY = absoluteCellY + Math.round(boothHeight * 0.72);
+        const activityCue = recentActivityCueForAgent(snapshot, agent);
+        const shell = [
+          buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, {
+            flipX: mirrored,
+            enteringReveal: options.enteringReveal === true,
+            depthBaseY: options.depthBaseY,
+            depthRow: deskDepthRow,
+            depthFootY: deskDepthFootY,
+            depthBias: DESK_SHELL_DEPTH_BIAS
+          }),
+          buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, {
+            flipX: mirrored,
+            enteringReveal: options.enteringReveal === true,
+            depthBaseY: options.depthBaseY,
+            depthRow: chairDepthRow,
+            depthFootY: chairDepthFootY,
+            depthBias: CHAIR_DEPTH_BIAS
+          }),
+          buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, {
+            flipX: mirrored,
+            enteringReveal: options.enteringReveal === true,
+            depthBaseY: options.depthBaseY,
+            depthRow: workstationSortRow,
+            depthFootY: workstationSortFootY,
+            depthBias: WORKSTATION_FRONT_DEPTH_BIAS
+          })
+        ];
+        const workstationCueEffect = buildWorkstationCueEffect(
+          activityCue,
+          absoluteCellX,
+          absoluteCellY,
+          workstationX,
+          workstationY,
+          workstationWidth,
+          workstationHeight,
+          workstationSortRow,
+          workstationSortFootY,
+          options
+        );
+        if (workstationCueEffect) {
+          shell.push(workstationCueEffect);
+        }
         const visual = {
-          shell: [
-            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, {
-              flipX: mirrored,
-              enteringReveal: options.enteringReveal === true,
-              depthBaseY: options.depthBaseY,
-              depthRow: deskDepthRow,
-              depthFootY: deskDepthFootY,
-              depthBias: DESK_SHELL_DEPTH_BIAS
-            }),
-            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, {
-              flipX: mirrored,
-              enteringReveal: options.enteringReveal === true,
-              depthBaseY: options.depthBaseY,
-              depthRow: chairDepthRow,
-              depthFootY: chairDepthFootY,
-              depthBias: CHAIR_DEPTH_BIAS
-            }),
-            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, {
-              flipX: mirrored,
-              enteringReveal: options.enteringReveal === true,
-              depthBaseY: options.depthBaseY,
-              depthRow: workstationSortRow,
-              depthFootY: workstationSortFootY,
-              depthBias: WORKSTATION_FRONT_DEPTH_BIAS
-            })
-          ],
+          shell,
           glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
             ? {
                 x: absoluteCellX + Math.round(workstationX + workstationWidth * 0.19),
                 y: absoluteCellY + Math.round(workstationY + workstationHeight * 0.14),
                 width: Math.max(8, Math.round(workstationWidth * 0.36)),
                 height: Math.max(5, Math.round(workstationHeight * 0.16)),
+                color: state === "validating" ? 0x69c7ff : 0x4bd69f,
+                alpha: state === "validating" ? 0.28 : 0.24,
+                pulse: state === "validating",
                 enteringReveal: options.enteringReveal === true
               }
             : null,
@@ -5471,7 +6064,7 @@ export function startClientApp(): void {
 
   // src/client/runtime/scene-source.ts
       function buildLeadClusters(occupants) {
-        const ordered = [...occupants].sort(compareAgentsByRecencyStable);
+        const ordered = sortAgentsStably("lead-clusters", occupants);
         const byId = new Map(ordered.map((agent) => [agent.id, agent]));
         const buckets = new Map();
         const leads = [];
@@ -5490,6 +6083,31 @@ export function startClientApp(): void {
           lead,
           children: [...(buckets.get(lead.id) || [])].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
         }));
+      }
+
+      const stableSceneOrderMemory = new Map();
+
+      function sortAgentsStably(bucketKey, agents) {
+        const cacheKey = String(bucketKey || "default");
+        const previousOrder = stableSceneOrderMemory.get(cacheKey);
+        const ordered = [...agents].sort((left, right) => {
+          const leftIndex = previousOrder ? previousOrder.get(left.id) : undefined;
+          const rightIndex = previousOrder ? previousOrder.get(right.id) : undefined;
+          if (leftIndex !== undefined || rightIndex !== undefined) {
+            if (leftIndex === undefined) {
+              return 1;
+            }
+            if (rightIndex === undefined) {
+              return -1;
+            }
+            if (leftIndex !== rightIndex) {
+              return leftIndex - rightIndex;
+            }
+          }
+          return compareAgentsByRecencyStable(left, right);
+        });
+        stableSceneOrderMemory.set(cacheKey, new Map(ordered.map((agent, index) => [agent.id, index])));
+        return ordered;
       }
 
       function partitionAgents(agents, size) {
@@ -5547,17 +6165,19 @@ export function startClientApp(): void {
       }
 
       function restingAgentsFor(snapshot, compact) {
-        return snapshot.agents
-          .filter((agent) => {
-            if (agent.source === "cloud") {
-              return false;
-            }
-            if (shouldSeatAtWorkstation(agent)) {
-              return false;
-            }
-            return agent.state === "idle" || agent.state === "done";
-          })
-          .sort(compareAgentsByRecencyStable);
+        return sortAgentsStably(
+          `${snapshot.projectRoot}::${compact ? "compact-resting" : "resting"}`,
+          snapshot.agents
+            .filter((agent) => {
+              if (agent.source === "cloud") {
+                return false;
+              }
+              if (shouldSeatAtWorkstation(agent)) {
+                return false;
+              }
+              return agent.state === "idle" || agent.state === "done";
+            })
+        );
       }
 
       function chairSpriteForAgent(agent) {
@@ -5726,7 +6346,7 @@ export function startClientApp(): void {
           : (options.liveOnly
             ? '<div class="muted">Showing live agents plus the 4 most recent lead sessions. Recent leads cool down in the rec area while live subagents stay on the floor.</div>'
             : '<div class="muted">Room shells come from the project XML, while booths are generated live from Codex sessions and grouped by parent session and subagent role.</div>');
-        return `<div class="scene-shell" data-scene-shell="${focusMode ? "focus" : "default"}">${hint}<div class="scene-fit ${compact ? "compact" : ""}" data-scene-fit data-scene-mode="${focusMode ? "focus" : "default"}" data-scene-fitted="${focusMode ? "false" : "true"}"><div class="scene-notifications" data-scene-notifications></div><div class="office-map-host" data-office-map-host="${escapeHtml(shellKey)}" data-project-root="${escapeHtml(snapshot.projectRoot)}" data-compact="${compact ? "1" : "0"}" data-focus-mode="${focusMode ? "1" : "0"}"><div class="office-map-canvas" data-office-map-canvas></div><div class="office-map-anchors" data-office-map-anchors></div></div></div></div>`;
+        return `<div class="scene-shell" data-scene-shell="${focusMode ? "focus" : "default"}">${hint}<div class="scene-fit ${compact ? "compact" : ""}" data-scene-fit data-scene-mode="${focusMode ? "focus" : "default"}" data-scene-fitted="${focusMode ? "false" : "true"}"><div class="scene-notifications" data-scene-notifications></div><div class="office-map-host" data-office-map-host="${escapeHtml(shellKey)}" data-project-root="${escapeHtml(snapshot.projectRoot)}" data-compact="${compact ? "1" : "0"}" data-focus-mode="${focusMode ? "1" : "0"}"><div class="office-map-canvas" data-office-map-canvas></div><div class="office-map-anchors" data-office-map-anchors></div><div class="office-map-thread-layer" data-office-map-thread-layer></div></div></div></div>`;
       }
 
       function sceneShellToken(projects, focusMode = false) {
@@ -5745,9 +6365,10 @@ export function startClientApp(): void {
         const tile = layoutConfig.tileSize;
         const baseMaxX = Math.max(...rooms.map((room) => room.x + room.width), 24);
         const maxY = Math.max(...rooms.map((room) => room.y + room.height), 16);
-        const waitingAgents = snapshot.agents
-          .filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !shouldSeatAtWorkstation(agent))
-          .sort(compareAgentsByRecencyStable);
+        const waitingAgents = sortAgentsStably(
+          `${snapshot.projectRoot}::${compact ? "compact-waiting" : "waiting"}`,
+          snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !shouldSeatAtWorkstation(agent))
+        );
         const allRestingAgents = restingAgentsFor(snapshot, compact);
         const restingAgents = allRestingAgents
           .filter((agent) =>
@@ -5773,9 +6394,55 @@ export function startClientApp(): void {
           offices: [],
           recAgents: [],
           relationshipLines: [],
-          anchors: []
+          anchors: [],
+          threadPanel: null
         };
         const agentPositions = new Map();
+        const openThreadSuppressesHover = Boolean(state.openAgentThread || state.closingAgentThread);
+
+        function sceneThreadPanelState(agent) {
+          const projectRoot = threadViewProjectRoot(snapshot, agent);
+          if (!projectRoot || !agent || !agent.threadId) {
+            return null;
+          }
+          if (
+            state.openAgentThread
+            && state.openAgentThread.projectRoot === projectRoot
+            && state.openAgentThread.threadId === agent.threadId
+          ) {
+            return "open";
+          }
+          if (
+            state.closingAgentThread
+            && state.closingAgentThread.projectRoot === projectRoot
+            && state.closingAgentThread.threadId === agent.threadId
+          ) {
+            return "closing";
+          }
+          return null;
+        }
+
+        function registerThreadPanel(agent) {
+          if (model.threadPanel) {
+            return;
+          }
+          const panelState = sceneThreadPanelState(agent);
+          if (!panelState) {
+            return;
+          }
+          model.threadPanel = {
+            state: panelState,
+            key: agentKey(snapshot.projectRoot, agent),
+            html: renderAgentThreadCard(snapshot, agent, { closing: panelState === "closing" })
+          };
+        }
+
+        function openThreadStageOffset(agent) {
+          if (sceneThreadPanelState(agent) !== "open" || hasReplyThreadWorkIntent(agent)) {
+            return { x: 0, y: 0 };
+          }
+          return { x: compact ? -18 : -26, y: compact ? 10 : 16 };
+        }
 
         rooms.forEach((room) => {
           const isPrimaryRoom = room.id === sceneRooms.primaryRoomId;
@@ -5927,6 +6594,8 @@ export function startClientApp(): void {
                   appearance: agent.appearance,
                   hatId: effectiveHatIdForAgent(agent),
                   needsUser: agent.needsUser || null,
+                  turnSignal: recentTurnSignalForAgent(snapshot, agent),
+                  activityCue: recentActivityCueForAgent(snapshot, agent),
                   statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                   slotId: entry.slot.id,
                   mirrored: seatMirrored,
@@ -5941,6 +6610,7 @@ export function startClientApp(): void {
                 key: agentKey(snapshot.projectRoot, agent),
                 ...visual.workstationBounds
               });
+              registerThreadPanel(agent);
               model.anchors.push(
                 {
                   id: "agent::" + agentKey(snapshot.projectRoot, agent),
@@ -5952,9 +6622,12 @@ export function startClientApp(): void {
                   top: visual.avatar ? visual.avatar.y : visual.anchorY,
                   width: visual.avatar ? visual.avatar.width : tile,
                   height: visual.avatar ? visual.avatar.height : tile,
+                  threadId: agent.threadId || "",
+                  replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                   focusKey: focusAgentKey(snapshot, agent),
                   focusKeys: collectFocusedSessionKeys(snapshot, agent),
-                  hoverHtml: renderAgentHover(snapshot, agent)
+                  hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
+                  threadOpen: Boolean(sceneThreadPanelState(agent))
                 },
                 { id: "workstation::" + agentKey(snapshot.projectRoot, agent), type: "workstation", key: agentKey(snapshot.projectRoot, agent), x: pod.x + Math.round(pod.width / 2), y: pod.y + Math.round(pod.height * 0.72) }
               );
@@ -6012,6 +6685,8 @@ export function startClientApp(): void {
                     appearance: entry.agent.appearance,
                     hatId: effectiveHatIdForAgent(entry.agent),
                     needsUser: entry.agent.needsUser || null,
+                    turnSignal: recentTurnSignalForAgent(snapshot, entry.agent),
+                    activityCue: recentActivityCueForAgent(snapshot, entry.agent),
                     statusMarkerIconUrl: stateMarkerIconUrlForAgent(entry.agent),
                     slotId: entry.slot.id,
                     mirrored: false,
@@ -6027,6 +6702,7 @@ export function startClientApp(): void {
               key: agentKey(snapshot.projectRoot, entry.agent),
               ...visual.workstationBounds
             });
+            registerThreadPanel(entry.agent);
             model.anchors.push(
               {
                 id: "agent::" + agentKey(snapshot.projectRoot, entry.agent),
@@ -6038,9 +6714,12 @@ export function startClientApp(): void {
                 top: visual.avatar ? visual.avatar.y : visual.anchorY,
                 width: visual.avatar ? visual.avatar.width : tile,
                 height: visual.avatar ? visual.avatar.height : tile,
+                threadId: entry.agent.threadId || "",
+                replyProjectRoot: threadViewProjectRoot(snapshot, entry.agent) || "",
                 focusKey: focusAgentKey(snapshot, entry.agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, entry.agent),
-                hoverHtml: renderAgentHover(snapshot, entry.agent)
+                hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, entry.agent),
+                threadOpen: Boolean(sceneThreadPanelState(entry.agent))
               },
               { id: "workstation::" + agentKey(snapshot.projectRoot, entry.agent), type: "workstation", key: agentKey(snapshot.projectRoot, entry.agent), x: visual.anchorX, y: visual.anchorY }
             );
@@ -6051,8 +6730,11 @@ export function startClientApp(): void {
             const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents, 4);
             waitingAssignments.forEach(({ agent, slotIndex }) => {
               const slot = wallsideWaitingSlotAt(slotIndex, compact, roomPixelWidth, layoutConfig.recAreaWalkwayGridY);
-              const anchorX = roomX + slot.x + Math.round(tile * 0.4);
-              const anchorY = roomY + slot.y + Math.round(tile * 0.6);
+              const stagedOffset = openThreadStageOffset(agent);
+              const avatarX = roomX + slot.x + stagedOffset.x;
+              const avatarY = roomY + slot.y + stagedOffset.y;
+              const anchorX = avatarX + Math.round(tile * 0.4);
+              const anchorY = avatarY + Math.round(tile * 0.6);
               model.recAgents.push({
                 id: agent.id,
                 key: agentKey(snapshot.projectRoot, agent),
@@ -6066,10 +6748,12 @@ export function startClientApp(): void {
                 appearance: agent.appearance,
                 hatId: effectiveHatIdForAgent(agent),
                 needsUser: agent.needsUser || null,
+                turnSignal: recentTurnSignalForAgent(snapshot, agent),
+                activityCue: recentActivityCueForAgent(snapshot, agent),
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                 sprite: avatarForAgent(agent).url,
-                x: roomX + slot.x,
-                y: roomY + slot.y,
+                x: avatarX,
+                y: avatarY,
                 width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
                 height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
                 depthBaseY: room.floorTop,
@@ -6077,25 +6761,32 @@ export function startClientApp(): void {
                 flip: slot.flip
               });
               agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
+              registerThreadPanel(agent);
               model.anchors.push({
                 id: "agent::" + agentKey(snapshot.projectRoot, agent),
                 type: "agent",
                 key: agentKey(snapshot.projectRoot, agent),
                 x: anchorX,
                 y: anchorY,
-                left: roomX + slot.x,
-                top: roomY + slot.y,
+                left: avatarX,
+                top: avatarY,
                 width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
                 height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                threadId: agent.threadId || "",
+                replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                 focusKey: focusAgentKey(snapshot, agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, agent),
-                hoverHtml: renderAgentHover(snapshot, agent)
+                hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
+                threadOpen: Boolean(sceneThreadPanelState(agent))
               });
             });
             restingAssignments.forEach(({ agent, slotIndex }) => {
               const slot = recRoomSeatSlotAt(agent, slotIndex, compact, roomPixelWidth, layoutConfig.recAreaGridTopY, room.__sofaColumns || null);
-              const anchorX = roomX + slot.x + Math.round(tile * 0.4);
-              const anchorY = roomY + slot.y + Math.round(tile * 0.6);
+              const stagedOffset = openThreadStageOffset(agent);
+              const avatarX = roomX + slot.x + stagedOffset.x;
+              const avatarY = roomY + slot.y + stagedOffset.y;
+              const anchorX = avatarX + Math.round(tile * 0.4);
+              const anchorY = avatarY + Math.round(tile * 0.6);
               model.recAgents.push({
                 id: agent.id,
                 key: agentKey(snapshot.projectRoot, agent),
@@ -6109,10 +6800,12 @@ export function startClientApp(): void {
                 appearance: agent.appearance,
                 hatId: effectiveHatIdForAgent(agent),
                 needsUser: agent.needsUser || null,
+                turnSignal: recentTurnSignalForAgent(snapshot, agent),
+                activityCue: recentActivityCueForAgent(snapshot, agent),
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
                 sprite: avatarForAgent(agent).url,
-                x: roomX + slot.x,
-                y: roomY + slot.y,
+                x: avatarX,
+                y: avatarY,
                 width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
                 height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
                 depthBaseY: room.floorTop,
@@ -6120,19 +6813,23 @@ export function startClientApp(): void {
                 flip: slot.flip
               });
               agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
+              registerThreadPanel(agent);
               model.anchors.push({
                 id: "agent::" + agentKey(snapshot.projectRoot, agent),
                 type: "agent",
                 key: agentKey(snapshot.projectRoot, agent),
                 x: anchorX,
                 y: anchorY,
-                left: roomX + slot.x,
-                top: roomY + slot.y,
+                left: avatarX,
+                top: avatarY,
                 width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
                 height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                threadId: agent.threadId || "",
+                replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                 focusKey: focusAgentKey(snapshot, agent),
                 focusKeys: collectFocusedSessionKeys(snapshot, agent),
-                hoverHtml: renderAgentHover(snapshot, agent)
+                hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
+                threadOpen: Boolean(sceneThreadPanelState(agent))
               });
             });
           }
@@ -6203,6 +6900,7 @@ export function startClientApp(): void {
         }
         const canvasContainer = host.querySelector("[data-office-map-canvas]");
         const anchorLayer = host.querySelector("[data-office-map-anchors]");
+        const threadLayer = host.querySelector("[data-office-map-thread-layer]");
         if (!(canvasContainer instanceof HTMLElement) || !(anchorLayer instanceof HTMLElement) || !window.PIXI) {
           return null;
         }
@@ -6211,6 +6909,7 @@ export function startClientApp(): void {
           host,
           canvasContainer,
           anchorLayer,
+          threadLayer: threadLayer instanceof HTMLElement ? threadLayer : null,
           app: new window.PIXI.Application(),
           root: null,
           model: null,
@@ -6360,6 +7059,7 @@ export function startClientApp(): void {
                 syncAgentHitNodePosition(renderer, entry);
                 if (entry.exiting && entry.routeIndex >= route.length) {
                   entry.sprite.alpha = Math.max(0, entry.sprite.alpha - 0.16);
+                  entry.exitFadeAlpha = entry.sprite.alpha;
                   if (entry.bubbleBox) {
                     entry.bubbleBox.alpha = entry.sprite.alpha;
                   }
@@ -6396,22 +7096,346 @@ export function startClientApp(): void {
                 return;
               }
               if (entry.kind === "bob") {
-                const bobOffset = Math.round(Math.sin((now + entry.phase) / 220) * 1);
+                const bobMode = entry.mode || "busy";
+                const waveSlow = Math.sin((now + entry.phase) / 260);
+                const waveMid = Math.sin((now + entry.phase) / 180);
+                const waveFast = Math.sin((now + entry.phase) / 110);
+                const waveStep = Math.sin((now + entry.phase) / 90);
+                const bobOffset =
+                  bobMode === "planning" ? Math.round(waveSlow * 1)
+                  : bobMode === "scanning" ? Math.round(waveMid * 1.4)
+                  : bobMode === "editing" ? Math.round(waveFast * 1.6)
+                  : bobMode === "running" ? Math.round((waveFast + waveStep * 0.45) * 1.7)
+                  : bobMode === "validating" ? Math.round(waveMid * 0.8)
+                  : bobMode === "delegating" ? Math.round((waveSlow + waveMid * 0.45) * 1.3)
+                  : Math.round(waveMid * 1);
+                const driftX =
+                  bobMode === "scanning" ? Math.round(Math.sin((now + entry.phase) / 210) * 1.2)
+                  : bobMode === "delegating" ? Math.round(Math.sin((now + entry.phase) / 320) * 1)
+                  : 0;
+                entry.sprite.x = entry.baseX + driftX;
                 entry.sprite.y = entry.baseY + bobOffset;
                 if (entry.hatSprite) {
+                  entry.hatSprite.x = entry.hatBaseX + driftX;
                   entry.hatSprite.y = entry.hatBaseY + bobOffset;
                 }
                 if (entry.statusMarker) {
+                  entry.statusMarker.x = entry.statusMarkerBaseX + driftX;
                   entry.statusMarker.y = entry.statusMarkerBaseY + bobOffset;
                 }
                 if (entry.bubbleBox) {
+                  entry.bubbleBox.x = entry.bubbleBoxBaseX + driftX;
                   entry.bubbleBox.y = entry.bubbleBoxBaseY + bobOffset;
                 }
                 if (entry.bubbleText) {
+                  entry.bubbleText.x = entry.bubbleTextBaseX + driftX;
                   entry.bubbleText.y = entry.bubbleTextBaseY + bobOffset;
                 }
                 if (typeof renderer.syncMotionStateDepth === "function") {
                   renderer.syncMotionStateDepth(entry.motionState || entry);
+                }
+                if (entry.motionState && typeof syncAgentHitNodePosition === "function") {
+                  syncAgentHitNodePosition(renderer, entry.motionState);
+                }
+                return;
+              }
+              if (entry.kind === "workstation-glow") {
+                if (!entry.node) {
+                  return;
+                }
+                const pulse = (Math.sin((now + entry.phase) / 180) + 1) / 2;
+                entry.node.alpha = Math.max(0.16, Number(entry.baseAlpha || 0.24) + pulse * 0.2);
+                return;
+              }
+              if (entry.kind === "state-effect") {
+                if (typeof syncStateEffectNode === "function") {
+                  syncStateEffectNode(entry, now);
+                }
+                return;
+              }
+              if (entry.kind === "turn-signal") {
+                const motionState = entry.motionState || null;
+                const turnSignal = motionState && motionState.turnSignal ? motionState.turnSignal : null;
+                if (!motionState || !turnSignal || !turnSignal.container) {
+                  return;
+                }
+                const durationMs = Math.max(600, Number(turnSignal.durationMs) || 2400);
+                const ageMs = Math.max(0, Date.now() - Number(turnSignal.startedAtMs || Date.now()));
+                const progress = Math.min(1, ageMs / durationMs);
+                const fade = progress >= 0.72
+                  ? Math.max(0, 1 - (progress - 0.72) / 0.28)
+                  : 1;
+                const pulse = progress < 0.16
+                  ? 0.86 + (progress / 0.16) * 0.14
+                  : 1 + Math.sin((now + entry.phase) / 110) * 0.03 * (1 - progress);
+                if (typeof syncTurnSignalNode === "function") {
+                  syncTurnSignalNode(motionState, turnSignal, progress * 6);
+                }
+                turnSignal.container.alpha = Math.max(
+                  0,
+                  Math.min(1, fade * (motionState.sprite ? Number(motionState.sprite.alpha || 1) : 1))
+                );
+                turnSignal.container.scale.set(pulse);
+                if (typeof renderer.syncMotionStateDepth === "function") {
+                  renderer.syncMotionStateDepth(motionState);
+                }
+                return;
+              }
+              if (entry.kind === "activity-cue") {
+                const motionState = entry.motionState || null;
+                const activityCue = motionState && motionState.activityCue ? motionState.activityCue : null;
+                if (!motionState || !activityCue || !activityCue.container) {
+                  return;
+                }
+                const durationMs = Math.max(900, Number(activityCue.durationMs) || 2200);
+                const ageMs = Math.max(0, Date.now() - Number(activityCue.startedAtMs || Date.now()));
+                const progress = Math.min(1, ageMs / durationMs);
+                const fade = progress >= 0.7
+                  ? Math.max(0, 1 - (progress - 0.7) / 0.3)
+                  : 1;
+                const pulse = 1 + Math.sin((now + entry.phase) / 120) * 0.05 * (1 - progress);
+                const driftX =
+                  entry.mode === "tool" ? Math.round(Math.sin((now + entry.phase) / 140) * 2.2)
+                  : entry.mode === "approval" ? Math.round(Math.sin((now + entry.phase) / 150) * 1.4)
+                  : entry.mode === "input" ? Math.round(Math.sin((now + entry.phase) / 180) * 1.1)
+                  : entry.mode === "command" ? Math.round(Math.sin((now + entry.phase) / 90) * 1.2)
+                  : 0;
+                const driftY =
+                  entry.mode === "resolved" ? -Math.round(progress * 7 + Math.sin((now + entry.phase) / 150) * 1.2)
+                  : entry.mode === "plan" ? -Math.round(progress * 7 + Math.sin((now + entry.phase) / 180) * 1.2)
+                  : entry.mode === "file" ? -Math.round(progress * 5 + Math.sin((now + entry.phase) / 120) * 1.6)
+                  : entry.mode === "approval" ? Math.round(Math.sin((now + entry.phase) / 170) * 1.4)
+                  : entry.mode === "input" ? -Math.round(progress * 3 + Math.sin((now + entry.phase) / 130) * 1.4)
+                  : entry.mode === "command" ? Math.round(Math.sin((now + entry.phase) / 110) * 1.2)
+                  : -Math.round(progress * 4);
+                if (typeof syncActivityCueNode === "function") {
+                  syncActivityCueNode(motionState, activityCue, driftX, driftY);
+                }
+                const cueIcon = activityCue.iconContainer || null;
+                const cueAccent = activityCue.iconAccent || null;
+                const cueText = activityCue.textNode || null;
+                if (cueIcon) {
+                  cueIcon.x = Number.isFinite(activityCue.iconBaseX) ? Number(activityCue.iconBaseX) : 0;
+                  cueIcon.y = Number.isFinite(activityCue.iconBaseY) ? Number(activityCue.iconBaseY) : 0;
+                  cueIcon.rotation = 0;
+                  cueIcon.alpha = 1;
+                  cueIcon.scale.set(1);
+                }
+                if (cueAccent) {
+                  cueAccent.alpha = 0.95;
+                  cueAccent.rotation = 0;
+                  cueAccent.scale.set(1);
+                }
+                if (cueText) {
+                  cueText.x = Number.isFinite(activityCue.textBaseX) ? Number(activityCue.textBaseX) : cueText.x;
+                  cueText.y = Number.isFinite(activityCue.textBaseY) ? Number(activityCue.textBaseY) : cueText.y;
+                  cueText.alpha = 1;
+                }
+                if (cueIcon && entry.mode === "plan") {
+                  cueIcon.y = (Number.isFinite(activityCue.iconBaseY) ? Number(activityCue.iconBaseY) : 0) + Math.round(Math.sin((now + entry.phase) / 180) * 0.8);
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.72 + ((Math.sin((now + entry.phase) / 180) + 1) / 2) * 0.28;
+                  }
+                } else if (cueIcon && entry.mode === "command") {
+                  cueIcon.x = (Number.isFinite(activityCue.iconBaseX) ? Number(activityCue.iconBaseX) : 0) + Math.round(Math.sin((now + entry.phase) / 95) * 0.9);
+                  if (cueAccent) {
+                    cueAccent.alpha = Math.sin((now + entry.phase) / 105) > 0 ? 0.98 : 0.24;
+                  }
+                } else if (cueIcon && entry.mode === "file") {
+                  cueIcon.rotation = Math.sin((now + entry.phase) / 135) * 0.12;
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.58 + ((Math.sin((now + entry.phase) / 120) + 1) / 2) * 0.38;
+                  }
+                } else if (cueIcon && entry.mode === "tool") {
+                  cueIcon.rotation = (now + entry.phase) / 420;
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.64 + ((Math.sin((now + entry.phase) / 140) + 1) / 2) * 0.28;
+                  }
+                } else if (cueIcon && entry.mode === "approval") {
+                  const approvalScale = 0.92 + ((Math.sin((now + entry.phase) / 150) + 1) / 2) * 0.2;
+                  cueIcon.scale.set(approvalScale);
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.28 + (1 - progress) * 0.5;
+                    cueAccent.scale.set(0.88 + progress * 0.5);
+                  }
+                } else if (cueIcon && entry.mode === "input") {
+                  cueIcon.y = (Number.isFinite(activityCue.iconBaseY) ? Number(activityCue.iconBaseY) : 0) + Math.round(Math.sin((now + entry.phase) / 145) * 1);
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.48 + ((Math.sin((now + entry.phase) / 130) + 1) / 2) * 0.46;
+                  }
+                } else if (cueIcon && entry.mode === "resolved") {
+                  const resolvedLift = Math.round(progress * 1.5);
+                  cueIcon.y = (Number.isFinite(activityCue.iconBaseY) ? Number(activityCue.iconBaseY) : 0) - resolvedLift;
+                  cueIcon.scale.set(1 + (1 - progress) * 0.08);
+                  if (cueAccent) {
+                    cueAccent.alpha = 0.72 + (1 - progress) * 0.24;
+                    cueAccent.rotation = (now + entry.phase) / 260;
+                  }
+                  if (cueText) {
+                    cueText.y = (Number.isFinite(activityCue.textBaseY) ? Number(activityCue.textBaseY) : cueText.y) - resolvedLift;
+                  }
+                }
+                activityCue.container.alpha = Math.max(
+                  0,
+                  Math.min(1, fade * (motionState.sprite ? Number(motionState.sprite.alpha || 1) : 1))
+                );
+                activityCue.container.scale.set(pulse);
+                if (typeof renderer.syncMotionStateDepth === "function") {
+                  renderer.syncMotionStateDepth(motionState);
+                }
+                return;
+              }
+              if (entry.kind === "workstation-cue-effect") {
+                if (!entry.node) {
+                  return;
+                }
+                const durationMs = Math.max(900, Number(entry.durationMs) || 2200);
+                const ageMs = Math.max(0, Date.now() - Number(entry.startedAtMs || Date.now()));
+                const progress = Math.min(1, ageMs / durationMs);
+                const fade = progress >= 0.7
+                  ? Math.max(0, 1 - (progress - 0.7) / 0.3)
+                  : 1;
+                const pulse = (Math.sin((now + entry.phase) / 130) + 1) / 2;
+                entry.node.x = pixelSnap(Number(entry.baseX) || 0);
+                entry.node.y = pixelSnap(Number(entry.baseY) || 0);
+                entry.node.alpha = Math.max(0, 0.22 + fade * 0.9);
+                entry.node.scale.set(1);
+                if (entry.glowNode) {
+                  entry.glowNode.alpha = 0.1 + fade * 0.24 + pulse * 0.12;
+                }
+                if (entry.frameNode) {
+                  entry.frameNode.alpha = 0.26 + fade * 0.36;
+                }
+                if (entry.primaryNode) {
+                  entry.primaryNode.alpha = 0.62 + fade * 0.34;
+                  entry.primaryNode.rotation = 0;
+                  entry.primaryNode.scale.set(1);
+                }
+                if (entry.secondaryNode) {
+                  entry.secondaryNode.alpha = 0.54 + fade * 0.28;
+                  entry.secondaryNode.rotation = 0;
+                  entry.secondaryNode.scale.set(1);
+                }
+                (entry.accentNodes || []).forEach((node) => {
+                  if (node) {
+                    node.alpha = 0.52 + fade * 0.28;
+                    node.rotation = 0;
+                    node.scale.set(1);
+                  }
+                });
+                (entry.dotNodes || []).forEach((node) => {
+                  if (node) {
+                    node.alpha = 0.54 + fade * 0.3;
+                    node.scale.set(1);
+                  }
+                });
+                (entry.detailNodes || []).forEach((node) => {
+                  if (node) {
+                    node.alpha = 0.5 + fade * 0.28;
+                    node.rotation = 0;
+                    node.scale.set(1);
+                  }
+                });
+                if (entry.mode === "plan") {
+                  entry.node.y = pixelSnap((Number(entry.baseY) || 0) - Math.round(progress * 4 + pulse * 1.2));
+                  if (entry.primaryNode) {
+                    entry.primaryNode.scale.x = 0.86 + pulse * 0.2;
+                  }
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.scale.x = 0.78 + pulse * 0.24;
+                  }
+                } else if (entry.mode === "command") {
+                  if (entry.accentNodes && entry.accentNodes[0]) {
+                    const scanWidth = Math.max(5, Math.round((Number(entry.width) || 16) * 0.34));
+                    entry.accentNodes[0].x = Math.round(progress * Math.max(3, (Number(entry.width) || 16) - scanWidth));
+                    entry.accentNodes[0].alpha = 0.34 + (1 - progress) * 0.48;
+                  }
+                } else if (entry.mode === "file") {
+                  entry.node.y = pixelSnap((Number(entry.baseY) || 0) - Math.round(progress * 2));
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.rotation = Math.sin((now + entry.phase) / 150) * 0.08;
+                  }
+                } else if (entry.mode === "tool") {
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.rotation = (now + entry.phase) / 480;
+                  }
+                  if (entry.primaryNode) {
+                    entry.primaryNode.scale.set(0.96 + pulse * 0.12);
+                  }
+                } else if (entry.mode === "approval") {
+                  const approvalProfile = entry.requestProfile && typeof entry.requestProfile === "object"
+                    ? entry.requestProfile
+                    : null;
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.scale.set(0.84 + progress * 0.48 + pulse * 0.1);
+                    entry.secondaryNode.alpha = 0.18 + (1 - progress) * 0.46;
+                  }
+                  if (entry.primaryNode) {
+                    entry.primaryNode.scale.set(0.94 + pulse * 0.1);
+                  }
+                  (entry.dotNodes || []).forEach((node, index, nodes) => {
+                    if (!node) {
+                      return;
+                    }
+                    const orbitRadius = Math.max(3, Math.round(Math.min(Number(entry.width) || 16, Number(entry.height) || 10) * 0.42));
+                    const angle = -Math.PI * 0.82
+                      + (index / Math.max(1, nodes.length - 1)) * Math.PI * 0.64
+                      + (1 - progress) * 0.18;
+                    node.x = Math.round((Number(entry.width) || 16) / 2 + Math.cos(angle) * orbitRadius);
+                    node.y = Math.round((Number(entry.height) || 10) / 2 + Math.sin(angle) * orbitRadius);
+                    node.alpha = 0.26 + ((Math.sin((now + entry.phase) / 140 + index * 0.7) + 1) / 2) * 0.56;
+                    node.scale.set(0.86 + pulse * 0.18);
+                  });
+                  (entry.detailNodes || []).forEach((node, index) => {
+                    if (!node) {
+                      return;
+                    }
+                    node.alpha = 0.4 + ((Math.sin((now + entry.phase) / 160 + index * 0.9) + 1) / 2) * 0.42;
+                    if (approvalProfile && approvalProfile.approvalType === "file") {
+                      node.y = 2 - Math.round(Math.sin((now + entry.phase) / 170) * 0.6);
+                    } else if (approvalProfile && approvalProfile.approvalType === "network") {
+                      node.y = Math.max(2, (Number(entry.height) || 10) - 3) - Math.round(Math.sin((now + entry.phase) / 150 + index * 0.6) * 0.7);
+                    }
+                  });
+                } else if (entry.mode === "input") {
+                  const inputProfile = entry.requestProfile && typeof entry.requestProfile === "object"
+                    ? entry.requestProfile
+                    : null;
+                  const questionCount = Math.max(1, Math.min(4, Number(inputProfile && inputProfile.questionCount) || (entry.dotNodes || []).length || 1));
+                  const requiredCount = Math.max(0, Math.min(questionCount, Number(inputProfile && inputProfile.requiredCount) || 0));
+                  (entry.dotNodes || []).forEach((node, index) => {
+                    if (!node) {
+                      return;
+                    }
+                    node.y = Math.max(3, (Number(entry.height) || 10) - 5) - Math.round(((Math.sin((now + entry.phase) / 140 + index * 0.8) + 1) / 2) * 2.2);
+                    node.alpha = 0.28 + ((Math.sin((now + entry.phase) / 150 + index * 0.75) + 1) / 2) * 0.58;
+                    node.scale.y = 0.82 + ((Math.sin((now + entry.phase) / 160 + index * 0.6) + 1) / 2) * 0.42;
+                    node.scale.x = 1;
+                  });
+                  (entry.accentNodes || []).forEach((node, index) => {
+                    if (!node) {
+                      return;
+                    }
+                    node.alpha = index < requiredCount
+                      ? 0.44 + ((Math.sin((now + entry.phase) / 145 + index * 0.9) + 1) / 2) * 0.46
+                      : 0.24;
+                    node.y = 2 - Math.round(Math.sin((now + entry.phase) / 180 + index * 0.7) * 0.8);
+                  });
+                  (entry.detailNodes || []).forEach((node, index) => {
+                    if (!node) {
+                      return;
+                    }
+                    node.alpha = 0.32 + ((Math.sin((now + entry.phase) / 170 + index * 0.65) + 1) / 2) * 0.44;
+                  });
+                } else if (entry.mode === "resolved") {
+                  entry.node.y = pixelSnap((Number(entry.baseY) || 0) - Math.round(progress * 5));
+                  if (entry.primaryNode) {
+                    entry.primaryNode.scale.set(1 + (1 - progress) * 0.08);
+                  }
+                  if (entry.secondaryNode) {
+                    entry.secondaryNode.rotation = (now + entry.phase) / 300;
+                    entry.secondaryNode.alpha = 0.34 + (1 - progress) * 0.42;
+                  }
                 }
                 return;
               }
@@ -6468,6 +7492,50 @@ export function startClientApp(): void {
                   entry.sprite.destroy?.();
                 }
                 return !done;
+              }
+              if (entry.kind === "turn-signal") {
+                const motionState = entry.motionState || null;
+                const turnSignal = motionState && motionState.turnSignal ? motionState.turnSignal : null;
+                const done = !turnSignal
+                  || !turnSignal.container
+                  || Date.now() - Number(turnSignal.startedAtMs || Date.now()) >= Math.max(600, Number(turnSignal.durationMs) || 2400);
+                if (done && turnSignal && turnSignal.container && turnSignal.container.parent) {
+                  turnSignal.container.parent.removeChild(turnSignal.container);
+                  turnSignal.container.destroy?.({ children: true });
+                }
+                return !done;
+              }
+              if (entry.kind === "activity-cue") {
+                const motionState = entry.motionState || null;
+                const activityCue = motionState && motionState.activityCue ? motionState.activityCue : null;
+                const done = !activityCue
+                  || !activityCue.container
+                  || Date.now() - Number(activityCue.startedAtMs || Date.now()) >= Math.max(900, Number(activityCue.durationMs) || 2200);
+                if (done && activityCue && activityCue.container && activityCue.container.parent) {
+                  activityCue.container.parent.removeChild(activityCue.container);
+                  activityCue.container.destroy?.({ children: true });
+                }
+                return !done;
+              }
+              if (entry.kind === "workstation-cue-effect") {
+                const done = !entry.node
+                  || !entry.node.parent
+                  || Date.now() - Number(entry.startedAtMs || Date.now()) >= Math.max(900, Number(entry.durationMs) || 2200);
+                if (done && entry.node && entry.node.parent) {
+                  entry.node.parent.removeChild(entry.node);
+                  entry.node.destroy?.({ children: true });
+                }
+                return !done;
+              }
+              if (entry.kind === "workstation-glow") {
+                return Boolean(entry.node && entry.node.parent);
+              }
+              if (entry.kind === "state-effect") {
+                return Boolean(
+                  entry.motionState
+                  && entry.motionState.sprite
+                  && (!entry.motionState.exiting || entry.motionState.sprite.alpha > 0.02)
+                );
               }
               return !entry.exiting || entry.sprite.alpha > 0.02;
             });
@@ -6699,6 +7767,37 @@ function roleTint(role) {
       }
 
   // src/client/runtime/navigation-source.ts
+const stableAgentTileReservations = new Map();
+
+      function reserveAgentTiles(model, roomById) {
+        const reservations = new Map();
+        const collect = (agent) => {
+          if (!agent || !(agent.key || agent.id)) {
+            return;
+          }
+          const room = roomById.get(agent.roomId);
+          const tilePoint = officeAvatarFootTile(room, model.tile, agent.x, agent.y, agent.width, agent.height);
+          if (!tilePoint) {
+            return;
+          }
+          const reservationKey = agent.key || agent.id;
+          const previousReservation = stableAgentTileReservations.get(reservationKey);
+          const reservation = previousReservation
+            && previousReservation.roomId === agent.roomId
+            && Math.abs(previousReservation.column - tilePoint.column) <= 1
+            && Math.abs(previousReservation.row - tilePoint.row) <= 1
+            ? previousReservation
+            : {
+              roomId: agent.roomId,
+              column: tilePoint.column,
+              row: tilePoint.row
+            };
+          reservations.set(reservationKey, reservation);
+          stableAgentTileReservations.set(reservationKey, reservation);
+        };
+        return reservations;
+      }
+
       function officeAvatarPositionForTile(room, tileSize, tilePoint, width, height) {
         return {
           x: room.x + tilePoint.column * tileSize + Math.round((tileSize - width) / 2),
@@ -6911,9 +8010,135 @@ function roleTint(role) {
         motionState.anchorNode.style.height = Math.max(8, Math.round(motionState.height * renderer.scale)) + "px";
       }
 
+      function threadHistoryAtBottom(history) {
+        if (!(history instanceof HTMLElement)) {
+          return true;
+        }
+        return history.scrollHeight - history.scrollTop - history.clientHeight <= 12;
+      }
+
+      function scrollThreadHistoryToBottom(history) {
+        if (!(history instanceof HTMLElement)) {
+          return;
+        }
+        history.scrollTop = history.scrollHeight;
+        window.requestAnimationFrame(() => {
+          history.scrollTop = history.scrollHeight;
+        });
+      }
+
+      function replacePanelSectionIfChanged(card, nextCard, selector) {
+        const current = card.querySelector(selector);
+        const next = nextCard.querySelector(selector);
+        if (!(current instanceof HTMLElement) || !(next instanceof HTMLElement)) {
+          return;
+        }
+        const nextHtml = next.innerHTML;
+        if (current.dataset.renderHtml !== nextHtml) {
+          current.innerHTML = nextHtml;
+          current.dataset.renderHtml = nextHtml;
+        }
+      }
+
+      function syncThreadHistory(history, nextHistory) {
+        if (!(history instanceof HTMLElement) || !(nextHistory instanceof HTMLElement)) {
+          return;
+        }
+        const wasAtBottom = threadHistoryAtBottom(history);
+        const nextNodes = Array.from(nextHistory.children).filter((node) => node instanceof HTMLElement);
+        const currentByKey = new Map(
+          Array.from(history.children)
+            .filter((node) => node instanceof HTMLElement)
+            .map((node) => [node.dataset.threadEntryKey || node.dataset.threadEmpty || node.outerHTML, node])
+        );
+        const nextKeys = new Set();
+        nextNodes.forEach((nextNode) => {
+          const key = nextNode.dataset.threadEntryKey || nextNode.dataset.threadEmpty || nextNode.outerHTML;
+          nextKeys.add(key);
+          const existing = currentByKey.get(key);
+          if (existing instanceof HTMLElement) {
+            const nextHtml = nextNode.innerHTML;
+            if (existing.dataset.renderHtml !== nextHtml) {
+              existing.className = nextNode.className;
+              existing.innerHTML = nextHtml;
+              existing.dataset.renderHtml = nextHtml;
+            } else if (existing.className !== nextNode.className) {
+              existing.className = nextNode.className;
+            }
+            history.appendChild(existing);
+            return;
+          }
+          const fresh = nextNode.cloneNode(true);
+          if (fresh instanceof HTMLElement) {
+            fresh.dataset.renderHtml = fresh.innerHTML;
+            if (fresh.dataset.threadEntryKey) {
+              fresh.classList.add("is-new");
+              fresh.addEventListener("animationend", () => fresh.classList.remove("is-new"), { once: true });
+            }
+            history.appendChild(fresh);
+          }
+        });
+        Array.from(history.children).forEach((node) => {
+          if (!(node instanceof HTMLElement)) {
+            return;
+          }
+          const key = node.dataset.threadEntryKey || node.dataset.threadEmpty || node.outerHTML;
+          if (!nextKeys.has(key)) {
+            node.remove();
+          }
+        });
+        if (wasAtBottom) {
+          scrollThreadHistoryToBottom(history);
+        }
+      }
+
+      function syncThreadPanel(renderer, model) {
+        if (!renderer.threadLayer) {
+          renderer.host.classList.toggle("has-thread-panel", Boolean(model.threadPanel));
+          return;
+        }
+        renderer.threadLayer.classList.toggle("has-thread-panel", Boolean(model.threadPanel));
+        renderer.host.classList.toggle("has-thread-panel", Boolean(model.threadPanel));
+        if (!model.threadPanel || !model.threadPanel.html) {
+          renderer.threadLayer.innerHTML = "";
+          return;
+        }
+        let slot = renderer.threadLayer.querySelector("[data-thread-panel-slot]");
+        const panelKey = model.threadPanel.key || "";
+        const panelState = model.threadPanel.state || "open";
+        if (!(slot instanceof HTMLElement) || slot.dataset.threadPanelKey !== panelKey) {
+          if (!(slot instanceof HTMLElement)) {
+            slot = document.createElement("div");
+            renderer.threadLayer.appendChild(slot);
+          }
+          slot.className = "office-map-thread-panel-slot";
+          slot.dataset.threadPanelSlot = panelState;
+          slot.dataset.threadPanelKey = panelKey;
+          slot.innerHTML = model.threadPanel.html;
+          scrollThreadHistoryToBottom(slot.querySelector(".office-map-thread-history"));
+          return;
+        }
+        slot.dataset.threadPanelSlot = panelState;
+        const template = document.createElement("template");
+        template.innerHTML = model.threadPanel.html;
+        const card = slot.querySelector("[data-agent-thread-card]");
+        const nextCard = template.content.querySelector("[data-agent-thread-card]");
+        if (!(card instanceof HTMLElement) || !(nextCard instanceof HTMLElement)) {
+          slot.innerHTML = model.threadPanel.html;
+          return;
+        }
+        if (card.className !== nextCard.className) {
+          card.className = nextCard.className;
+        }
+        replacePanelSectionIfChanged(card, nextCard, ".office-map-thread-card-header");
+        replacePanelSectionIfChanged(card, nextCard, ".office-map-thread-card-tag");
+        syncThreadHistory(card.querySelector(".office-map-thread-history"), nextCard.querySelector(".office-map-thread-history"));
+      }
+
       function syncOfficeAnchors(renderer, model, scale) {
         const layer = renderer.anchorLayer;
         layer.innerHTML = "";
+        syncThreadPanel(renderer, model);
         renderer.agentHitNodes = new Map();
         model.anchors.forEach((anchor) => {
           const node = document.createElement("div");
@@ -6921,6 +8146,9 @@ function roleTint(role) {
             node.className = "office-map-agent-hit";
             node.dataset.agentKey = anchor.key;
             node.dataset.focusAgent = "true";
+            if (anchor.threadOpen) {
+              node.classList.add("is-thread-open");
+            }
             if (anchor.focusKey) {
               node.dataset.focusKey = anchor.focusKey;
             }
@@ -6931,7 +8159,10 @@ function roleTint(role) {
             node.style.top = Math.round((anchor.top ?? anchor.y) * scale) + "px";
             node.style.width = Math.max(8, Math.round((anchor.width ?? 0) * scale)) + "px";
             node.style.height = Math.max(8, Math.round((anchor.height ?? 0) * scale)) + "px";
-            node.innerHTML = anchor.hoverHtml || "";
+            const triggerHtml = anchor.replyProjectRoot && anchor.threadId
+              ? `<button type="button" class="office-map-agent-trigger" data-action="open-agent-thread" data-project-root="${escapeHtml(anchor.replyProjectRoot)}" data-thread-id="${escapeHtml(anchor.threadId)}" aria-label="Open ${escapeHtml(anchor.key)} chat"></button>`
+              : "";
+            node.innerHTML = triggerHtml + (anchor.hoverHtml || "");
             renderer.agentHitNodes.set(anchor.key, node);
           } else {
             node.className = "office-map-anchor";
@@ -6990,6 +8221,11 @@ function roleTint(role) {
         renderer.anchorLayer.style.left = leftOffset + "px";
         renderer.anchorLayer.style.width = scaledWidth + "px";
         renderer.anchorLayer.style.height = scaledHeight + "px";
+        if (renderer.threadLayer) {
+          renderer.threadLayer.style.left = leftOffset + "px";
+          renderer.threadLayer.style.width = scaledWidth + "px";
+          renderer.threadLayer.style.height = scaledHeight + "px";
+        }
         renderer.app.renderer.resize(scaledWidth, scaledHeight);
         const previousMotionStates = new Map(renderer.motionStates || []);
         const previousDoorStates = new Map(renderer.roomDoorStates || []);
@@ -7189,6 +8425,114 @@ function roleTint(role) {
           }
         }
 
+        function motionTargetDistance(previousState, agent) {
+          if (!previousState || !agent) {
+            return Number.POSITIVE_INFINITY;
+          }
+          const previousTargetX = Number.isFinite(previousState.targetX) ? Number(previousState.targetX) : Number(previousState.currentX);
+          const previousTargetY = Number.isFinite(previousState.targetY) ? Number(previousState.targetY) : Number(previousState.currentY);
+          return Math.hypot(previousTargetX - Number(agent.x), previousTargetY - Number(agent.y));
+        }
+
+        function sameSlotAssignment(previousState, agent) {
+          if (!previousState || !agent) {
+            return false;
+          }
+          const previousSlotId = previousState.slotId ? String(previousState.slotId) : null;
+          const nextSlotId = agent.slotId ? String(agent.slotId) : null;
+          const previousMirrored = typeof previousState.mirrored === "boolean" ? previousState.mirrored : null;
+          const nextMirrored = typeof agent.mirrored === "boolean" ? agent.mirrored : null;
+          return previousSlotId === nextSlotId && previousMirrored === nextMirrored;
+        }
+
+        function shouldReuseMotionTarget(previousState, agent, preserveAutonomyRoute = false) {
+          if (!previousState || !agent || previousState.exiting === true || previousState.roomId !== agent.roomId) {
+            return false;
+          }
+          if (preserveAutonomyRoute) {
+            return true;
+          }
+          if (previousState.targetX === agent.x && previousState.targetY === agent.y) {
+            return true;
+          }
+          const distance = motionTargetDistance(previousState, agent);
+          if (!Number.isFinite(distance) || distance > 3) {
+            return false;
+          }
+          if (sameSlotAssignment(previousState, agent)) {
+            return true;
+          }
+          return !previousState.slotId && !agent.slotId;
+        }
+
+        function buildExitGhostMotion(key, motionState, roomNavigation, reservations) {
+          if (!motionState || !key) {
+            return null;
+          }
+          const room = roomById.get(motionState.roomId);
+          const nav = navigationForAgent(roomNavigation, reservations, motionState.roomId, key);
+          if (!room || !nav) {
+            return null;
+          }
+          const routeFinished = motionState.exiting === true
+            && motionState.routeIndex >= ((motionState.route && motionState.route.length) || 0);
+          const exitTile = nearestWalkableTile(nav, roomDoorTile(room, model.tile));
+          const startTile = nearestWalkableTile(
+            nav,
+            motionState.currentTile || officeAvatarFootTile(room, model.tile, motionState.currentX, motionState.currentY, motionState.width, motionState.height)
+          );
+          const targetPoint = exitTile
+            ? officeAvatarPositionForTile(room, model.tile, exitTile, motionState.width, motionState.height)
+            : { x: motionState.currentX, y: motionState.currentY };
+          const ghostAgent = {
+            id: motionState.key,
+            key,
+            roomId: motionState.roomId,
+            sprite: motionState.spriteUrl,
+            width: motionState.width,
+            height: motionState.height,
+            x: motionState.currentX,
+            y: motionState.currentY,
+            flipX: motionState.flipX,
+            state: motionState.state || "idle",
+            bubble: null
+          };
+          const ghostVisual = addAvatarNode(ghostAgent, 12);
+          const ghostRoute = routeFinished
+            ? [{ x: motionState.currentX, y: motionState.currentY }]
+            : (startTile && exitTile
+              ? buildAgentPixelRoute(nav, startTile, exitTile, room, model.tile, motionState.width, motionState.height, targetPoint)
+              : [targetPoint]);
+          const exitFadeAlpha = Number.isFinite(motionState.exitFadeAlpha)
+            ? Math.max(0, Math.min(1, Number(motionState.exitFadeAlpha)))
+            : 1;
+          ghostVisual.avatar.alpha = exitFadeAlpha;
+          return {
+            kind: "motion",
+            key,
+            roomId: motionState.roomId,
+            sprite: ghostVisual.avatar,
+            statusMarker: null,
+            bubbleBox: null,
+            bubbleText: null,
+            width: motionState.width,
+            height: motionState.height,
+            currentX: motionState.currentX,
+            currentY: motionState.currentY,
+            currentTile: startTile,
+            route: ghostRoute,
+            routeIndex: routeFinished ? ghostRoute.length : 0,
+            speed: Number(motionState.speed) || 216,
+            flipX: motionState.flipX,
+            targetFlipX: motionState.targetFlipX,
+            anchorNode: null,
+            exiting: true,
+            spriteUrl: motionState.spriteUrl,
+            state: motionState.state || "idle",
+            exitFadeAlpha
+          };
+        }
+
         function pickFacilityProvider(roomId) {
           const facilities = model.facilities.filter((facility) => facility && facility.roomId === roomId && Array.isArray(facility.items) && facility.items.length > 0);
           if (facilities.length === 0) {
@@ -7331,12 +8675,633 @@ function roleTint(role) {
         const STATE_MARKER_SIZE = 11;
         const STATE_MARKER_Y_OFFSET = 13;
         const STATE_MARKER_BUBBLE_Y_OFFSET = 20;
+        const TURN_SIGNAL_PADDING_X = 4;
+        const TURN_SIGNAL_MIN_WIDTH = 24;
+        const TURN_SIGNAL_MIN_HEIGHT = 12;
+        const TURN_SIGNAL_AVATAR_Y_OFFSET = 22;
+        const TURN_SIGNAL_MARKER_Y_OFFSET = 30;
+        const TURN_SIGNAL_BUBBLE_Y_OFFSET = 38;
+        const ACTIVITY_CUE_MIN_WIDTH = 16;
+        const ACTIVITY_CUE_MIN_HEIGHT = 12;
+        const ACTIVITY_CUE_AVATAR_Y_OFFSET = 20;
+        const ACTIVITY_CUE_SIDE_OFFSET_X = 6;
+        const ACTIVITY_CUE_SIDE_OFFSET_Y = 5;
+        const ACTIVITY_CUE_PADDING_X = 4;
+        const ACTIVITY_CUE_ICON_WIDTH = 8;
+        const ACTIVITY_CUE_ICON_GAP = 3;
 
         function statusMarkerPosition(agent, markerWidth = STATE_MARKER_SIZE) {
           return {
             x: pixelSnap(agent.x + Math.round((agent.width - markerWidth) / 2)),
             y: pixelSnap(agent.y - (agent.bubble ? STATE_MARKER_BUBBLE_Y_OFFSET : STATE_MARKER_Y_OFFSET))
           };
+        }
+
+        function turnSignalPalette(signal) {
+          switch (signal && signal.tone) {
+            case "completed":
+              return {
+                fillColor: 0x1f5a2a,
+                strokeColor: 0x9fe28a,
+                glowColor: 0xd7ffcc,
+                textColor: 0xf7fff3
+              };
+            case "interrupted":
+              return {
+                fillColor: 0x62410d,
+                strokeColor: 0xffc76c,
+                glowColor: 0xffe1ac,
+                textColor: 0xfff7df
+              };
+            case "failed":
+              return {
+                fillColor: 0x6d1f24,
+                strokeColor: 0xff8f88,
+                glowColor: 0xffd1cc,
+                textColor: 0xfff1ef
+              };
+            case "started":
+            default:
+              return {
+                fillColor: 0x183a72,
+                strokeColor: 0x8cbcff,
+                glowColor: 0xc7dcff,
+                textColor: 0xf2f7ff
+              };
+          }
+        }
+
+        function turnSignalPosition(agent, signalWidth, signalHeight, anchorMode = "avatar") {
+          const yOffset =
+            anchorMode === "bubble"
+              ? TURN_SIGNAL_BUBBLE_Y_OFFSET
+              : anchorMode === "marker"
+                ? TURN_SIGNAL_MARKER_Y_OFFSET
+                : TURN_SIGNAL_AVATAR_Y_OFFSET;
+          return {
+            x: pixelSnap(agent.x + Math.round((agent.width - signalWidth) / 2)),
+            y: pixelSnap(agent.y - signalHeight - yOffset)
+          };
+        }
+
+        function activityCuePalette(cue) {
+          switch (cue && cue.mode) {
+            case "plan":
+              return {
+                fillColor: 0x335e2a,
+                strokeColor: 0xb8e07e,
+                glowColor: 0xe8ffca,
+                textColor: 0xf7fff1
+              };
+            case "file":
+              return {
+                fillColor: 0x101714,
+                strokeColor: 0x4bd69f,
+                glowColor: 0x79f0c1,
+                textColor: 0xdfffee,
+                accentColor: 0xffd27a
+              };
+            case "tool":
+              return {
+                fillColor: 0x4a3278,
+                strokeColor: 0xd0b1ff,
+                glowColor: 0xf0e0ff,
+                textColor: 0xfaf4ff
+              };
+            case "approval":
+              return {
+                fillColor: 0x6b5214,
+                strokeColor: 0xffde7c,
+                glowColor: 0xffefba,
+                textColor: 0xfffae8
+              };
+            case "input":
+              return {
+                fillColor: 0x23593d,
+                strokeColor: 0x94efb8,
+                glowColor: 0xd6ffe4,
+                textColor: 0xf4fff7
+              };
+            case "resolved":
+              return {
+                fillColor: 0x22556a,
+                strokeColor: 0x91ddff,
+                glowColor: 0xd9f5ff,
+                textColor: 0xf3fcff
+              };
+            case "command":
+            default:
+              return {
+                fillColor: 0x080c10,
+                strokeColor: 0x7bcbff,
+                glowColor: 0x1c3342,
+                textColor: 0xd6ecff,
+                accentColor: 0x78d787
+              };
+          }
+        }
+
+        function activityCueFrameRadius(mode) {
+          return mode === "command" || mode === "file" ? 1 : 4;
+        }
+
+        function activityCueFrameAlpha(mode) {
+          return mode === "command" || mode === "file" ? 0.32 : 0.58;
+        }
+
+        function activityCueStrokeWidth(mode) {
+          return mode === "command" || mode === "file" ? 1 : 2;
+        }
+
+        function activityCueAnchorMode(agent, cue) {
+          if (!cue) {
+            return "avatar";
+          }
+          if (cue.mode === "approval" || cue.mode === "input") {
+            return agent && agent.slotId ? "side" : "avatar";
+          }
+          if (cue.mode === "resolved") {
+            return "avatar";
+          }
+          return cue.mode === "plan"
+            ? "avatar"
+            : (agent && agent.slotId ? "side" : "avatar");
+        }
+
+        function activityCuePosition(agent, cueWidth, cueHeight, anchorMode = "avatar", flipX = false) {
+          if (anchorMode === "side") {
+            const sideX = flipX
+              ? agent.x - cueWidth - ACTIVITY_CUE_SIDE_OFFSET_X
+              : agent.x + agent.width + ACTIVITY_CUE_SIDE_OFFSET_X;
+            return {
+              x: pixelSnap(sideX),
+              y: pixelSnap(agent.y + Math.round(agent.height * 0.24) + ACTIVITY_CUE_SIDE_OFFSET_Y)
+            };
+          }
+          return {
+            x: pixelSnap(agent.x + Math.round((agent.width - cueWidth) / 2)),
+            y: pixelSnap(agent.y - cueHeight - ACTIVITY_CUE_AVATAR_Y_OFFSET)
+          };
+        }
+
+        function buildActivityCueAdornment(mode, palette) {
+          const iconContainer = new PIXI.Container();
+          let accentNode = null;
+
+          if (mode === "plan") {
+            const board = new PIXI.Graphics()
+              .roundRect(1, 2, 6, 5, 2)
+              .fill({ color: palette.textColor, alpha: 0.18 })
+              .stroke({ color: palette.textColor, width: 1, alpha: 0.96 });
+            const clip = new PIXI.Graphics()
+              .roundRect(2, 0, 4, 2, 1)
+              .fill({ color: palette.strokeColor, alpha: 0.95 });
+            accentNode = clip;
+            iconContainer.addChild(board);
+            iconContainer.addChild(clip);
+          } else if (mode === "command") {
+            const prompt = new PIXI.Graphics()
+              .moveTo(1, 1)
+              .lineTo(4, 4)
+              .lineTo(1, 7)
+              .stroke({ color: palette.accentColor || palette.textColor, width: 1.2, alpha: 0.98 });
+            const cursor = new PIXI.Graphics()
+              .rect(5, 6, 2, 1)
+              .fill({ color: palette.textColor, alpha: 0.95 });
+            accentNode = cursor;
+            iconContainer.addChild(prompt);
+            iconContainer.addChild(cursor);
+          } else if (mode === "file") {
+            const page = new PIXI.Graphics()
+              .rect(1, 1, 5, 6)
+              .fill({ color: palette.textColor, alpha: 0.16 })
+              .stroke({ color: palette.textColor, width: 1, alpha: 0.96 });
+            const fold = new PIXI.Graphics()
+              .moveTo(4, 1)
+              .lineTo(6, 1)
+              .lineTo(6, 3)
+              .stroke({ color: palette.strokeColor, width: 1, alpha: 0.94 });
+            const slash = new PIXI.Graphics()
+              .moveTo(2, 6)
+              .lineTo(6, 2)
+              .stroke({ color: palette.accentColor || palette.strokeColor, width: 1.2, alpha: 0.96 });
+            accentNode = slash;
+            iconContainer.addChild(page);
+            iconContainer.addChild(fold);
+            iconContainer.addChild(slash);
+          } else if (mode === "tool") {
+            const spokes = new PIXI.Graphics()
+              .moveTo(4, 0)
+              .lineTo(4, 2)
+              .moveTo(4, 6)
+              .lineTo(4, 8)
+              .moveTo(0, 4)
+              .lineTo(2, 4)
+              .moveTo(6, 4)
+              .lineTo(8, 4)
+              .stroke({ color: palette.strokeColor, width: 1.1, alpha: 0.94 });
+            const core = new PIXI.Graphics()
+              .circle(4, 4, 2)
+              .fill({ color: palette.textColor, alpha: 0.14 })
+              .stroke({ color: palette.textColor, width: 1, alpha: 0.96 });
+            accentNode = spokes;
+            iconContainer.addChild(spokes);
+            iconContainer.addChild(core);
+          } else if (mode === "approval") {
+            const ring = new PIXI.Graphics()
+              .circle(4, 4, 2.5)
+              .stroke({ color: palette.textColor, width: 1.1, alpha: 0.96 });
+            const pulseRing = new PIXI.Graphics()
+              .circle(4, 4, 3.5)
+              .stroke({ color: palette.glowColor, width: 1, alpha: 0.62 });
+            accentNode = pulseRing;
+            iconContainer.addChild(pulseRing);
+            iconContainer.addChild(ring);
+          } else if (mode === "input") {
+            const bubble = new PIXI.Graphics()
+              .roundRect(1, 1, 6, 5, 2)
+              .fill({ color: palette.textColor, alpha: 0.15 })
+              .stroke({ color: palette.textColor, width: 1, alpha: 0.96 });
+            const tail = new PIXI.Graphics()
+              .moveTo(3, 6)
+              .lineTo(2, 8)
+              .lineTo(4, 6)
+              .fill({ color: palette.textColor, alpha: 0.92 });
+            const dot = new PIXI.Graphics()
+              .circle(4, 4, 0.9)
+              .fill({ color: palette.strokeColor, alpha: 0.95 });
+            accentNode = dot;
+            iconContainer.addChild(bubble);
+            iconContainer.addChild(tail);
+            iconContainer.addChild(dot);
+          } else if (mode === "resolved") {
+            const check = new PIXI.Graphics()
+              .moveTo(1, 4)
+              .lineTo(3, 6)
+              .lineTo(7, 1)
+              .stroke({ color: palette.textColor, width: 1.4, alpha: 0.98 });
+            const spark = new PIXI.Graphics()
+              .moveTo(6, 0)
+              .lineTo(6, 2)
+              .moveTo(5, 1)
+              .lineTo(7, 1)
+              .stroke({ color: palette.glowColor, width: 1, alpha: 0.86 });
+            accentNode = spark;
+            iconContainer.addChild(check);
+            iconContainer.addChild(spark);
+          }
+
+          return {
+            iconContainer,
+            accentNode
+          };
+        }
+
+        function syncTurnSignalNode(motionState, turnSignal, liftPx = 0) {
+          if (!motionState || !turnSignal || !turnSignal.container) {
+            return;
+          }
+          const agentLike = {
+            x: Number.isFinite(motionState.currentX) ? Number(motionState.currentX) : Number(motionState.targetX) || 0,
+            y: Number.isFinite(motionState.currentY) ? Number(motionState.currentY) : Number(motionState.targetY) || 0,
+            width: Number.isFinite(motionState.width) ? Number(motionState.width) : 0
+          };
+          const topLeft = turnSignalPosition(
+            agentLike,
+            Number.isFinite(turnSignal.width) ? Number(turnSignal.width) : TURN_SIGNAL_MIN_WIDTH,
+            Number.isFinite(turnSignal.height) ? Number(turnSignal.height) : TURN_SIGNAL_MIN_HEIGHT,
+            turnSignal.anchorMode || "avatar"
+          );
+          turnSignal.container.x = topLeft.x + Math.round((Number(turnSignal.width) || TURN_SIGNAL_MIN_WIDTH) / 2);
+          turnSignal.container.y = topLeft.y + Math.round((Number(turnSignal.height) || TURN_SIGNAL_MIN_HEIGHT) / 2) - Math.round(liftPx);
+        }
+
+        function syncActivityCueNode(motionState, activityCue, driftX = 0, driftY = 0) {
+          if (!motionState || !activityCue || !activityCue.container) {
+            return;
+          }
+          const agentLike = {
+            x: Number.isFinite(motionState.currentX) ? Number(motionState.currentX) : Number(motionState.targetX) || 0,
+            y: Number.isFinite(motionState.currentY) ? Number(motionState.currentY) : Number(motionState.targetY) || 0,
+            width: Number.isFinite(motionState.width) ? Number(motionState.width) : 0,
+            height: Number.isFinite(motionState.height) ? Number(motionState.height) : 0
+          };
+          const topLeft = activityCuePosition(
+            agentLike,
+            Number.isFinite(activityCue.width) ? Number(activityCue.width) : ACTIVITY_CUE_MIN_WIDTH,
+            Number.isFinite(activityCue.height) ? Number(activityCue.height) : ACTIVITY_CUE_MIN_HEIGHT,
+            activityCue.anchorMode || "avatar",
+            motionState.flipX === true
+          );
+          activityCue.container.x = topLeft.x + Math.round((Number(activityCue.width) || ACTIVITY_CUE_MIN_WIDTH) / 2) + Math.round(driftX);
+          activityCue.container.y = topLeft.y + Math.round((Number(activityCue.height) || ACTIVITY_CUE_MIN_HEIGHT) / 2) + Math.round(driftY);
+        }
+
+        function buildWorkstationCueEffectNode(effect) {
+          const palette = activityCuePalette(effect || { mode: "command" });
+          const width = Math.max(12, Math.round(Number(effect && effect.width) || 18));
+          const height = Math.max(9, Math.round(Number(effect && effect.height) || 10));
+          const requestProfile = effect && effect.requestProfile && typeof effect.requestProfile === "object"
+            ? effect.requestProfile
+            : null;
+          const container = new PIXI.Container();
+          container.x = pixelSnap(Number(effect && effect.x) || 0);
+          container.y = pixelSnap(Number(effect && effect.y) || 0);
+          const frame = new PIXI.Graphics()
+            .roundRect(0, 0, width, height, 4)
+            .stroke({ color: palette.strokeColor, width: 1, alpha: 0.34 });
+          const glow = new PIXI.Graphics()
+            .roundRect(1, 1, Math.max(2, width - 2), Math.max(2, height - 2), 3)
+            .fill({ color: palette.fillColor, alpha: 0.12 });
+          container.addChild(glow);
+          container.addChild(frame);
+
+          const mode = effect && effect.mode ? effect.mode : "command";
+          const accentNodes = [];
+          const dotNodes = [];
+          const detailNodes = [];
+          let primaryNode = null;
+          let secondaryNode = null;
+
+          if (mode === "plan") {
+            primaryNode = new PIXI.Graphics()
+              .roundRect(2, 2, Math.max(6, width - 4), 2, 1)
+              .fill({ color: palette.strokeColor, alpha: 0.86 });
+            secondaryNode = new PIXI.Graphics()
+              .roundRect(4, Math.max(4, Math.round(height * 0.48)), Math.max(5, width - 8), 2, 1)
+              .fill({ color: palette.textColor, alpha: 0.72 });
+            const marker = new PIXI.Graphics()
+              .circle(Math.max(5, width - 4), Math.max(4, Math.round(height * 0.48) + 1), 1.25)
+              .fill({ color: palette.glowColor, alpha: 0.94 });
+            accentNodes.push(marker);
+            container.addChild(primaryNode);
+            container.addChild(secondaryNode);
+            container.addChild(marker);
+          } else if (mode === "command") {
+            primaryNode = new PIXI.Graphics()
+              .roundRect(2, Math.max(2, Math.round(height * 0.3)), Math.max(6, Math.round(width * 0.42)), 2, 1)
+              .fill({ color: palette.textColor, alpha: 0.9 });
+            secondaryNode = new PIXI.Graphics()
+              .roundRect(2, Math.max(5, Math.round(height * 0.64)), Math.max(4, Math.round(width * 0.26)), 2, 1)
+              .fill({ color: palette.strokeColor, alpha: 0.82 });
+            const scan = new PIXI.Graphics()
+              .roundRect(0, Math.max(1, Math.round(height * 0.5)), Math.max(5, Math.round(width * 0.34)), 1, 1)
+              .fill({ color: palette.glowColor, alpha: 0.88 });
+            accentNodes.push(scan);
+            container.addChild(primaryNode);
+            container.addChild(secondaryNode);
+            container.addChild(scan);
+          } else if (mode === "file") {
+            primaryNode = new PIXI.Graphics()
+              .rect(3, 2, Math.max(6, width - 7), Math.max(5, height - 4))
+              .stroke({ color: palette.textColor, width: 1, alpha: 0.94 });
+            secondaryNode = new PIXI.Graphics()
+              .moveTo(4, Math.max(4, height - 3))
+              .lineTo(Math.max(7, width - 3), 3)
+              .stroke({ color: palette.strokeColor, width: 1.3, alpha: 0.94 });
+            accentNodes.push(secondaryNode);
+            container.addChild(primaryNode);
+            container.addChild(secondaryNode);
+          } else if (mode === "tool") {
+            primaryNode = new PIXI.Graphics()
+              .circle(Math.round(width / 2), Math.round(height / 2), Math.max(3, Math.round(Math.min(width, height) * 0.28)))
+              .stroke({ color: palette.textColor, width: 1, alpha: 0.94 });
+            secondaryNode = new PIXI.Graphics()
+              .moveTo(Math.round(width / 2), 1)
+              .lineTo(Math.round(width / 2), Math.max(2, Math.round(height * 0.28)))
+              .moveTo(Math.round(width / 2), Math.max(2, height - Math.round(height * 0.28)))
+              .lineTo(Math.round(width / 2), Math.max(3, height - 1))
+              .moveTo(1, Math.round(height / 2))
+              .lineTo(Math.max(2, Math.round(width * 0.28)), Math.round(height / 2))
+              .moveTo(Math.max(2, width - Math.round(width * 0.28)), Math.round(height / 2))
+              .lineTo(Math.max(3, width - 1), Math.round(height / 2))
+              .stroke({ color: palette.strokeColor, width: 1.1, alpha: 0.9 });
+            accentNodes.push(secondaryNode);
+            container.addChild(primaryNode);
+            container.addChild(secondaryNode);
+          } else if (mode === "approval") {
+            primaryNode = new PIXI.Graphics()
+              .circle(Math.round(width / 2), Math.round(height / 2), Math.max(3, Math.round(Math.min(width, height) * 0.24)))
+              .stroke({ color: palette.textColor, width: 1.1, alpha: 0.94 });
+            secondaryNode = new PIXI.Graphics()
+              .circle(Math.round(width / 2), Math.round(height / 2), Math.max(4, Math.round(Math.min(width, height) * 0.38)))
+              .stroke({ color: palette.glowColor, width: 1, alpha: 0.48 });
+            const decisionCount = Math.max(2, Math.min(4, Number(requestProfile && requestProfile.decisionCount) || 3));
+            const orbitRadius = Math.max(3, Math.round(Math.min(width, height) * 0.42));
+            for (let index = 0; index < decisionCount; index += 1) {
+              const angle = -Math.PI * 0.82 + (index / Math.max(1, decisionCount - 1)) * Math.PI * 0.64;
+              const dot = new PIXI.Graphics()
+                .circle(
+                  Math.round(width / 2 + Math.cos(angle) * orbitRadius),
+                  Math.round(height / 2 + Math.sin(angle) * orbitRadius),
+                  0.9
+                )
+                .fill({ color: palette.strokeColor, alpha: 0.9 });
+              dotNodes.push(dot);
+              container.addChild(dot);
+            }
+            if (requestProfile && requestProfile.approvalType === "file") {
+              const page = new PIXI.Graphics()
+                .rect(Math.max(1, width - 5), 2, 3, 4)
+                .stroke({ color: palette.glowColor, width: 1, alpha: 0.9 });
+              detailNodes.push(page);
+              container.addChild(page);
+            } else if (requestProfile && requestProfile.approvalType === "network") {
+              [0, 1, 2].forEach((index) => {
+                const node = new PIXI.Graphics()
+                  .circle(2 + index * 3, Math.max(2, height - 3), 0.8)
+                  .fill({ color: palette.glowColor, alpha: 0.86 });
+                detailNodes.push(node);
+                container.addChild(node);
+              });
+            } else {
+              const prompt = new PIXI.Graphics()
+                .moveTo(2, Math.max(2, height - 4))
+                .lineTo(4, Math.max(2, height - 2))
+                .lineTo(2, height)
+                .stroke({ color: palette.glowColor, width: 1, alpha: 0.9 });
+              detailNodes.push(prompt);
+              container.addChild(prompt);
+            }
+            accentNodes.push(secondaryNode);
+            container.addChild(primaryNode);
+            container.addChild(secondaryNode);
+          } else if (mode === "input") {
+            primaryNode = new PIXI.Graphics()
+              .roundRect(2, 2, Math.max(7, width - 5), Math.max(5, height - 5), 3)
+              .stroke({ color: palette.textColor, width: 1, alpha: 0.92 });
+            container.addChild(primaryNode);
+            const questionCount = Math.max(1, Math.min(4, Number(requestProfile && requestProfile.questionCount) || 3));
+            const requiredCount = Math.max(0, Math.min(questionCount, Number(requestProfile && requestProfile.requiredCount) || 0));
+            const optionCount = Math.max(0, Math.min(questionCount, Number(requestProfile && requestProfile.optionCount) || 0));
+            const secretCount = Math.max(0, Math.min(2, Number(requestProfile && requestProfile.secretCount) || 0));
+            const contentLeft = 4;
+            const contentWidth = Math.max(6, width - 8);
+            const barGap = questionCount > 1 ? Math.max(1, Math.floor(contentWidth / Math.max(2, questionCount * 2))) : 0;
+            const barWidth = Math.max(1, Math.floor((contentWidth - barGap * Math.max(0, questionCount - 1)) / questionCount));
+            for (let index = 0; index < questionCount; index += 1) {
+              const bar = new PIXI.Graphics()
+                .roundRect(contentLeft + index * (barWidth + barGap), Math.max(3, height - 5), barWidth, 2, 1)
+                .fill({ color: palette.strokeColor, alpha: 0.78 });
+              dotNodes.push(bar);
+              container.addChild(bar);
+              if (index < requiredCount) {
+                const requiredDot = new PIXI.Graphics()
+                  .circle(contentLeft + index * (barWidth + barGap) + Math.round(barWidth / 2), 2, 0.8)
+                  .fill({ color: palette.glowColor, alpha: 0.92 });
+                accentNodes.push(requiredDot);
+                container.addChild(requiredDot);
+              }
+              if (index < optionCount) {
+                const optionDot = new PIXI.Graphics()
+                  .circle(contentLeft + index * (barWidth + barGap) + Math.round(barWidth / 2), Math.max(4, height - 2), 0.7)
+                  .fill({ color: palette.textColor, alpha: 0.7 });
+                detailNodes.push(optionDot);
+                container.addChild(optionDot);
+              }
+            }
+            for (let index = 0; index < secretCount; index += 1) {
+              const lockNode = new PIXI.Graphics()
+                .rect(Math.max(1, width - 3 - index * 2), 2, 1, 2)
+                .fill({ color: palette.glowColor, alpha: 0.92 });
+              detailNodes.push(lockNode);
+              container.addChild(lockNode);
+            }
+          } else if (mode === "resolved") {
+            primaryNode = new PIXI.Graphics()
+              .moveTo(Math.max(3, Math.round(width * 0.22)), Math.max(4, Math.round(height * 0.56)))
+              .lineTo(Math.max(5, Math.round(width * 0.4)), Math.max(6, height - 3))
+              .lineTo(Math.max(8, width - 3), 3)
+              .stroke({ color: palette.textColor, width: 1.3, alpha: 0.96 });
+            secondaryNode = new PIXI.Graphics()
+              .moveTo(Math.round(width / 2), 0)
+              .lineTo(Math.round(width / 2), 2)
+              .moveTo(0, Math.round(height / 2))
+              .lineTo(2, Math.round(height / 2))
+              .moveTo(width - 2, Math.round(height / 2))
+              .lineTo(width, Math.round(height / 2))
+              .moveTo(Math.round(width / 2), height - 2)
+              .lineTo(Math.round(width / 2), height)
+              .stroke({ color: palette.glowColor, width: 1, alpha: 0.8 });
+            accentNodes.push(secondaryNode);
+            container.addChild(primaryNode);
+            container.addChild(secondaryNode);
+          }
+
+          return {
+            container,
+            frameNode: frame,
+            glowNode: glow,
+            primaryNode,
+            secondaryNode,
+            accentNodes,
+            dotNodes,
+            detailNodes,
+            requestProfile,
+            mode,
+            width,
+            height,
+            baseX: container.x,
+            baseY: container.y
+          };
+        }
+
+        function stateEffectModeForAgent(agent) {
+          if (!agent) {
+            return null;
+          }
+          if (agent.state === "waiting") {
+            return "waiting";
+          }
+          if (agent.state === "blocked") {
+            return "blocked";
+          }
+          return null;
+        }
+
+        function syncStateEffectNode(entry, now) {
+          const motionState = entry && entry.motionState ? entry.motionState : null;
+          if (!motionState || !motionState.sprite) {
+            return;
+          }
+          const mode = entry.mode || "";
+          const renderOffsetX = Number.isFinite(motionState.renderOffsetX) ? Number(motionState.renderOffsetX) : 0;
+          const renderOffsetY = Number.isFinite(motionState.renderOffsetY) ? Number(motionState.renderOffsetY) : 0;
+          const renderWidth = Number.isFinite(motionState.renderWidth) ? Number(motionState.renderWidth) : pixelSnap(motionState.width, 1);
+          const renderHeight = Number.isFinite(motionState.renderHeight) ? Number(motionState.renderHeight) : pixelSnap(motionState.height, 1);
+          const baseSpriteX = motionState.flipX
+            ? pixelSnap(motionState.currentX + renderOffsetX) + renderWidth
+            : pixelSnap(motionState.currentX + renderOffsetX);
+          const baseSpriteY = pixelSnap(motionState.currentY + renderOffsetY);
+          const statusMarkerWidth = motionState.statusMarker ? Math.max(8, Math.round(motionState.statusMarker.width || 11)) : STATE_MARKER_SIZE;
+          const statusMarkerPositionValue = statusMarkerPosition({
+            x: motionState.currentX,
+            y: motionState.currentY,
+            width: motionState.width,
+            bubble: Boolean(motionState.bubbleBox)
+          }, statusMarkerWidth);
+          const statusMarkerLift = Number.isFinite(motionState.statusMarkerLift) ? Number(motionState.statusMarkerLift) : 0;
+          const bubbleX = pixelSnap(motionState.currentX + Math.round(motionState.width * 0.2));
+          const bubbleY = pixelSnap(motionState.currentY - 14);
+          const hatBaseX = motionState.hatSprite
+            ? pixelSnap(
+              motionState.currentX
+              + renderOffsetX
+              + (Number.isFinite(motionState.hatCenteredOffsetX) ? Number(motionState.hatCenteredOffsetX) : 0)
+              + (motionState.flipX ? -(Number.isFinite(motionState.hatManualOffsetX) ? Number(motionState.hatManualOffsetX) : 0) : (Number.isFinite(motionState.hatManualOffsetX) ? Number(motionState.hatManualOffsetX) : 0))
+            )
+            : 0;
+          const hatBaseY = motionState.hatSprite
+            ? pixelSnap(motionState.currentY + renderOffsetY + (Number.isFinite(motionState.hatOffsetY) ? Number(motionState.hatOffsetY) : 0))
+            : 0;
+          if (mode === "waiting") {
+            const pulse = (Math.sin((now + entry.phase) / 220) + 1) / 2;
+            const lift = Math.round(Math.sin((now + entry.phase) / 260) * 1.2);
+            const avatarLift = Math.max(0, lift);
+            motionState.sprite.y = baseSpriteY - avatarLift;
+            if (motionState.hatSprite) {
+              motionState.hatSprite.y = hatBaseY - avatarLift;
+            }
+            if (motionState.statusMarker) {
+              motionState.statusMarker.x = statusMarkerPositionValue.x;
+              motionState.statusMarker.y = statusMarkerPositionValue.y - statusMarkerLift - avatarLift;
+              motionState.statusMarker.alpha = 0.72 + pulse * 0.28;
+            }
+            if (motionState.bubbleBox) {
+              motionState.bubbleBox.x = bubbleX;
+              motionState.bubbleBox.y = bubbleY - avatarLift;
+              motionState.bubbleBox.alpha = 0.72 + pulse * 0.2;
+            }
+            if (motionState.bubbleText) {
+              motionState.bubbleText.x = bubbleX + Math.round((motionState.bubbleBox.width - motionState.bubbleText.width) / 2);
+              motionState.bubbleText.y = bubbleY + Math.round((motionState.bubbleBox.height - motionState.bubbleText.height) / 2) - 1 - avatarLift;
+              motionState.bubbleText.alpha = 0.76 + pulse * 0.24;
+            }
+          } else if (mode === "blocked") {
+            const shakeX = Math.round(Math.sin((now + entry.phase) / 58) * 1.8);
+            motionState.sprite.x = baseSpriteX + shakeX;
+            if (motionState.hatSprite) {
+              motionState.hatSprite.x = motionState.flipX
+                ? pixelSnap(hatBaseX + (Number.isFinite(motionState.hatWidth) ? Number(motionState.hatWidth) : 0) + shakeX)
+                : hatBaseX + shakeX;
+            }
+            if (motionState.statusMarker) {
+              motionState.statusMarker.x = statusMarkerPositionValue.x + shakeX;
+              motionState.statusMarker.y = statusMarkerPositionValue.y - statusMarkerLift;
+              motionState.statusMarker.alpha = 0.82 + ((Math.sin((now + entry.phase) / 120) + 1) / 2) * 0.18;
+            }
+            if (motionState.bubbleBox) {
+              motionState.bubbleBox.x = bubbleX + shakeX;
+              motionState.bubbleBox.y = bubbleY;
+            }
+            if (motionState.bubbleText) {
+              motionState.bubbleText.x = bubbleX + Math.round((motionState.bubbleBox.width - motionState.bubbleText.width) / 2) + shakeX;
+              motionState.bubbleText.y = bubbleY + Math.round((motionState.bubbleBox.height - motionState.bubbleText.height) / 2) - 1;
+            }
+          }
+          if (typeof renderer.syncMotionStateDepth === "function") {
+            renderer.syncMotionStateDepth(motionState);
+          }
         }
 
         function avatarRenderMetrics(agent) {
@@ -7530,6 +9495,126 @@ function roleTint(role) {
             renderer.root.addChild(bubbleText);
             createdNodes.push(bubbleText);
           }
+          let turnSignal = null;
+          if (agent.turnSignal && agent.turnSignal.label) {
+            const palette = turnSignalPalette(agent.turnSignal);
+            const turnSignalText = createPixiText(renderer, agent.turnSignal.label, {
+              fill: palette.textColor,
+              fontFamily: "IBM Plex Mono",
+              fontSize: Math.max(7, Math.round(7 * state.globalSceneSettings.textScale)),
+              fontWeight: "700"
+            });
+            const turnSignalWidth = Math.max(TURN_SIGNAL_MIN_WIDTH, Math.round(turnSignalText.width) + TURN_SIGNAL_PADDING_X * 2);
+            const turnSignalHeight = Math.max(TURN_SIGNAL_MIN_HEIGHT, Math.round(turnSignalText.height) + 4);
+            const turnSignalContainer = new PIXI.Container();
+            turnSignalContainer.pivot.set(Math.round(turnSignalWidth / 2), Math.round(turnSignalHeight / 2));
+            const turnSignalFrame = new PIXI.Graphics()
+              .roundRect(-1, -1, turnSignalWidth + 2, turnSignalHeight + 2, 4)
+              .stroke({ color: palette.glowColor, width: 1, alpha: 0.6 });
+            const turnSignalBg = new PIXI.Graphics()
+              .roundRect(0, 0, turnSignalWidth, turnSignalHeight, 4)
+              .fill({ color: palette.fillColor, alpha: 0.94 })
+              .stroke({ color: palette.strokeColor, width: 2, alpha: 0.95 });
+            turnSignalText.x = Math.round((turnSignalWidth - turnSignalText.width) / 2);
+            turnSignalText.y = Math.round((turnSignalHeight - turnSignalText.height) / 2) - 1;
+            turnSignalContainer.addChild(turnSignalFrame);
+            turnSignalContainer.addChild(turnSignalBg);
+            turnSignalContainer.addChild(turnSignalText);
+            turnSignal = {
+              container: turnSignalContainer,
+              width: turnSignalWidth,
+              height: turnSignalHeight,
+              startedAtMs: Number.isFinite(agent.turnSignal.startedAtMs) ? Number(agent.turnSignal.startedAtMs) : Date.now(),
+              durationMs: Number.isFinite(agent.turnSignal.durationMs) ? Number(agent.turnSignal.durationMs) : 2800,
+              phase: stableHash(agent.turnSignal.key || agent.id || agent.label || "turn-signal") % 1000,
+              anchorMode: bubbleBox ? "bubble" : (statusMarker ? "marker" : "avatar")
+            };
+            syncTurnSignalNode(
+              {
+                currentX: agent.x,
+                currentY: agent.y,
+                targetX: agent.x,
+                targetY: agent.y,
+                width: agent.width
+              },
+              turnSignal
+            );
+            turnSignalContainer.zIndex = Number.isFinite(agent.depthFootY)
+              ? sceneFootDepth(Number(agent.depthFootY) - snappedHeight, snappedHeight, (Number(agent.depthBias) || zIndex) + 4.5, model.tile, Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0, Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null)
+              : (fixedZ !== null ? fixedZ + 4.5 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 4.5, model.tile, Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0, Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null));
+            renderer.root.addChild(turnSignalContainer);
+            createdNodes.push(turnSignalContainer);
+          }
+          let activityCue = null;
+          if (agent.activityCue && agent.activityCue.label) {
+            const palette = activityCuePalette(agent.activityCue);
+            const adornment = buildActivityCueAdornment(agent.activityCue.mode || "command", palette);
+            const activityCueText = createPixiText(renderer, agent.activityCue.label, {
+              fill: palette.textColor,
+              fontFamily: "IBM Plex Mono",
+              fontSize: Math.max(6, Math.round(6 * state.globalSceneSettings.textScale)),
+              fontWeight: "700"
+            });
+            const activityCueWidth = Math.max(
+              ACTIVITY_CUE_MIN_WIDTH,
+              Math.round(activityCueText.width) + ACTIVITY_CUE_PADDING_X * 2 + ACTIVITY_CUE_ICON_WIDTH + ACTIVITY_CUE_ICON_GAP
+            );
+            const activityCueHeight = Math.max(ACTIVITY_CUE_MIN_HEIGHT, Math.round(activityCueText.height) + 4);
+            const activityCueRadius = activityCueFrameRadius(agent.activityCue.mode || "command");
+            const activityCueContainer = new PIXI.Container();
+            activityCueContainer.pivot.set(Math.round(activityCueWidth / 2), Math.round(activityCueHeight / 2));
+            const activityCueFrame = new PIXI.Graphics()
+              .roundRect(-1, -1, activityCueWidth + 2, activityCueHeight + 2, activityCueRadius)
+              .stroke({ color: palette.glowColor, width: 1, alpha: activityCueFrameAlpha(agent.activityCue.mode || "command") });
+            const activityCueBg = new PIXI.Graphics()
+              .roundRect(0, 0, activityCueWidth, activityCueHeight, activityCueRadius)
+              .fill({ color: palette.fillColor, alpha: agent.activityCue.mode === "command" || agent.activityCue.mode === "file" ? 0.96 : 0.9 })
+              .stroke({ color: palette.strokeColor, width: activityCueStrokeWidth(agent.activityCue.mode || "command"), alpha: 0.94 });
+            const activityCueIconX = ACTIVITY_CUE_PADDING_X;
+            const activityCueIconY = Math.max(1, Math.round((activityCueHeight - ACTIVITY_CUE_ICON_WIDTH) / 2));
+            adornment.iconContainer.x = activityCueIconX;
+            adornment.iconContainer.y = activityCueIconY;
+            activityCueText.x = ACTIVITY_CUE_PADDING_X + ACTIVITY_CUE_ICON_WIDTH + ACTIVITY_CUE_ICON_GAP;
+            activityCueText.y = Math.round((activityCueHeight - activityCueText.height) / 2) - 1;
+            activityCueContainer.addChild(activityCueFrame);
+            activityCueContainer.addChild(activityCueBg);
+            activityCueContainer.addChild(adornment.iconContainer);
+            activityCueContainer.addChild(activityCueText);
+            activityCue = {
+              container: activityCueContainer,
+              mode: agent.activityCue.mode || "command",
+              iconContainer: adornment.iconContainer,
+              iconAccent: adornment.accentNode,
+              iconBaseX: activityCueIconX,
+              iconBaseY: activityCueIconY,
+              textNode: activityCueText,
+              textBaseX: activityCueText.x,
+              textBaseY: activityCueText.y,
+              width: activityCueWidth,
+              height: activityCueHeight,
+              startedAtMs: Number.isFinite(agent.activityCue.startedAtMs) ? Number(agent.activityCue.startedAtMs) : Date.now(),
+              durationMs: Number.isFinite(agent.activityCue.durationMs) ? Number(agent.activityCue.durationMs) : 2200,
+              phase: stableHash(agent.activityCue.key || agent.id || agent.label || "activity-cue") % 1000,
+              anchorMode: activityCueAnchorMode(agent, agent.activityCue)
+            };
+            syncActivityCueNode(
+              {
+                currentX: agent.x,
+                currentY: agent.y,
+                targetX: agent.x,
+                targetY: agent.y,
+                width: agent.width,
+                height: agent.height,
+                flipX: agent.flipX === true
+              },
+              activityCue
+            );
+            activityCueContainer.zIndex = Number.isFinite(agent.depthFootY)
+              ? sceneFootDepth(Number(agent.depthFootY) - snappedHeight, snappedHeight, (Number(agent.depthBias) || zIndex) + 4.25, model.tile, Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0, Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null)
+              : (fixedZ !== null ? fixedZ + 4.25 : sceneFootDepth(avatar.y, snappedHeight, zIndex + 4.25, model.tile, Number.isFinite(agent.depthBaseY) ? Number(agent.depthBaseY) : 0, Number.isFinite(agent.depthRow) ? Number(agent.depthRow) : null));
+            renderer.root.addChild(activityCueContainer);
+            createdNodes.push(activityCueContainer);
+          }
           return {
             nodes: createdNodes,
             avatar,
@@ -7537,6 +9622,8 @@ function roleTint(role) {
             statusMarker,
             bubbleBox,
             bubbleText,
+            turnSignal,
+            activityCue,
             renderWidth: snappedWidth,
             renderHeight: snappedHeight,
             renderOffsetX: offsetX,
@@ -7551,7 +9638,19 @@ function roleTint(role) {
             hatCenteredOffsetX: hatMetrics ? hatMetrics.centeredOffsetX : 0,
             hatManualOffsetX: hatMetrics ? hatMetrics.manualOffsetX : 0,
             hatOffsetY: hatMetrics ? hatMetrics.offsetY : 0,
-            statusMarkerLift: hatMetrics ? hatMetrics.markerLift : 0
+            statusMarkerLift: hatMetrics ? hatMetrics.markerLift : 0,
+            turnSignalWidth: turnSignal ? turnSignal.width : 0,
+            turnSignalHeight: turnSignal ? turnSignal.height : 0,
+            turnSignalStartedAtMs: turnSignal ? turnSignal.startedAtMs : 0,
+            turnSignalDurationMs: turnSignal ? turnSignal.durationMs : 0,
+            turnSignalPhase: turnSignal ? turnSignal.phase : 0,
+            turnSignalAnchorMode: turnSignal ? turnSignal.anchorMode : "avatar",
+            activityCueWidth: activityCue ? activityCue.width : 0,
+            activityCueHeight: activityCue ? activityCue.height : 0,
+            activityCueStartedAtMs: activityCue ? activityCue.startedAtMs : 0,
+            activityCueDurationMs: activityCue ? activityCue.durationMs : 0,
+            activityCuePhase: activityCue ? activityCue.phase : 0,
+            activityCueAnchorMode: activityCue ? activityCue.anchorMode : "avatar"
           };
         }
 
@@ -7636,6 +9735,26 @@ function roleTint(role) {
                 effectiveDepthRow
               );
             }
+            if (motionState.turnSignal && motionState.turnSignal.container) {
+              motionState.turnSignal.container.zIndex = sceneFootDepth(
+                Number(effectiveDepthFootY) - renderHeight,
+                renderHeight,
+                effectiveDepthBias + 4.5,
+                model.tile,
+                Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0,
+                effectiveDepthRow
+              );
+            }
+            if (motionState.activityCue && motionState.activityCue.container) {
+              motionState.activityCue.container.zIndex = sceneFootDepth(
+                Number(effectiveDepthFootY) - renderHeight,
+                renderHeight,
+                effectiveDepthBias + 4.25,
+                model.tile,
+                Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0,
+                effectiveDepthRow
+              );
+            }
             return;
           }
           if (Number.isFinite(motionState.fixedZ)) {
@@ -7655,6 +9774,12 @@ function roleTint(role) {
             }
             if (motionState.heldItemSprite) {
               motionState.heldItemSprite.zIndex = fixedZ + 4;
+            }
+            if (motionState.turnSignal && motionState.turnSignal.container) {
+              motionState.turnSignal.container.zIndex = fixedZ + 4.5;
+            }
+            if (motionState.activityCue && motionState.activityCue.container) {
+              motionState.activityCue.container.zIndex = fixedZ + 4.25;
             }
             return;
           }
@@ -7685,6 +9810,12 @@ function roleTint(role) {
           }
           if (motionState.heldItemSprite) {
             applyFootDepth(motionState.heldItemSprite, renderTopY, renderHeight, depthBias + 4, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
+          }
+          if (motionState.turnSignal && motionState.turnSignal.container) {
+            applyFootDepth(motionState.turnSignal.container, renderTopY, renderHeight, depthBias + 4.5, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
+          }
+          if (motionState.activityCue && motionState.activityCue.container) {
+            applyFootDepth(motionState.activityCue.container, renderTopY, renderHeight, depthBias + 4.25, model.tile, Number.isFinite(motionState.depthBaseY) ? Number(motionState.depthBaseY) : 0, movingDepthRow);
           }
           if (
             state.globalSceneSettings.debugTiles
@@ -7747,6 +9878,15 @@ function roleTint(role) {
         }
 
         function buildBobAnimationEntry(agent, avatarVisual, motionState) {
+          const stateValue = String((agent && agent.state) || "").toLowerCase();
+          const mode =
+            stateValue === "planning" ? "planning"
+            : stateValue === "scanning" ? "scanning"
+            : stateValue === "editing" ? "editing"
+            : stateValue === "running" ? "running"
+            : stateValue === "validating" ? "validating"
+            : stateValue === "delegating" ? "delegating"
+            : "busy";
           return {
             kind: "bob",
             motionState,
@@ -7760,7 +9900,49 @@ function roleTint(role) {
             statusMarkerBaseY: pixelSnap(avatarVisual.statusMarker && avatarVisual.statusMarker.y),
             bubbleBoxBaseY: pixelSnap(avatarVisual.bubbleBox && avatarVisual.bubbleBox.y),
             bubbleTextBaseY: pixelSnap(avatarVisual.bubbleText && avatarVisual.bubbleText.y),
+            baseX: pixelSnap(avatarVisual.avatar && avatarVisual.avatar.x),
+            hatBaseX: pixelSnap(avatarVisual.hatSprite && avatarVisual.hatSprite.x),
+            statusMarkerBaseX: pixelSnap(avatarVisual.statusMarker && avatarVisual.statusMarker.x),
+            bubbleBoxBaseX: pixelSnap(avatarVisual.bubbleBox && avatarVisual.bubbleBox.x),
+            bubbleTextBaseX: pixelSnap(avatarVisual.bubbleText && avatarVisual.bubbleText.x),
+            mode,
             phase: stableHash(agent.id || agent.label || "") % 1000
+          };
+        }
+
+        function buildStateEffectAnimationEntry(agent, motionState) {
+          const mode = stateEffectModeForAgent(agent);
+          if (!mode || !motionState || !motionState.sprite) {
+            return null;
+          }
+          return {
+            kind: "state-effect",
+            motionState,
+            mode,
+            phase: stableHash((agent.id || agent.label || "") + "::" + mode) % 1000
+          };
+        }
+
+        function buildTurnSignalAnimationEntry(motionState) {
+          if (!motionState || !motionState.turnSignal || !motionState.turnSignal.container) {
+            return null;
+          }
+          return {
+            kind: "turn-signal",
+            motionState,
+            phase: Number.isFinite(motionState.turnSignalPhase) ? Number(motionState.turnSignalPhase) : 0
+          };
+        }
+
+        function buildActivityCueAnimationEntry(motionState) {
+          if (!motionState || !motionState.activityCue || !motionState.activityCue.container) {
+            return null;
+          }
+          return {
+            kind: "activity-cue",
+            motionState,
+            mode: motionState.activityCue.mode || "command",
+            phase: Number.isFinite(motionState.activityCuePhase) ? Number(motionState.activityCuePhase) : 0
           };
         }
 
@@ -7772,11 +9954,28 @@ function roleTint(role) {
           const agentKey = agent.key || agent.id;
           const nav = navigationForAgent(roomNavigation, reservations, agent.roomId, agentKey);
           const targetTile = officeAvatarFootTile(room, model.tile, agent.x, agent.y, agent.width, agent.height);
-          const enteringFromDoor = !previousMotionState && enteringAgentKeys.has(agent.key || agent.id);
+          const previousRoomState = previousMotionState && previousMotionState.roomId !== agent.roomId
+            ? previousMotionState
+            : null;
+          const enteringFromDoor = !previousMotionState
+            ? enteringAgentKeys.has(agent.key || agent.id)
+            : previousRoomState !== null;
           const autonomousResting = isAutonomousRestingAgent(agent);
           const previousState = previousMotionState && previousMotionState.roomId === agent.roomId
             ? previousMotionState
             : null;
+          if (previousRoomState && previousRoomState.exiting !== true) {
+            const transitionGhostKey = agentKey + "::transition-exit::" + previousRoomState.roomId;
+            const transitionGhost = buildExitGhostMotion(transitionGhostKey, previousRoomState, roomNavigation, reservations);
+            if (transitionGhost) {
+              renderer.motionStates.set(transitionGhostKey, transitionGhost);
+              renderer.animatedSprites.push(transitionGhost);
+              const previousDoorState = renderer.roomDoorStates.get(previousRoomState.roomId);
+              if (previousDoorState) {
+                previousDoorState.doorPulseUntil = performance.now() + sceneDoorConfig().holdOpenMs;
+              }
+            }
+          }
           if (previousState && previousState.autonomy && previousState.autonomy.carriedItemId && !autonomousResting) {
             spawnThrownHeldItem(previousState);
           }
@@ -7787,22 +9986,16 @@ function roleTint(role) {
             && previousState.autonomy.phase !== "seated"
             && previousState.exiting !== true
           );
-          const sameTarget = Boolean(
-            preserveAutonomyRoute || (
-              previousState
-              && previousState.roomId === agent.roomId
-              && previousState.targetX === agent.x
-              && previousState.targetY === agent.y
-              && previousState.exiting !== true
-            )
-          );
+          const sameTarget = shouldReuseMotionTarget(previousState, agent, preserveAutonomyRoute);
           if (sameTarget) {
             previousState.sprite = avatarVisual.avatar;
             previousState.hatSprite = avatarVisual.hatSprite;
             previousState.statusMarker = avatarVisual.statusMarker;
             previousState.bubbleBox = avatarVisual.bubbleBox;
             previousState.bubbleText = avatarVisual.bubbleText;
-             previousState.heldItemSprite = null;
+            previousState.turnSignal = avatarVisual.turnSignal;
+            previousState.activityCue = avatarVisual.activityCue;
+            previousState.heldItemSprite = null;
             previousState.anchorNode = renderer.agentHitNodes.get(agentKey) || null;
             previousState.width = agent.width;
             previousState.height = agent.height;
@@ -7817,6 +10010,25 @@ function roleTint(role) {
             previousState.hatManualOffsetX = avatarVisual.hatManualOffsetX;
             previousState.hatOffsetY = avatarVisual.hatOffsetY;
             previousState.statusMarkerLift = avatarVisual.statusMarkerLift;
+            previousState.turnSignalWidth = avatarVisual.turnSignalWidth;
+            previousState.turnSignalHeight = avatarVisual.turnSignalHeight;
+            previousState.turnSignalStartedAtMs = avatarVisual.turnSignalStartedAtMs;
+            previousState.turnSignalDurationMs = avatarVisual.turnSignalDurationMs;
+            previousState.turnSignalPhase = avatarVisual.turnSignalPhase;
+            previousState.turnSignalAnchorMode = avatarVisual.turnSignalAnchorMode;
+            previousState.activityCueWidth = avatarVisual.activityCueWidth;
+            previousState.activityCueHeight = avatarVisual.activityCueHeight;
+            previousState.activityCueStartedAtMs = avatarVisual.activityCueStartedAtMs;
+            previousState.activityCueDurationMs = avatarVisual.activityCueDurationMs;
+            previousState.activityCuePhase = avatarVisual.activityCuePhase;
+            previousState.activityCueAnchorMode = avatarVisual.activityCueAnchorMode;
+            previousState.activityCueIconContainer = avatarVisual.activityCue && avatarVisual.activityCue.iconContainer ? avatarVisual.activityCue.iconContainer : null;
+            previousState.activityCueIconAccent = avatarVisual.activityCue && avatarVisual.activityCue.iconAccent ? avatarVisual.activityCue.iconAccent : null;
+            previousState.activityCueIconBaseX = avatarVisual.activityCue && Number.isFinite(avatarVisual.activityCue.iconBaseX) ? Number(avatarVisual.activityCue.iconBaseX) : 0;
+            previousState.activityCueIconBaseY = avatarVisual.activityCue && Number.isFinite(avatarVisual.activityCue.iconBaseY) ? Number(avatarVisual.activityCue.iconBaseY) : 0;
+            previousState.activityCueTextNode = avatarVisual.activityCue && avatarVisual.activityCue.textNode ? avatarVisual.activityCue.textNode : null;
+            previousState.activityCueTextBaseX = avatarVisual.activityCue && Number.isFinite(avatarVisual.activityCue.textBaseX) ? Number(avatarVisual.activityCue.textBaseX) : 0;
+            previousState.activityCueTextBaseY = avatarVisual.activityCue && Number.isFinite(avatarVisual.activityCue.textBaseY) ? Number(avatarVisual.activityCue.textBaseY) : 0;
             previousState.state = agent.state || "idle";
             previousState.spriteUrl = agent.sprite;
             previousState.depthBaseY = avatarVisual.depthBaseY;
@@ -7864,12 +10076,24 @@ function roleTint(role) {
               previousState.autonomy = null;
             }
             renderer.motionStates.set(agentKey, previousState);
+            const previousStateEffectEntry = buildStateEffectAnimationEntry(agent, previousState);
             if (autonomousResting) {
               renderer.animatedSprites.push(previousState);
             } else if (["editing", "running", "validating", "scanning", "thinking", "planning", "delegating"].includes(agent.state) && previousState.routeIndex >= (previousState.route?.length || 0)) {
               renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, previousState));
             } else {
               renderer.animatedSprites.push(previousState);
+            }
+            if (previousStateEffectEntry) {
+              renderer.animatedSprites.push(previousStateEffectEntry);
+            }
+            const previousTurnSignalEntry = buildTurnSignalAnimationEntry(previousState);
+            if (previousTurnSignalEntry) {
+              renderer.animatedSprites.push(previousTurnSignalEntry);
+            }
+            const previousActivityCueEntry = buildActivityCueAnimationEntry(previousState);
+            if (previousActivityCueEntry) {
+              renderer.animatedSprites.push(previousActivityCueEntry);
             }
             syncMotionStateDepth(previousState);
             syncAgentHitNodePosition(renderer, previousState);
@@ -7914,6 +10138,8 @@ function roleTint(role) {
             spriteUrl: agent.sprite,
             bubbleBox: avatarVisual.bubbleBox,
             bubbleText: avatarVisual.bubbleText,
+            turnSignal: avatarVisual.turnSignal,
+            activityCue: avatarVisual.activityCue,
             width: agent.width,
             height: agent.height,
             renderWidth: avatarVisual.renderWidth,
@@ -7927,6 +10153,25 @@ function roleTint(role) {
             hatManualOffsetX: avatarVisual.hatManualOffsetX,
             hatOffsetY: avatarVisual.hatOffsetY,
             statusMarkerLift: avatarVisual.statusMarkerLift,
+            turnSignalWidth: avatarVisual.turnSignalWidth,
+            turnSignalHeight: avatarVisual.turnSignalHeight,
+            turnSignalStartedAtMs: avatarVisual.turnSignalStartedAtMs,
+            turnSignalDurationMs: avatarVisual.turnSignalDurationMs,
+            turnSignalPhase: avatarVisual.turnSignalPhase,
+            turnSignalAnchorMode: avatarVisual.turnSignalAnchorMode,
+            activityCueWidth: avatarVisual.activityCueWidth,
+            activityCueHeight: avatarVisual.activityCueHeight,
+            activityCueStartedAtMs: avatarVisual.activityCueStartedAtMs,
+            activityCueDurationMs: avatarVisual.activityCueDurationMs,
+            activityCuePhase: avatarVisual.activityCuePhase,
+            activityCueAnchorMode: avatarVisual.activityCueAnchorMode,
+            activityCueIconContainer: avatarVisual.activityCue && avatarVisual.activityCue.iconContainer ? avatarVisual.activityCue.iconContainer : null,
+            activityCueIconAccent: avatarVisual.activityCue && avatarVisual.activityCue.iconAccent ? avatarVisual.activityCue.iconAccent : null,
+            activityCueIconBaseX: avatarVisual.activityCue && Number.isFinite(avatarVisual.activityCue.iconBaseX) ? Number(avatarVisual.activityCue.iconBaseX) : 0,
+            activityCueIconBaseY: avatarVisual.activityCue && Number.isFinite(avatarVisual.activityCue.iconBaseY) ? Number(avatarVisual.activityCue.iconBaseY) : 0,
+            activityCueTextNode: avatarVisual.activityCue && avatarVisual.activityCue.textNode ? avatarVisual.activityCue.textNode : null,
+            activityCueTextBaseX: avatarVisual.activityCue && Number.isFinite(avatarVisual.activityCue.textBaseX) ? Number(avatarVisual.activityCue.textBaseX) : 0,
+            activityCueTextBaseY: avatarVisual.activityCue && Number.isFinite(avatarVisual.activityCue.textBaseY) ? Number(avatarVisual.activityCue.textBaseY) : 0,
             currentX: previousState
               ? previousState.currentX
               : (route[0]?.x ?? agent.x),
@@ -7991,6 +10236,18 @@ function roleTint(role) {
             motionState.routeIndex = 1;
             renderer.motionStates.set(motionState.key, motionState);
             renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, motionState));
+            const bobStateEffectEntry = buildStateEffectAnimationEntry(agent, motionState);
+            if (bobStateEffectEntry) {
+              renderer.animatedSprites.push(bobStateEffectEntry);
+            }
+            const bobTurnSignalEntry = buildTurnSignalAnimationEntry(motionState);
+            if (bobTurnSignalEntry) {
+              renderer.animatedSprites.push(bobTurnSignalEntry);
+            }
+            const bobActivityCueEntry = buildActivityCueAnimationEntry(motionState);
+            if (bobActivityCueEntry) {
+              renderer.animatedSprites.push(bobActivityCueEntry);
+            }
             syncMotionStateDepth(motionState);
             syncAgentHitNodePosition(renderer, motionState);
             return avatarVisual.nodes;
@@ -8001,8 +10258,20 @@ function roleTint(role) {
             motionState.route = [{ x: agent.x, y: agent.y }];
             motionState.routeIndex = 1;
             renderer.motionStates.set(motionState.key, motionState);
-            if (autonomousResting) {
+            const restingStateEffectEntry = buildStateEffectAnimationEntry(agent, motionState);
+            if (autonomousResting || restingStateEffectEntry) {
               renderer.animatedSprites.push(motionState);
+            }
+            if (restingStateEffectEntry) {
+              renderer.animatedSprites.push(restingStateEffectEntry);
+            }
+            const restingTurnSignalEntry = buildTurnSignalAnimationEntry(motionState);
+            if (restingTurnSignalEntry) {
+              renderer.animatedSprites.push(restingTurnSignalEntry);
+            }
+            const restingActivityCueEntry = buildActivityCueAnimationEntry(motionState);
+            if (restingActivityCueEntry) {
+              renderer.animatedSprites.push(restingActivityCueEntry);
             }
             syncMotionStateDepth(motionState);
             syncAgentHitNodePosition(renderer, motionState);
@@ -8010,6 +10279,18 @@ function roleTint(role) {
           }
           renderer.motionStates.set(motionState.key, motionState);
           renderer.animatedSprites.push(motionState);
+          const motionStateEffectEntry = buildStateEffectAnimationEntry(agent, motionState);
+          if (motionStateEffectEntry) {
+            renderer.animatedSprites.push(motionStateEffectEntry);
+          }
+          const motionTurnSignalEntry = buildTurnSignalAnimationEntry(motionState);
+          if (motionTurnSignalEntry) {
+            renderer.animatedSprites.push(motionTurnSignalEntry);
+          }
+          const activityCueEntry = buildActivityCueAnimationEntry(motionState);
+          if (activityCueEntry) {
+            renderer.animatedSprites.push(activityCueEntry);
+          }
           syncMotionStateDepth(motionState);
           syncAgentHitNodePosition(renderer, motionState);
           return avatarVisual.nodes;
@@ -8282,7 +10563,7 @@ function roleTint(role) {
             if (item.kind === "glow") {
               const glow = new PIXI.Graphics()
                 .roundRect(item.x, item.y, item.width, item.height, 3)
-                .fill({ color: 0x4bd69f, alpha: 0.24 });
+                .fill({ color: Number.isFinite(item.color) ? Number(item.color) : 0x4bd69f, alpha: Number.isFinite(item.alpha) ? Number(item.alpha) : 0.24 });
               glow.zIndex = item.z || 10;
               if (!screenshotMode && item.enteringReveal === true) {
                 glow.visible = false;
@@ -8290,6 +10571,45 @@ function roleTint(role) {
               }
               renderer.root.addChild(glow);
               deskNodes.push(glow);
+              if (item.pulse === true) {
+                renderer.animatedSprites.push({
+                  kind: "workstation-glow",
+                  node: glow,
+                  baseAlpha: Number.isFinite(item.alpha) ? Number(item.alpha) : 0.24,
+                  phase: stableHash(String(workstationKey || desk.id || item.x || 0) + "::glow") % 1000
+                });
+              }
+              return;
+            }
+            if (item.kind === "cue-effect") {
+              const cueEffect = buildWorkstationCueEffectNode(item);
+              cueEffect.container.zIndex = item.z || 10.5;
+              if (!screenshotMode && item.enteringReveal === true) {
+                cueEffect.container.visible = false;
+                enteringRevealNodes.push(cueEffect.container);
+              }
+              renderer.root.addChild(cueEffect.container);
+              deskNodes.push(cueEffect.container);
+              renderer.animatedSprites.push({
+                kind: "workstation-cue-effect",
+                node: cueEffect.container,
+                mode: item.mode || "command",
+                startedAtMs: Number.isFinite(item.startedAtMs) ? Number(item.startedAtMs) : Date.now(),
+                durationMs: Number.isFinite(item.durationMs) ? Number(item.durationMs) : 2200,
+                phase: stableHash(String(item.key || workstationKey || desk.id || item.x || 0) + "::cue-effect") % 1000,
+                baseX: cueEffect.baseX,
+                baseY: cueEffect.baseY,
+                width: cueEffect.width,
+                height: cueEffect.height,
+                primaryNode: cueEffect.primaryNode,
+                secondaryNode: cueEffect.secondaryNode,
+                frameNode: cueEffect.frameNode,
+                glowNode: cueEffect.glowNode,
+                accentNodes: cueEffect.accentNodes,
+                dotNodes: cueEffect.dotNodes,
+                detailNodes: cueEffect.detailNodes,
+                requestProfile: cueEffect.requestProfile
+              });
             }
           });
           if (enteringRevealNodes.length > 0) {
@@ -8387,7 +10707,7 @@ function roleTint(role) {
             if (item.kind === "glow") {
               const glow = new PIXI.Graphics()
                 .roundRect(item.x, item.y, item.width, item.height, 3)
-                .fill({ color: 0x4bd69f, alpha: 0.24 });
+                .fill({ color: Number.isFinite(item.color) ? Number(item.color) : 0x4bd69f, alpha: Number.isFinite(item.alpha) ? Number(item.alpha) : 0.24 });
               glow.zIndex = item.z || 10;
               if (!screenshotMode && item.enteringReveal === true) {
                 glow.visible = false;
@@ -8395,6 +10715,45 @@ function roleTint(role) {
               }
               renderer.root.addChild(glow);
               officeNodes.push(glow);
+              if (item.pulse === true) {
+                renderer.animatedSprites.push({
+                  kind: "workstation-glow",
+                  node: glow,
+                  baseAlpha: Number.isFinite(item.alpha) ? Number(item.alpha) : 0.24,
+                  phase: stableHash(String(workstationKey || office.id || item.x || 0) + "::glow") % 1000
+                });
+              }
+              return;
+            }
+            if (item.kind === "cue-effect") {
+              const cueEffect = buildWorkstationCueEffectNode(item);
+              cueEffect.container.zIndex = item.z || 10.5;
+              if (!screenshotMode && item.enteringReveal === true) {
+                cueEffect.container.visible = false;
+                enteringRevealNodes.push(cueEffect.container);
+              }
+              renderer.root.addChild(cueEffect.container);
+              officeNodes.push(cueEffect.container);
+              renderer.animatedSprites.push({
+                kind: "workstation-cue-effect",
+                node: cueEffect.container,
+                mode: item.mode || "command",
+                startedAtMs: Number.isFinite(item.startedAtMs) ? Number(item.startedAtMs) : Date.now(),
+                durationMs: Number.isFinite(item.durationMs) ? Number(item.durationMs) : 2200,
+                phase: stableHash(String(item.key || workstationKey || office.id || item.x || 0) + "::cue-effect") % 1000,
+                baseX: cueEffect.baseX,
+                baseY: cueEffect.baseY,
+                width: cueEffect.width,
+                height: cueEffect.height,
+                primaryNode: cueEffect.primaryNode,
+                secondaryNode: cueEffect.secondaryNode,
+                frameNode: cueEffect.frameNode,
+                glowNode: cueEffect.glowNode,
+                accentNodes: cueEffect.accentNodes,
+                dotNodes: cueEffect.dotNodes,
+                detailNodes: cueEffect.detailNodes,
+                requestProfile: cueEffect.requestProfile
+              });
             }
           });
           if (enteringRevealNodes.length > 0) {
@@ -8460,60 +10819,27 @@ function roleTint(role) {
           registerFocusNodes(agent.focusKeys, recNodes);
         });
 
+        previousMotionStates.forEach((motionState, key) => {
+          if (!motionState || motionState.exiting !== true || currentAgentKeys.has(key) || renderer.motionStates.has(key)) {
+            return;
+          }
+          const preservedExitMotion = buildExitGhostMotion(key, motionState, roomNavigation, reservedAgentTiles);
+          if (!preservedExitMotion) {
+            return;
+          }
+          renderer.motionStates.set(key, preservedExitMotion);
+          renderer.animatedSprites.push(preservedExitMotion);
+        });
+
         const departingAgentKeys = new Set(departingAgents.map((agent) => agent.key));
         previousMotionStates.forEach((motionState, key) => {
           if (!motionState || currentAgentKeys.has(key) || motionState.exiting || !departingAgentKeys.has(key)) {
             return;
           }
-          const room = roomById.get(motionState.roomId);
-          const nav = navigationForAgent(roomNavigation, reservedAgentTiles, motionState.roomId, key);
-          if (!room || !nav) {
+          const ghostMotion = buildExitGhostMotion(key, motionState, roomNavigation, reservedAgentTiles);
+          if (!ghostMotion) {
             return;
           }
-          const exitTile = nearestWalkableTile(nav, roomDoorTile(room, model.tile));
-          const startTile = nearestWalkableTile(nav, motionState.currentTile || officeAvatarFootTile(room, model.tile, motionState.currentX, motionState.currentY, motionState.width, motionState.height));
-          const targetPoint = exitTile
-            ? officeAvatarPositionForTile(room, model.tile, exitTile, motionState.width, motionState.height)
-            : { x: motionState.currentX, y: motionState.currentY };
-          const ghostAgent = {
-            id: motionState.key,
-            key,
-            roomId: motionState.roomId,
-            sprite: motionState.spriteUrl,
-            width: motionState.width,
-            height: motionState.height,
-            x: motionState.currentX,
-            y: motionState.currentY,
-            flipX: motionState.flipX,
-            state: motionState.state || "idle",
-            bubble: null
-          };
-          const ghostVisual = addAvatarNode(ghostAgent, 12);
-          const ghostRoute = startTile && exitTile
-            ? buildAgentPixelRoute(nav, startTile, exitTile, room, model.tile, motionState.width, motionState.height, targetPoint)
-            : [targetPoint];
-          const ghostMotion = {
-            kind: "motion",
-            key,
-            roomId: motionState.roomId,
-            sprite: ghostVisual.avatar,
-            statusMarker: null,
-            bubbleBox: null,
-            bubbleText: null,
-            width: motionState.width,
-            height: motionState.height,
-            currentX: motionState.currentX,
-            currentY: motionState.currentY,
-            currentTile: startTile,
-            route: ghostRoute,
-            routeIndex: 0,
-            speed: 216,
-            flipX: motionState.flipX,
-            anchorNode: null,
-            exiting: true,
-            spriteUrl: motionState.spriteUrl,
-            state: motionState.state || "idle"
-          };
           renderer.motionStates.set(key, ghostMotion);
           renderer.animatedSprites.push(ghostMotion);
           const doorState = renderer.roomDoorStates.get(motionState.roomId);
@@ -8546,6 +10872,53 @@ function roleTint(role) {
         applyOfficeRendererFocus(renderer);
       }
 
+      function recentActivitySceneToken(snapshot) {
+        const now = Date.now();
+        return (snapshot.events || [])
+          .filter((event) => {
+            const cue = activityCueForEvent(event);
+            if (!cue) {
+              return false;
+            }
+            const createdAtMs = Date.parse(event.createdAt || "");
+            const durationMs = activityCueDurationMs(cue.mode);
+            return Number.isFinite(createdAtMs)
+              && now - createdAtMs <= durationMs
+              && createdAtMs <= now + ACTIVITY_CUE_MAX_AGE_MS;
+          })
+          .map(eventSnapshotToken)
+          .join("||");
+      }
+
+      function officeSceneInteractionToken(snapshot) {
+        const opened = state.openAgentThread && state.openAgentThread.projectRoot === snapshot.projectRoot
+          ? ["open", state.openAgentThread.threadId].join(":")
+          : "";
+        const closing = state.closingAgentThread && state.closingAgentThread.projectRoot === snapshot.projectRoot
+          ? ["closing", state.closingAgentThread.threadId].join(":")
+          : "";
+        const replyIntents = (snapshot.agents || [])
+          .filter((agent) => hasReplyThreadWorkIntent(agent))
+          .map((agent) => agent.threadId || "")
+          .filter(Boolean)
+          .sort()
+          .join(",");
+        return [opened, closing, replyIntents].join("|");
+      }
+
+      function officeSceneRenderToken(snapshot, options = {}) {
+        return [
+          snapshot.projectRoot,
+          roomsSnapshotToken(snapshot.rooms),
+          sceneSnapshotToken(snapshot),
+          recentActivitySceneToken(snapshot),
+          officeSceneInteractionToken(snapshot),
+          options.compact ? "compact" : "wide",
+          options.focusMode ? "focus" : "normal",
+          options.liveOnly ? "live" : "all"
+        ].join("::");
+      }
+
       async function syncOfficeMapScenes(projects) {
   cleanupOfficeRenderers();
   const hostNodes = Array.from(document.querySelectorAll("[data-office-map-host]"));
@@ -8573,8 +10946,19 @@ function roleTint(role) {
       continue;
     }
     try {
-      await ensureOfficeSceneAssets(model);
-      syncOfficeRendererScene(renderer, model);
+      const renderToken = officeSceneRenderToken(snapshot, {
+        compact,
+        focusMode,
+        liveOnly: state.activeOnly
+      });
+      if (renderer.sceneRenderToken !== renderToken) {
+        await ensureOfficeSceneAssets(model);
+        syncOfficeRendererScene(renderer, model);
+        renderer.sceneRenderToken = renderToken;
+      } else {
+        renderer.model = model;
+        syncOfficeAnchors(renderer, model, renderer.scale || 1);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("office scene render failed", {
@@ -8717,17 +11101,257 @@ function focusKeysIntersect(keys, focusedKeys) {
         ).sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
       }
 
+      function needsUserActionProjectRoot(snapshot, agent) {
+        if (!snapshot || !agent || !agent.needsUser) {
+          return null;
+        }
+        const isLocalCodex = !agent.network && agent.provenance === "codex" && agent.source === "local";
+        const isTypedClaude = !agent.network && agent.provenance === "claude" && agent.confidence === "typed" && agent.source === "claude";
+        if (!isLocalCodex && !isTypedClaude) {
+          return null;
+        }
+        const preferredRoot = typeof agent.sourceProjectRoot === "string" && agent.sourceProjectRoot.length > 0
+          ? agent.sourceProjectRoot
+          : snapshot.projectRoot;
+        const localRoots = localProjectRootsForSnapshot(snapshot);
+        if (localRoots.includes(preferredRoot)) {
+          return preferredRoot;
+        }
+        return localRoots[0] || preferredRoot;
+      }
+
+      function approvalDecisionEntries(need) {
+        const supported = ["accept", "acceptForSession", "decline", "cancel"];
+        const available = Array.isArray(need && need.availableDecisions)
+          ? need.availableDecisions.filter((decision) => supported.includes(decision))
+          : [];
+        const selected = available.length > 0 ? available : ["accept", "decline", "cancel"];
+        return selected.map((decision) => ({
+          decision,
+          label:
+            decision === "accept" ? "Accept"
+            : decision === "acceptForSession" ? "Always for session"
+            : decision === "decline" ? "Decline"
+            : "Cancel"
+        }));
+      }
+
+      function needsUserActionError(requestId) {
+        const errors = state.needsUserActionErrorsByRequestId;
+        if (!errors || typeof errors !== "object") {
+          return "";
+        }
+        const value = errors[requestId];
+        return typeof value === "string" ? value : "";
+      }
+
+      function needsUserInputDraft(requestId, questionId) {
+        const drafts = state.needsUserInputDrafts;
+        if (!drafts || typeof drafts !== "object") {
+          return { selected: "", other: "" };
+        }
+        const requestDraft = drafts[requestId];
+        if (!requestDraft || typeof requestDraft !== "object") {
+          return { selected: "", other: "" };
+        }
+        const questionDraft = requestDraft[questionId];
+        if (!questionDraft || typeof questionDraft !== "object") {
+          return { selected: "", other: "" };
+        }
+        return {
+          selected: typeof questionDraft.selected === "string" ? questionDraft.selected : "",
+          other: typeof questionDraft.other === "string" ? questionDraft.other : ""
+        };
+      }
+
+      function needsUserInputAnswerValues(question, draft) {
+        const options = Array.isArray(question && question.options) ? question.options : [];
+        const selected = String(draft && draft.selected || "").trim();
+        const other = String(draft && draft.other || "").trim();
+        if (options.length === 0) {
+          return other ? [other] : [];
+        }
+        if (!selected) {
+          return [];
+        }
+        if (selected === "__other__") {
+          return other ? [other] : [];
+        }
+        return [selected];
+      }
+
+      function needsUserInputQuestionLabel(question, questionIndex = 0) {
+        const header = typeof (question && question.header) === "string" ? question.header.trim() : "";
+        return header || "Question " + (questionIndex + 1);
+      }
+
+      function needsUserInputCompletion(need) {
+        const questions = Array.isArray(need && need.questions) ? need.questions : [];
+        let answered = 0;
+        let requiredAnswered = 0;
+        let requiredTotal = 0;
+        const missingRequired = [];
+        questions.forEach((question, questionIndex) => {
+          const hasAnswer = needsUserInputAnswerValues(
+            question,
+            needsUserInputDraft(need.requestId, question.id)
+          ).length > 0;
+          if (hasAnswer) {
+            answered += 1;
+          }
+          if (question.required === false) {
+            return;
+          }
+          requiredTotal += 1;
+          if (hasAnswer) {
+            requiredAnswered += 1;
+            return;
+          }
+          missingRequired.push(needsUserInputQuestionLabel(question, questionIndex));
+        });
+        return {
+          total: questions.length,
+          answered,
+          requiredTotal,
+          requiredAnswered,
+          missingRequired
+        };
+      }
+
+      function needsUserInputReady(need) {
+        const completion = needsUserInputCompletion(need);
+        if (completion.total === 0) {
+          return false;
+        }
+        return completion.missingRequired.length === 0;
+      }
+
+      function needsUserInputSummary(need) {
+        const completion = needsUserInputCompletion(need);
+        if (completion.total === 0) {
+          return "";
+        }
+        if (completion.requiredTotal > 0) {
+          return completion.requiredAnswered + "/" + completion.requiredTotal + " required answered"
+            + (completion.total > completion.requiredTotal
+              ? " · " + completion.answered + "/" + completion.total + " total answered"
+              : "");
+        }
+        return completion.answered + "/" + completion.total + " optional answered";
+      }
+
+      function needsUserInputPendingHint(need) {
+        const completion = needsUserInputCompletion(need);
+        if (completion.missingRequired.length === 0) {
+          return completion.requiredTotal > 0
+            ? "All required questions are answered."
+            : "Optional answers can be left blank.";
+        }
+        if (completion.missingRequired.length === 1) {
+          return "Still needed: " + completion.missingRequired[0];
+        }
+        return completion.missingRequired.length + " required questions still need answers.";
+      }
+
+      function needsUserInputSubmitLabel(need, isPending) {
+        if (isPending) {
+          return "Sending...";
+        }
+        const completion = needsUserInputCompletion(need);
+        if (completion.missingRequired.length === 0) {
+          return "Send";
+        }
+        return "Complete " + completion.missingRequired.length + " required "
+          + (completion.missingRequired.length === 1 ? "question" : "questions");
+      }
+
+      function renderNeedsUserInputQuestion(requestId, question, questionIndex, isPending) {
+        const options = Array.isArray(question && question.options) ? question.options : [];
+        const draft = needsUserInputDraft(requestId, question.id);
+        const selected = String(draft.selected || "");
+        const showOther = options.length === 0 || selected === "__other__";
+        const questionLabel = needsUserInputQuestionLabel(question, questionIndex);
+        const requirementLabel = question.required === false ? "Optional" : "Required";
+        const helperLabel = options.length > 0
+          ? (question.isOther === true ? "Choose one option or use Other." : "Choose one option.")
+          : (question.isSecret === true ? "Enter one value." : "Type your answer.");
+        const hasDraftValue = Boolean(selected || String(draft.other || "").trim());
+        const selectorBase = `data-needs-user-request-id="${escapeHtml(requestId)}" data-needs-user-question-id="${escapeHtml(question.id)}"`;
+        const optionButtons = options.length > 0
+          ? `<div class="needs-you-options">${options.map((option) => {
+              const isSelected = selected === option.label;
+              return `<button type="button" class="needs-you-option${isSelected ? " is-selected" : ""}" data-action="select-needs-user-option" ${selectorBase} data-answer="${escapeHtml(option.label)}" title="${escapeHtml(option.description || option.label)}"${isPending ? " disabled" : ""}>${escapeHtml(option.label)}</button>`;
+            }).join("")}${question.isOther === true
+              ? `<button type="button" class="needs-you-option${selected === "__other__" ? " is-selected" : ""}" data-action="select-needs-user-option" ${selectorBase} data-answer="__other__"${isPending ? " disabled" : ""}>Other</button>`
+              : ""}</div>`
+          : "";
+        const otherField = showOther
+          ? (question.isSecret === true
+            ? `<input class="needs-you-field" type="password" ${selectorBase} data-needs-user-text="true" placeholder="Type your answer..."${isPending ? " disabled" : ""} value="${escapeHtml(draft.other || "")}" />`
+            : `<textarea class="needs-you-field" rows="2" ${selectorBase} data-needs-user-text="true" placeholder="Type your answer..."${isPending ? " disabled" : ""}>${escapeHtml(draft.other || "")}</textarea>`)
+          : "";
+        const clearButton = hasDraftValue
+          ? `<div class="needs-you-question-actions"><button type="button" data-action="clear-needs-user-answer" ${selectorBase}${isPending ? " disabled" : ""}>Clear</button></div>`
+          : "";
+        return `<div class="needs-you-question"><div class="needs-you-question-head"><strong>${escapeHtml(questionLabel)}</strong><span>${escapeHtml(requirementLabel)}</span></div><div class="needs-you-question-text">${escapeHtml(question.question || questionLabel)}</div><div class="needs-you-question-help">${escapeHtml(helperLabel)}</div>${optionButtons}${otherField}${clearButton}</div>`;
+      }
+
       function renderNeedsAttention(projects) {
         const entries = agentsNeedingUser(projects);
         if (entries.length === 0) {
           return "";
         }
 
-        return `<section class="session-card" style="border-color:rgba(245,183,79,0.32);background:rgba(245,183,79,0.05);"><strong>Needs You</strong><div class="muted" style="margin-top:6px;">${entries.map(({ snapshot, agent }) => {
+        const pendingRequestIds = new Set(Array.isArray(state.needsUserActionRequestIds) ? state.needsUserActionRequestIds : []);
+
+        return `<section class="session-card needs-you-panel"><div class="needs-you-panel-head"><strong>Needs You</strong><span>${escapeHtml(String(entries.length))}</span></div><div class="needs-you-list">${entries.map(({ snapshot, agent }) => {
           const need = agent.needsUser;
           const scope = normalizeDisplayText(snapshot.projectRoot, need?.command || need?.reason || need?.grantRoot || agent.detail);
-          return `${escapeHtml(projectLabel(snapshot.projectRoot))} · ${escapeHtml(agent.label)} · ${escapeHtml(need?.kind || "input")} · ${escapeHtml(scope)}`;
-        }).join("<br />")}</div></section>`;
+          const actionProjectRoot = needsUserActionProjectRoot(snapshot, agent);
+          const canActOnApproval = Boolean(
+            actionProjectRoot
+            && need
+            && need.kind === "approval"
+            && typeof need.requestId === "string"
+            && need.requestId.length > 0
+          );
+          const canActOnInput = Boolean(
+            actionProjectRoot
+            && need
+            && need.kind === "input"
+            && typeof need.requestId === "string"
+            && need.requestId.length > 0
+            && Array.isArray(need.questions)
+            && need.questions.length > 0
+          );
+          const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
+          const canReplyToInput = Boolean(
+            need
+            && need.kind === "input"
+            && (!Array.isArray(need.questions) || need.questions.length === 0)
+            && replyProjectRoot
+            && agent.threadId
+          );
+          const isPending = Boolean(need && pendingRequestIds.has(need.requestId));
+          const requestError = need ? needsUserActionError(need.requestId) : "";
+          const errorHtml = requestError
+            ? `<div class="chat-composer-error">${escapeHtml(requestError)}</div>`
+            : "";
+          const actionsHtml = canActOnApproval
+            ? `<div class="needs-you-actions">${approvalDecisionEntries(need).map(({ decision, label }) =>
+              `<button type="button" data-action="respond-needs-user" data-project-root="${escapeHtml(actionProjectRoot)}" data-request-id="${escapeHtml(need.requestId)}" data-decision="${escapeHtml(decision)}"${isPending ? " disabled" : ""}>${escapeHtml(isPending ? "Sending..." : label)}</button>`
+            ).join("")}</div>${errorHtml}`
+            : canActOnInput
+              ? `<div class="needs-you-form"><div class="needs-you-summary">${escapeHtml(needsUserInputSummary(need))}</div>${need.questions.map((question, questionIndex) =>
+                renderNeedsUserInputQuestion(need.requestId, question, questionIndex, isPending)
+              ).join("")}<div class="needs-you-submit-row"><div class="needs-you-submit-hint">${escapeHtml(needsUserInputPendingHint(need))}</div><button type="button" class="primary-action" data-action="submit-needs-user-input" data-project-root="${escapeHtml(actionProjectRoot)}" data-request-id="${escapeHtml(need.requestId)}"${isPending || !needsUserInputReady(need) ? " disabled" : ""}>${escapeHtml(needsUserInputSubmitLabel(need, isPending))}</button></div>${errorHtml}</div>`
+            : canReplyToInput
+              ? `<div class="needs-you-form"><div class="needs-you-actions"><button type="button" data-action="open-reply-composer" data-project-root="${escapeHtml(replyProjectRoot)}" data-thread-id="${escapeHtml(agent.threadId)}">${escapeHtml(replyComposerMatchesThread(replyProjectRoot, agent.threadId) ? "Editing reply..." : "Reply")}</button></div>${renderReplyComposerForThread(replyProjectRoot, agent.threadId, "Reply to this input...")}${need?.kind === "input" && agent.resumeCommand ? `<div class="needs-you-fallback">Terminal fallback: <code>${escapeHtml(agent.resumeCommand)}</code></div>` : ""}${errorHtml}</div>`
+            : (need?.kind === "input" && agent.resumeCommand
+              ? `<div class="needs-you-fallback">Reply in Codex: <code>${escapeHtml(agent.resumeCommand)}</code></div>`
+              : "");
+          return `<article class="needs-you-item" data-needs-user-project-root="${escapeHtml(actionProjectRoot || "")}"><div class="needs-you-item-meta"><span>${escapeHtml(projectLabel(snapshot.projectRoot))}</span><span>${escapeHtml(agent.label)}</span><span>${escapeHtml(need?.kind || "input")}</span></div><div class="needs-you-item-scope">${escapeHtml(scope)}</div>${actionsHtml}</article>`;
+        }).join("")}</div></section>`;
       }
 
   // src/client/runtime/ui-source.ts
@@ -8740,18 +11364,275 @@ function focusKeysIntersect(keys, focusedKeys) {
         return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
           const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
           const appearanceAgentId = agent.sourceAgentId || agent.id;
+          const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
           const title = displayAgentLabel(snapshot, agent);
+          const replyAction = replyProjectRoot
+            ? `<button data-action="open-reply-composer" data-project-root="${escapeHtml(replyProjectRoot)}" data-thread-id="${escapeHtml(agent.threadId)}">Reply</button>`
+            : "";
           const appearanceAction = agent.network
             ? ""
             : `<button data-action="cycle-look" data-project-root="${escapeHtml(appearanceProjectRoot)}" data-agent-id="${escapeHtml(appearanceAgentId)}">Cycle look</button>`;
+          const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
           const description = normalizeDisplayText(snapshot.projectRoot, agent.detail)
             || latestAgentMessage(snapshot.projectRoot, agent)
             || `[${agent.state}]`;
           const sourceLabel = agentNetworkLabel(agent);
           const fullDescription = sourceLabel ? `${sourceLabel} · ${description}` : description;
-          return `<article class="session-card" tabindex="0" data-focus-keys="${focusKeys}"><div class="session-card-header"><strong class="session-card-title">${escapeHtml(title)}</strong><div class="card-actions">${appearanceAction}</div></div><div class="muted session-card-description" title="${escapeHtml(fullDescription)}">${escapeHtml(fullDescription)}</div></article>`;
+          return `<article class="session-card" tabindex="0" data-focus-keys="${focusKeys}"><div class="session-card-header"><strong class="session-card-title">${escapeHtml(title)}</strong><div class="card-actions">${cardActions}</div></div><div class="muted session-card-description" title="${escapeHtml(fullDescription)}">${escapeHtml(fullDescription)}</div>${renderReplyComposer(snapshot, agent)}</article>`;
         }).join("");
+      }
+
+      function findReplyThreadEntry(projectRoot, threadId) {
+        if (!state.fleet || !projectRoot || !threadId) {
+          return null;
+        }
+        const projects = Array.isArray(state.fleet.projects) ? state.fleet.projects : [];
+        for (const snapshot of projects) {
+          const agent = Array.isArray(snapshot.agents)
+            ? snapshot.agents.find((candidate) =>
+              candidate
+              && candidate.threadId === threadId
+              && replyActionProjectRoot(snapshot, candidate) === projectRoot
+            )
+            : null;
+          if (agent) {
+            return { snapshot, agent };
+          }
+        }
+        return null;
+      }
+
+      function findThreadViewEntry(projectRoot, threadId) {
+        if (!state.fleet || !projectRoot || !threadId) {
+          return null;
+        }
+        const projects = Array.isArray(state.fleet.projects) ? state.fleet.projects : [];
+        for (const snapshot of projects) {
+          const agent = Array.isArray(snapshot.agents)
+            ? snapshot.agents.find((candidate) =>
+              candidate
+              && candidate.threadId === threadId
+              && threadViewProjectRoot(snapshot, candidate) === projectRoot
+            )
+            : null;
+          if (agent) {
+            return { snapshot, agent };
+          }
+        }
+        return null;
+      }
+
+      function agentThreadPanelMatches(snapshot, agent) {
+        if (!state.openAgentThread || !snapshot || !agent || !agent.threadId) {
+          return false;
+        }
+        const projectRoot = threadViewProjectRoot(snapshot, agent);
+        if (!projectRoot) {
+          return false;
+        }
+        return (
+          state.openAgentThread.projectRoot === projectRoot
+          && state.openAgentThread.threadId === agent.threadId
+        );
+      }
+
+      function focusReplyComposer(projectRoot, threadId) {
+        requestAnimationFrame(() => {
+          const textarea = document.querySelector(
+            `textarea[data-reply-project-root="${CSS.escape(projectRoot || "")}"][data-reply-thread-id="${CSS.escape(threadId || "")}"]`
+          );
+          if (textarea instanceof HTMLTextAreaElement) {
+            textarea.focus();
+            textarea.selectionStart = textarea.value.length;
+            textarea.selectionEnd = textarea.value.length;
+          }
+        });
+      }
+
+      function openReplyComposer(projectRoot, threadId, options = {}) {
+        const previousDraft =
+          state.replyComposer
+          && state.replyComposer.projectRoot === projectRoot
+          && state.replyComposer.threadId === threadId
+            ? state.replyComposer.draft
+            : "";
+        state.replyComposer = {
+          projectRoot,
+          threadId,
+          draft: previousDraft || "",
+          pending: false,
+          error: null
+        };
+        render();
+        if (options.focus !== false) {
+          focusReplyComposer(projectRoot, threadId);
+        }
+      }
+
+      function replyThreadWorkIntentKey(threadId) {
+        return String(threadId || "");
+      }
+
+      function markReplyThreadWorkIntent(threadId, ttlMs = 12000) {
+        const key = replyThreadWorkIntentKey(threadId);
+        if (!key) {
+          return;
+        }
+        state.replyThreadWorkIntents = {
+          ...(state.replyThreadWorkIntents || {}),
+          [key]: Date.now() + ttlMs
+        };
+      }
+
+      function toggleThreadEntryExpanded(stateKey) {
+        const key = String(stateKey || "");
+        if (!key) {
+          return;
+        }
+        state.expandedThreadEntries = {
+          ...(state.expandedThreadEntries || {}),
+          [key]: !Boolean(state.expandedThreadEntries && state.expandedThreadEntries[key])
+        };
+        render();
+      }
+
+      function closeAgentThread(projectRoot = null, threadId = null) {
+        if (
+          !state.openAgentThread
+          || (
+            projectRoot
+            && threadId
+            && (
+              state.openAgentThread.projectRoot !== projectRoot
+              || state.openAgentThread.threadId !== threadId
+            )
+          )
+        ) {
+          return;
+        }
+        const closingThread = state.openAgentThread;
+        state.openAgentThread = null;
+        state.closingAgentThread = closingThread;
+        window.setTimeout(() => {
+          if (
+            state.closingAgentThread
+            && state.closingAgentThread.projectRoot === closingThread.projectRoot
+            && state.closingAgentThread.threadId === closingThread.threadId
+          ) {
+            state.closingAgentThread = null;
+            render();
+          }
+        }, 180);
+        if (
+          state.replyComposer
+          && (
+            !projectRoot
+            || !threadId
+            || (
+              state.replyComposer.projectRoot === projectRoot
+              && state.replyComposer.threadId === threadId
+            )
+          )
+        ) {
+          state.replyComposer = null;
+        }
+        render();
+      }
+
+      function openAgentThread(projectRoot, threadId) {
+        const entry = findThreadViewEntry(projectRoot, threadId);
+        if (!entry) {
+          return;
+        }
+        state.closingAgentThread = null;
+        if (
+          state.openAgentThread
+          && state.openAgentThread.projectRoot === projectRoot
+          && state.openAgentThread.threadId === threadId
+        ) {
+          render();
+          return;
+        }
+        state.openAgentThread = {
+          projectRoot,
+          threadId
+        };
+        render();
+      }
+
+      function replyActionProjectRoot(snapshot, agent) {
+        if (!agent || !agent.threadId) {
+          return null;
+        }
+        if (agent.network || agent.provenance !== "codex" || agent.source !== "local") {
+          return null;
+        }
+        if (agent.sourceKind !== "appServer") {
+          return null;
+        }
+        return threadViewProjectRoot(snapshot, agent);
+      }
+
+      function threadViewProjectRoot(snapshot, agent) {
+        if (!agent || !agent.threadId) {
+          return null;
+        }
+        if (agent.network || agent.provenance !== "codex" || agent.source !== "local") {
+          return null;
+        }
+        const preferredRoot = agent.sourceProjectRoot || snapshot.projectRoot;
+        const localRoots = localProjectRootsForSnapshot(snapshot);
+        if (localRoots.includes(preferredRoot)) {
+          return preferredRoot;
+        }
+        return localRoots[0] || preferredRoot;
+      }
+
+      function replyComposerMatches(snapshot, agent) {
+        if (!state.replyComposer || !agent || !agent.threadId) {
+          return false;
+        }
+        const projectRoot = replyActionProjectRoot(snapshot, agent);
+        if (
+          agent.needsUser
+          && agent.needsUser.kind === "input"
+          && (!Array.isArray(agent.needsUser.questions) || agent.needsUser.questions.length === 0)
+        ) {
+          return false;
+        }
+        return replyComposerMatchesThread(projectRoot, agent.threadId);
+      }
+
+      function replyComposerMatchesThread(projectRoot, threadId) {
+        if (!state.replyComposer || !projectRoot || !threadId) {
+          return false;
+        }
+        return Boolean(
+          state.replyComposer.projectRoot === projectRoot
+          && state.replyComposer.threadId === threadId
+        );
+      }
+
+      function renderReplyComposer(snapshot, agent) {
+        const projectRoot = replyActionProjectRoot(snapshot, agent);
+        if (!replyComposerMatches(snapshot, agent) || !projectRoot) {
+          return "";
+        }
+        return renderReplyComposerForThread(projectRoot, agent.threadId, "Send a follow-up to this session...");
+      }
+
+      function renderReplyComposerForThread(projectRoot, threadId, placeholder = "Send a follow-up to this session...") {
+        if (!replyComposerMatchesThread(projectRoot, threadId)) {
+          return "";
+        }
+        const composer = state.replyComposer;
+        const disabled = composer.pending === true;
+        const errorHtml = composer.error
+          ? `<div class="chat-composer-error">${escapeHtml(composer.error)}</div>`
+          : "";
+        const hasText = Boolean(String(composer.draft || "").trim());
+        return `<form class="chat-composer" data-chat-composer="reply"><textarea class="chat-composer-field" rows="2" data-reply-project-root="${escapeHtml(composer.projectRoot)}" data-reply-thread-id="${escapeHtml(composer.threadId)}" placeholder="${escapeHtml(placeholder)}"${disabled ? " disabled" : ""}>${escapeHtml(composer.draft || "")}</textarea><div class="chat-composer-toolbar"><div class="chat-composer-state">${escapeHtml(disabled ? "Sending" : (hasText ? "Ready" : "Draft"))}</div><div class="chat-composer-actions"><button type="button" data-action="cancel-reply-composer" data-project-root="${escapeHtml(composer.projectRoot)}" data-thread-id="${escapeHtml(composer.threadId)}"${disabled ? " disabled" : ""}>Cancel</button><button type="button" class="primary-action" data-action="submit-reply-composer" data-project-root="${escapeHtml(composer.projectRoot)}" data-thread-id="${escapeHtml(composer.threadId)}"${disabled || !hasText ? " disabled" : ""}>${escapeHtml(disabled ? "Sending..." : "Send")}</button></div></div>${errorHtml}</form>`;
       }
 
       function renderFleetSessions(projects) {
@@ -8767,17 +11648,22 @@ function focusKeysIntersect(keys, focusedKeys) {
         return renderNeedsAttention(projects) + entries.map(({ snapshot, agent }) => {
           const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
           const appearanceAgentId = agent.sourceAgentId || agent.id;
+          const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
           const title = displayAgentLabel(snapshot, agent);
+          const replyAction = replyProjectRoot
+            ? `<button data-action="open-reply-composer" data-project-root="${escapeHtml(replyProjectRoot)}" data-thread-id="${escapeHtml(agent.threadId)}">Reply</button>`
+            : "";
           const appearanceAction = agent.network
             ? ""
             : `<button data-action="cycle-look" data-project-root="${escapeHtml(appearanceProjectRoot)}" data-agent-id="${escapeHtml(appearanceAgentId)}">Cycle look</button>`;
+          const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
           const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
           const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail)
             || latestAgentMessage(snapshot.projectRoot, agent)
             || `[${agent.state}]`;
           const sourceLabel = agentNetworkLabel(agent);
           const description = projectLabel(snapshot.projectRoot) + " · " + (sourceLabel ? sourceLabel + " · " : "") + detail;
-          return `<article class="session-card" tabindex="0" data-focus-keys="${focusKeys}"><div class="session-card-header"><strong class="session-card-title">${escapeHtml(title)}</strong><div class="card-actions">${appearanceAction}</div></div><div class="muted session-card-description" title="${escapeHtml(description)}">${escapeHtml(description)}</div></article>`;
+          return `<article class="session-card" tabindex="0" data-focus-keys="${focusKeys}"><div class="session-card-header"><strong class="session-card-title">${escapeHtml(title)}</strong><div class="card-actions">${cardActions}</div></div><div class="muted session-card-description" title="${escapeHtml(description)}">${escapeHtml(description)}</div>${renderReplyComposer(snapshot, agent)}</article>`;
         }).join("");
       }
 
@@ -8871,10 +11757,28 @@ function focusKeysIntersect(keys, focusedKeys) {
           }
         }
 
+        for (const snapshot of projects) {
+          if (!snapshot || !snapshot.projectRoot) {
+            continue;
+          }
+          const previousProjectAgentCount = [...liveAgentMemory.values()]
+            .filter((entry) => entry.projectRoot === snapshot.projectRoot)
+            .length;
+          if (previousProjectAgentCount > 0 || (snapshot.agents || []).length > 0) {
+            markProjectHydrated(snapshot.projectRoot, now);
+          }
+        }
+
         enteringAgentKeys = previousKeys.size === 0 || screenshotMode
           ? new Set()
           : new Set(
-              [...nextMemory.keys()].filter((key) => !previousKeys.has(key))
+              [...nextMemory.keys()].filter((key) => {
+                if (previousKeys.has(key)) {
+                  return false;
+                }
+                const entry = nextMemory.get(key) || null;
+                return !(entry && agentLooksHistoricallyHydrated(entry.projectRoot, entry.agent));
+              })
             );
 
         for (const [key, entry] of liveAgentMemory.entries()) {
@@ -8993,18 +11897,234 @@ function focusKeysIntersect(keys, focusedKeys) {
         });
       }
 
-      async function postJson(path, payload = {}) {
-        const response = await fetch(path, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload)
-        });
+      const THREAD_REPLY_TIMEOUT_MS = 90000;
+
+      async function postJson(path, payload = {}, timeoutMs = 15000) {
+        const controller = typeof AbortController === "function" ? new AbortController() : null;
+        const timer = controller
+          ? setTimeout(() => controller.abort(), timeoutMs)
+          : null;
+        let response;
+        try {
+          response = await fetch(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: controller ? controller.signal : undefined
+          });
+        } catch (error) {
+          if (error && error.name === "AbortError") {
+            throw new Error("Request timed out. Try again when the local app-server is responsive.");
+          }
+          throw error;
+        } finally {
+          if (timer) {
+            clearTimeout(timer);
+          }
+        }
 
         if (!response.ok) {
           throw new Error(await response.text());
         }
 
         return response.json();
+      }
+
+      function setNeedsUserRequestError(requestId, message) {
+        state.needsUserActionErrorsByRequestId = {
+          ...(state.needsUserActionErrorsByRequestId || {}),
+          [requestId]: message
+        };
+      }
+
+      function clearNeedsUserRequestError(requestId) {
+        const nextErrors = { ...(state.needsUserActionErrorsByRequestId || {}) };
+        delete nextErrors[requestId];
+        state.needsUserActionErrorsByRequestId = nextErrors;
+      }
+
+      function updateNeedsUserInputDraft(requestId, questionId, patch) {
+        const existingRequestDraft = state.needsUserInputDrafts && state.needsUserInputDrafts[requestId]
+          ? state.needsUserInputDrafts[requestId]
+          : {};
+        const existingQuestionDraft = existingRequestDraft && existingRequestDraft[questionId]
+          ? existingRequestDraft[questionId]
+          : { selected: "", other: "" };
+        state.needsUserInputDrafts = {
+          ...(state.needsUserInputDrafts || {}),
+          [requestId]: {
+            ...existingRequestDraft,
+            [questionId]: {
+              ...existingQuestionDraft,
+              ...patch
+            }
+          }
+        };
+      }
+
+      function dropNeedsUserInputDraft(requestId) {
+        const nextDrafts = { ...(state.needsUserInputDrafts || {}) };
+        delete nextDrafts[requestId];
+        state.needsUserInputDrafts = nextDrafts;
+      }
+
+      function findNeedsUserEntry(requestId) {
+        const projects = state.fleet && Array.isArray(state.fleet.projects) ? state.fleet.projects : [];
+        for (const snapshot of projects) {
+          const agent = Array.isArray(snapshot.agents)
+            ? snapshot.agents.find((candidate) => candidate && candidate.needsUser && candidate.needsUser.requestId === requestId)
+            : null;
+          if (agent && agent.needsUser) {
+            return { snapshot, agent, need: agent.needsUser };
+          }
+        }
+        return null;
+      }
+
+      function syncReplyComposerSubmitButton(projectRoot, threadId) {
+        const button = document.querySelector(
+          `button[data-action="submit-reply-composer"][data-project-root="${CSS.escape(projectRoot || "")}"][data-thread-id="${CSS.escape(threadId || "")}"]`
+        );
+        if (!(button instanceof HTMLButtonElement) || !state.replyComposer) {
+          return;
+        }
+        button.disabled = state.replyComposer.pending === true || !String(state.replyComposer.draft || "").trim();
+      }
+
+      function syncNeedsUserSubmitButton(requestId) {
+        const button = document.querySelector(
+          `button[data-action="submit-needs-user-input"][data-request-id="${CSS.escape(requestId || "")}"]`
+        );
+        if (!(button instanceof HTMLButtonElement)) {
+          return;
+        }
+        const entry = findNeedsUserEntry(requestId);
+        button.disabled = state.needsUserActionRequestIds.includes(requestId)
+          || !entry
+          || !entry.need
+          || entry.need.kind !== "input"
+          || !needsUserInputReady(entry.need);
+      }
+
+      async function submitNeedsUserInput(projectRoot, requestId) {
+        if (typeof projectRoot !== "string" || projectRoot.length === 0) {
+          setNeedsUserRequestError(requestId, "Project root is unavailable for this input request.");
+          render();
+          return;
+        }
+        if (state.needsUserActionRequestIds.includes(requestId)) {
+          return;
+        }
+
+        const entry = findNeedsUserEntry(requestId);
+        if (!entry || !entry.need || entry.need.kind !== "input") {
+          setNeedsUserRequestError(requestId, "Input request is no longer available.");
+          render();
+          return;
+        }
+
+        const questions = Array.isArray(entry.need.questions) ? entry.need.questions : [];
+        const completion = needsUserInputCompletion(entry.need);
+        if (completion.missingRequired.length > 0) {
+          setNeedsUserRequestError(requestId, completion.missingRequired[0] + " still needs an answer.");
+          render();
+          return;
+        }
+        const answers = {};
+        for (const [questionIndex, question] of questions.entries()) {
+          const draft = needsUserInputDraft(requestId, question.id);
+          const values = needsUserInputAnswerValues(question, draft);
+          if (values.length === 0) {
+            if (question.required === false) {
+              continue;
+            }
+            setNeedsUserRequestError(requestId, needsUserInputQuestionLabel(question, questionIndex) + " still needs an answer.");
+            render();
+            return;
+          }
+          answers[question.id] = { answers: values };
+        }
+
+        state.needsUserActionRequestIds = [...state.needsUserActionRequestIds, requestId];
+        clearNeedsUserRequestError(requestId);
+        render();
+
+        try {
+          await postJson("/api/needs-user/answer", {
+            projectRoot,
+            requestId,
+            answers
+          });
+          dropNeedsUserInputDraft(requestId);
+          clearNeedsUserRequestError(requestId);
+          await refreshFleet();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setNeedsUserRequestError(requestId, "Needs You action failed: " + message);
+        } finally {
+          state.needsUserActionRequestIds = state.needsUserActionRequestIds.filter((value) => value !== requestId);
+          render();
+        }
+      }
+
+      async function submitReplyComposer(projectRoot, threadId) {
+        if (
+          !state.replyComposer
+          || state.replyComposer.projectRoot !== projectRoot
+          || state.replyComposer.threadId !== threadId
+        ) {
+          return;
+        }
+        if (state.replyComposer.pending === true) {
+          return;
+        }
+
+        const text = String(state.replyComposer.draft || "").trim();
+        if (!text) {
+          state.replyComposer = {
+            ...state.replyComposer,
+            error: "Reply text is required."
+          };
+          render();
+          return;
+        }
+
+        state.replyComposer = {
+          ...state.replyComposer,
+          pending: true,
+          error: null
+        };
+        render();
+
+        try {
+          await postJson("/api/thread/reply", {
+            projectRoot,
+            threadId,
+            text
+          }, THREAD_REPLY_TIMEOUT_MS);
+          markReplyThreadWorkIntent(threadId);
+          state.replyComposer = null;
+          if (
+            state.openAgentThread
+            && state.openAgentThread.projectRoot === projectRoot
+            && state.openAgentThread.threadId === threadId
+          ) {
+            state.openAgentThread = null;
+          }
+          state.closingAgentThread = null;
+          await refreshFleet();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          state.replyComposer = {
+            ...state.replyComposer,
+            pending: false,
+            error: "Reply failed: " + message
+          };
+          render();
+          return;
+        }
+
+        render();
       }
 
       function setTextIfChanged(element, value) {
@@ -9068,6 +12188,20 @@ function focusKeysIntersect(keys, focusedKeys) {
         if (!state.fleet) return;
 
         const fleet = state.fleet;
+        if (
+          state.openAgentThread
+          && !findThreadViewEntry(state.openAgentThread.projectRoot, state.openAgentThread.threadId)
+        ) {
+          const staleThread = state.openAgentThread;
+          state.openAgentThread = null;
+          if (
+            state.replyComposer
+            && state.replyComposer.projectRoot === staleThread.projectRoot
+            && state.replyComposer.threadId === staleThread.threadId
+          ) {
+            state.replyComposer = null;
+          }
+        }
         const rawProjects = visibleProjects(fleet);
         const floorProjects = mergeWorktreeProjects(rawProjects);
         const selectableProjects = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)
@@ -9187,7 +12321,7 @@ function focusKeysIntersect(keys, focusedKeys) {
             roomsPath,
             snapshot.rooms.generated
               ? `Auto rooms · floor shows live agents plus ${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows ${SESSION_RECENT_LEAD_LIMIT} recent sessions`
-              : `.codex-agents/rooms.xml · floor shows live agents plus ${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows ${SESSION_RECENT_LEAD_LIMIT} recent sessions`
+              : `Saved rooms.xml · floor shows live agents plus ${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows ${SESSION_RECENT_LEAD_LIMIT} recent sessions`
           );
           if (centerChanged) {
             fitScenes();
@@ -9292,7 +12426,128 @@ function focusKeysIntersect(keys, focusedKeys) {
             projectRoot: target.dataset.projectRoot,
             agentId: target.dataset.agentId
           });
+          return;
         }
+
+        if (action === "open-reply-composer" && target.dataset.projectRoot && target.dataset.threadId) {
+          openReplyComposer(target.dataset.projectRoot, target.dataset.threadId);
+          return;
+        }
+
+        if (action === "open-agent-thread" && target.dataset.projectRoot && target.dataset.threadId) {
+          openAgentThread(target.dataset.projectRoot, target.dataset.threadId);
+          return;
+        }
+
+        if (action === "close-agent-thread") {
+          closeAgentThread(target.dataset.projectRoot || null, target.dataset.threadId || null);
+          return;
+        }
+
+        if (action === "toggle-thread-entry" && target.dataset.threadEntryStateKey) {
+          toggleThreadEntryExpanded(target.dataset.threadEntryStateKey);
+          return;
+        }
+
+        if (action === "cancel-reply-composer" && target.dataset.projectRoot && target.dataset.threadId) {
+          if (
+            state.replyComposer
+            && state.replyComposer.projectRoot === target.dataset.projectRoot
+            && state.replyComposer.threadId === target.dataset.threadId
+          ) {
+            state.replyComposer = null;
+            render();
+          }
+          return;
+        }
+
+        if (action === "submit-reply-composer" && target.dataset.projectRoot && target.dataset.threadId) {
+          await submitReplyComposer(target.dataset.projectRoot, target.dataset.threadId);
+          return;
+        }
+
+        if (action === "select-needs-user-option" && target.dataset.needsUserRequestId && target.dataset.needsUserQuestionId) {
+          updateNeedsUserInputDraft(target.dataset.needsUserRequestId, target.dataset.needsUserQuestionId, {
+            selected: String(target.dataset.answer || "")
+          });
+          clearNeedsUserRequestError(target.dataset.needsUserRequestId);
+          render();
+          return;
+        }
+
+        if (action === "clear-needs-user-answer" && target.dataset.needsUserRequestId && target.dataset.needsUserQuestionId) {
+          updateNeedsUserInputDraft(target.dataset.needsUserRequestId, target.dataset.needsUserQuestionId, {
+            selected: "",
+            other: ""
+          });
+          clearNeedsUserRequestError(target.dataset.needsUserRequestId);
+          render();
+          return;
+        }
+
+        if (action === "submit-needs-user-input" && target.dataset.projectRoot && target.dataset.requestId) {
+          await submitNeedsUserInput(target.dataset.projectRoot, target.dataset.requestId);
+          return;
+        }
+
+        if (action === "respond-needs-user" && target.dataset.projectRoot && target.dataset.requestId && target.dataset.decision) {
+          const requestId = target.dataset.requestId;
+          if (state.needsUserActionRequestIds.includes(requestId)) {
+            return;
+          }
+
+          state.needsUserActionRequestIds = [...state.needsUserActionRequestIds, requestId];
+          clearNeedsUserRequestError(requestId);
+          render();
+
+          try {
+            await postJson("/api/needs-user/respond", {
+              projectRoot: target.dataset.projectRoot,
+              requestId,
+              decision: target.dataset.decision
+            });
+            await refreshFleet();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setNeedsUserRequestError(requestId, "Needs You action failed: " + message);
+          } finally {
+            state.needsUserActionRequestIds = state.needsUserActionRequestIds.filter((value) => value !== requestId);
+            render();
+          }
+        }
+      });
+
+      document.body.addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLTextAreaElement) && !(target instanceof HTMLInputElement)) {
+          return;
+        }
+        if (target.matches("[data-needs-user-text][data-needs-user-request-id][data-needs-user-question-id]")) {
+          updateNeedsUserInputDraft(target.dataset.needsUserRequestId, target.dataset.needsUserQuestionId, {
+            other: target.value
+          });
+          syncNeedsUserSubmitButton(target.dataset.needsUserRequestId);
+          return;
+        }
+        if (!(target instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        if (!target.matches("textarea[data-reply-project-root][data-reply-thread-id]")) {
+          return;
+        }
+        if (
+          !state.replyComposer
+          || state.replyComposer.projectRoot !== target.dataset.replyProjectRoot
+          || state.replyComposer.threadId !== target.dataset.replyThreadId
+        ) {
+          return;
+        }
+        state.replyComposer = {
+          ...state.replyComposer,
+          draft: target.value,
+          error: null
+        };
+        syncReplyComposerSubmitButton(target.dataset.replyProjectRoot, target.dataset.replyThreadId);
       });
 
       document.body.addEventListener("pointerover", (event) => {
@@ -9336,6 +12591,14 @@ function focusKeysIntersect(keys, focusedKeys) {
       });
 
       document.addEventListener("pointerdown", (event) => {
+        if (state.openAgentThread) {
+          const withinThread = event.target instanceof HTMLElement
+            ? event.target.closest("[data-agent-thread-card], .office-map-agent-trigger")
+            : null;
+          if (!withinThread) {
+            closeAgentThread();
+          }
+        }
         if (!state.settingsOpen) {
           return;
         }
@@ -9614,9 +12877,44 @@ function focusKeysIntersect(keys, focusedKeys) {
       }
       document.addEventListener("keydown", (event) => {
         if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey) {
+          const target = event.target;
+          if (
+            (event.metaKey || event.ctrlKey)
+            && event.key === "Enter"
+            && target instanceof HTMLTextAreaElement
+            && (
+              target.matches("textarea[data-reply-project-root][data-reply-thread-id]")
+              || target.matches("textarea[data-needs-user-text][data-needs-user-request-id]")
+            )
+          ) {
+            event.preventDefault();
+            if (target.matches("textarea[data-reply-project-root][data-reply-thread-id]")) {
+              void submitReplyComposer(target.dataset.replyProjectRoot, target.dataset.replyThreadId);
+            } else {
+              const card = target.closest("[data-needs-user-project-root]");
+              const projectRoot = card instanceof HTMLElement ? card.dataset.needsUserProjectRoot : null;
+              void submitNeedsUserInput(projectRoot, target.dataset.needsUserRequestId);
+            }
+          }
+          return;
+        }
+        if (
+          event.key === "Enter"
+          && !event.shiftKey
+          && !event.isComposing
+          && event.target instanceof HTMLTextAreaElement
+          && event.target.matches("textarea[data-reply-project-root][data-reply-thread-id]")
+        ) {
+          event.preventDefault();
+          void submitReplyComposer(event.target.dataset.replyProjectRoot, event.target.dataset.replyThreadId);
           return;
         }
         if (isTypingTarget(event.target)) {
+          return;
+        }
+        if (event.key === "Escape" && state.openAgentThread) {
+          event.preventDefault();
+          closeAgentThread();
           return;
         }
         if (event.key === "Escape" && state.settingsOpen) {
@@ -9627,6 +12925,15 @@ function focusKeysIntersect(keys, focusedKeys) {
         if (event.key === "Escape" && state.workspaceFullscreen) {
           event.preventDefault();
           setWorkspaceFullscreen(false);
+          return;
+        }
+        if (
+          (event.key === "Enter" || event.key === " ")
+          && event.target instanceof HTMLElement
+          && event.target.matches(".office-map-agent-trigger[data-project-root][data-thread-id]")
+        ) {
+          event.preventDefault();
+          openAgentThread(event.target.dataset.projectRoot, event.target.dataset.threadId);
           return;
         }
         if ((event.key === "f" || event.key === "F") && canFocusWorkspace()) {

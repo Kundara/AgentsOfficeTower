@@ -571,7 +571,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
       }
 
       function isBusyAgent(agent) {
-        return agent.isCurrent === true || isRuntimeActiveLocalAgent(agent);
+        return agent.isCurrent === true || agent.isOngoing === true || isRuntimeActiveLocalAgent(agent);
       }
 
       function parseAgentUpdatedAt(value) {
@@ -703,6 +703,32 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           return \`\${projectRoot}::thread::\${subjectThreadId}\`;
         }
         return \`\${projectRoot}::agent::\${agent && agent.id ? agent.id : "unknown"}\`;
+      }
+
+      function projectHydrationBaselineAt(projectRoot) {
+        return baselineProjectHydrationAt.get(projectRoot) ?? 0;
+      }
+
+      function markProjectHydrated(projectRoot, atMs = Date.now()) {
+        if (!projectRoot || baselineProjectHydrationAt.has(projectRoot)) {
+          return;
+        }
+        baselineProjectHydrationAt.set(projectRoot, atMs);
+      }
+
+      function agentLooksHistoricallyHydrated(projectRoot, agent) {
+        if (!projectRoot || !agent) {
+          return false;
+        }
+        const baselineAt = projectHydrationBaselineAt(projectRoot);
+        if (!Number.isFinite(baselineAt) || baselineAt <= 0) {
+          return false;
+        }
+        const updatedAt = Date.parse(agent.updatedAt || "");
+        if (!Number.isFinite(updatedAt)) {
+          return false;
+        }
+        return baselineAt - updatedAt >= HISTORICAL_HYDRATION_SUPPRESS_MS;
       }
 
       function sceneAgentToken(agent) {

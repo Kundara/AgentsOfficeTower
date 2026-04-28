@@ -30,6 +30,7 @@ export {
   loadCursorAgents,
   loadCursorCloudProjectSnapshotData
 } from "./cursor-cloud-data";
+import { getProjectStoragePath, listExistingProjectStoragePaths } from "./project-storage";
 import { canonicalizeProjectPath, sameProjectPath } from "./project-paths";
 import type { ActivityState, AgentActivityEvent, DashboardAgent, DashboardEvent } from "./types";
 
@@ -755,7 +756,7 @@ async function summariseCursorTranscriptSession(file: {
 }
 
 function cursorHooksDir(projectRoot: string): string {
-  return join(projectRoot, ".codex-agents", "cursor-hooks");
+  return getProjectStoragePath(projectRoot, "cursor-hooks");
 }
 
 export function cursorHooksFilePath(projectRoot: string, sessionId: string): string {
@@ -1449,32 +1450,34 @@ async function cursorHookFiles(projectRoot: string): Promise<Array<{
   filePath: string;
   updatedAtMs: number;
 }>> {
-  const hooksDir = cursorHooksDir(projectRoot);
-  if (!await pathExists(hooksDir)) {
+  const hooksDirs = await listExistingProjectStoragePaths(projectRoot, "cursor-hooks");
+  if (hooksDirs.length === 0) {
     return [];
   }
 
-  const entries = await readdir(hooksDir, { withFileTypes: true }).catch(() => []);
   const files: Array<{
     sessionId: string;
     filePath: string;
     updatedAtMs: number;
   }> = [];
 
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
-      continue;
+  for (const hooksDir of hooksDirs) {
+    const entries = await readdir(hooksDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      const filePath = join(hooksDir, entry.name);
+      const fileStats = await stat(filePath).catch(() => null);
+      if (!fileStats?.isFile()) {
+        continue;
+      }
+      files.push({
+        sessionId: entry.name.replace(/\.jsonl$/i, ""),
+        filePath,
+        updatedAtMs: fileStats.mtimeMs
+      });
     }
-    const filePath = join(hooksDir, entry.name);
-    const fileStats = await stat(filePath).catch(() => null);
-    if (!fileStats?.isFile()) {
-      continue;
-    }
-    files.push({
-      sessionId: entry.name.replace(/\.jsonl$/i, ""),
-      filePath,
-      updatedAtMs: fileStats.mtimeMs
-    });
   }
 
   return files.sort((left, right) => right.updatedAtMs - left.updatedAtMs);

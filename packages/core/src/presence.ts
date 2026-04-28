@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { getAppearanceById } from "./appearance";
-import { getPresenceFilePath } from "./room-config";
+import { getPresenceFilePath, resolveReadablePresenceFilePath } from "./room-config";
 import type { DashboardAgent, PresenceEntry, PresenceRoster } from "./types";
 
 const DEFAULT_BOSS_APPEARANCE_ID = "sun";
@@ -16,7 +16,7 @@ function emptyPresenceRoster(): PresenceRoster {
 }
 
 export async function loadPresenceRoster(projectRoot: string): Promise<PresenceRoster> {
-  const filePath = getPresenceFilePath(projectRoot);
+  const filePath = await resolveReadablePresenceFilePath(projectRoot);
   try {
     const text = await readFile(filePath, "utf8");
     const parsed = JSON.parse(text) as Partial<PresenceRoster>;

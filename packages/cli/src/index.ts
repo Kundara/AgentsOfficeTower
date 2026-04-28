@@ -12,6 +12,7 @@ import {
   filterSnapshotToCurrentWorkload,
   flattenRooms,
   readAsepriteHeader,
+  resolveReadableRoomsFilePath,
   scaffoldRoomsFile,
   setBossPresence,
   validateRoomFile,
@@ -125,7 +126,7 @@ async function runRooms(args: string[]): Promise<void> {
   const target = resolve(args[1] ?? cwd());
 
   if (subcommand === "validate") {
-    const filePath = target.endsWith(".xml") ? target : resolve(target, ".codex-agents/rooms.xml");
+    const filePath = target.endsWith(".xml") ? target : await resolveReadableRoomsFilePath(target);
     const config = await validateRoomFile(filePath);
     console.log(`Valid room file: ${config.filePath}`);
     for (const room of flattenRooms(config)) {

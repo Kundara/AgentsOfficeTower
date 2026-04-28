@@ -4,13 +4,19 @@ import type { AppServerNotification, AppServerServerRequest } from "../app-serve
 import type {
   CodexThread,
   DashboardEvent,
+  NeedsUserQuestion,
+  NeedsUserQuestionOption,
   NeedsUserState
 } from "../types";
 
 export interface PendingUserRequest extends NeedsUserState {
   threadId: string;
   createdAt: string;
+  requestMethod?: string;
+  responseKind?: "approvalDecision" | "legacyReview" | "permissionsApproval" | "toolInput" | "mcpElicitation";
   availableDecisions?: string[];
+  requestedPermissions?: Record<string, unknown> | null;
+  requestedSchema?: Record<string, unknown> | null;
   networkApprovalContext?: Record<string, unknown> | null;
 }
 
@@ -30,6 +36,155 @@ export function asString(value: unknown): string | undefined {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function asNeedsUserQuestionOption(value: unknown): NeedsUserQuestionOption | null {
+  const record = asRecord(value);
+  const label = asString(record?.label);
+  const description = asString(record?.description);
+  if (!label || !description) {
+    return null;
+  }
+  return { label, description };
+}
+
+function asNeedsUserQuestion(value: unknown): NeedsUserQuestion | null {
+  const record = asRecord(value);
+  const header = asString(record?.header);
+  const id = asString(record?.id);
+  const question = asString(record?.question);
+  if (!header || !id || !question) {
+    return null;
+  }
+
+  const rawOptions = Array.isArray(record?.options) ? record.options : null;
+  const options =
+    rawOptions
+      ? rawOptions
+        .map((entry) => asNeedsUserQuestionOption(entry))
+        .filter((entry): entry is NeedsUserQuestionOption => Boolean(entry))
+      : null;
+
+  return {
+    header,
+    id,
+    question,
+    required: record?.required === false ? false : undefined,
+    isOther: record?.isOther === true,
+    isSecret: record?.isSecret === true,
+    options
+  };
+}
+
+function asNeedsUserQuestions(value: unknown): NeedsUserQuestion[] {
+  return Array.isArray(value)
+    ? value
+      .map((entry) => asNeedsUserQuestion(entry))
+      .filter((entry): entry is NeedsUserQuestion => Boolean(entry))
+    : [];
+}
+
+function titleCaseIdentifier(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function parseSchemaOptions(schema: Record<string, unknown>): NeedsUserQuestionOption[] | null {
+  const enumValues = asStringArray(schema.enum);
+  if (enumValues.length > 0) {
+    return enumValues.map((value) => ({
+      label: value,
+      description: value
+    }));
+  }
+
+  const oneOf = Array.isArray(schema.oneOf) ? schema.oneOf : [];
+  const oneOfOptions = oneOf
+    .map((entry) => {
+      const option = asRecord(entry);
+      const constValue = asString(option?.const);
+      if (!constValue) {
+        return null;
+      }
+      return {
+        label: constValue,
+        description: asString(option?.title) ?? asString(option?.description) ?? constValue
+      };
+    })
+    .filter((option): option is NeedsUserQuestionOption => Boolean(option));
+  if (oneOfOptions.length > 0) {
+    return oneOfOptions;
+  }
+
+  const items = asRecord(schema.items);
+  const itemEnumValues = asStringArray(items?.enum);
+  if (itemEnumValues.length > 0) {
+    return itemEnumValues.map((value) => ({
+      label: value,
+      description: value
+    }));
+  }
+
+  const nestedItems = asRecord(items?.items);
+  const anyOf: unknown[] = Array.isArray(nestedItems?.anyOf)
+    ? nestedItems.anyOf
+    : Array.isArray(items?.anyOf)
+      ? items.anyOf
+      : [];
+  const anyOfOptions = anyOf
+    .map((entry) => {
+      const option = asRecord(entry);
+      const constValue = asString(option?.const);
+      if (!constValue) {
+        return null;
+      }
+      return {
+        label: constValue,
+        description: asString(option?.title) ?? asString(option?.description) ?? constValue
+      };
+    })
+    .filter((option): option is NeedsUserQuestionOption => Boolean(option));
+  return anyOfOptions.length > 0 ? anyOfOptions : null;
+}
+
+function parseMcpElicitationQuestions(schema: Record<string, unknown> | null): NeedsUserQuestion[] {
+  const properties = asRecord(schema?.properties);
+  if (!properties) {
+    return [];
+  }
+  const required = new Set(asStringArray(schema?.required));
+  return Object.entries(properties)
+    .map((entry): NeedsUserQuestion | null => {
+      const [id, rawSchema] = entry;
+      const propertySchema = asRecord(rawSchema);
+      if (!propertySchema) {
+        return null;
+      }
+      const header = asString(propertySchema.title) ?? titleCaseIdentifier(id);
+      const type = asString(propertySchema.type);
+      const question = asString(propertySchema.description) ?? header;
+      const options =
+        type === "boolean"
+          ? [
+            { label: "true", description: "True" },
+            { label: "false", description: "False" }
+          ]
+          : parseSchemaOptions(propertySchema);
+      return {
+        header,
+        id,
+        question,
+        required: required.has(id),
+        isSecret: propertySchema.format === "password",
+        options
+      } satisfies NeedsUserQuestion;
+    })
+    .filter((question): question is NeedsUserQuestion => Boolean(question));
 }
 
 function shorten(text: string, maxLength = 88): string {
@@ -136,7 +291,7 @@ function extractNumberValue(value: unknown, ...keys: string[]): number | undefin
 
 export function extractThreadId(value: unknown): string | null {
   const record = asRecord(value);
-  const direct = record ? asString(record.threadId ?? record.thread_id) : undefined;
+  const direct = record ? asString(record.threadId ?? record.thread_id ?? record.conversationId ?? record.conversation_id) : undefined;
   return direct ?? null;
 }
 
@@ -167,6 +322,9 @@ export function collectPaths(value: unknown, output = new Set<string>()): Set<st
     return output;
   }
   for (const [key, entry] of Object.entries(record)) {
+    if (/^(\/|[A-Za-z]:[\\/])/.test(key)) {
+      collectPaths(key, output);
+    }
     if (/(path|cwd|file|grantRoot)/i.test(key)) {
       collectPaths(entry, output);
       continue;
@@ -185,6 +343,7 @@ function primaryPath(value: unknown): string | null {
 export function latestThreadAgentMessage(thread: CodexThread): {
   turnId?: string;
   itemId?: string;
+  phase?: string;
   text: string;
 } | null {
   for (const turn of [...thread.turns].reverse()) {
@@ -200,6 +359,7 @@ export function latestThreadAgentMessage(thread: CodexThread): {
       return {
         turnId: asString(record.turnId ?? record.turn_id) ?? turn.id,
         itemId: extractItemId(record),
+        phase: asString(record.phase) ?? undefined,
         text
       };
     }
@@ -230,11 +390,15 @@ function isLiveAppServerMethod(method: string): boolean {
 }
 
 function isTurnTerminalAppServerMethod(method: string): boolean {
-  return (
-    method === "turn/completed"
-    || method === "turn/interrupted"
-    || method === "turn/failed"
-  );
+  return method === "turn/failed";
+}
+
+export function isFinalAgentMessageNotification(message: AppServerNotification): boolean {
+  if (message.method !== "item/completed") {
+    return false;
+  }
+  const item = asRecord(message.params?.item);
+  return asString(item?.type) === "agentMessage" && asString(item?.phase) === "final_answer";
 }
 
 export function shouldMarkThreadLiveFromAppServerNotification(
@@ -263,10 +427,7 @@ function shouldStopDormantThreadAfterNotification(input: {
   if (!input.wasOngoing) {
     return false;
   }
-  return (
-    input.method === "thread/closed"
-    || (input.method === "thread/status/changed" && input.statusType === "notLoaded")
-  );
+  return input.method === "thread/status/changed" && input.statusType === "notLoaded";
 }
 
 export function hasEquivalentRecentMessageEvent(
@@ -425,6 +586,7 @@ export function buildThreadReadAgentMessageEvent(
   }
 
   const path = canonicalizeProjectPath(thread.cwd) ?? thread.cwd;
+  const isFinalAnswer = latestMessage.phase === "final_answer";
   return {
     id: buildEventId({
       projectRoot: context.projectRoot,
@@ -442,8 +604,8 @@ export function buildThreadReadAgentMessageEvent(
     turnId: latestMessage.turnId,
     itemId: latestMessage.itemId,
     kind: "message",
-    phase: "completed",
-    title: "Reply completed",
+    phase: isFinalAnswer ? "completed" : "updated",
+    title: isFinalAnswer ? "Reply completed" : "Reply updated",
     detail: shorten(latestMessage.text),
     path
   };
@@ -785,6 +947,18 @@ export function buildDashboardEventFromAppServerMessage(
         grantRoot: asString(params.grantRoot),
         availableDecisions: asStringArray(params.availableDecisions)
       });
+    case "item/permissions/requestApproval":
+      return eventBase(context, method, params, {
+        requestId,
+        itemId: extractItemId(params),
+        kind: "approval",
+        phase: "waiting",
+        title: "Permission approval requested",
+        detail: shorten(asString(params.reason) ?? "Permission approval requested"),
+        cwd: asString(params.cwd),
+        reason: asString(params.reason),
+        availableDecisions: ["accept", "acceptForSession"]
+      });
     case "item/tool/requestUserInput":
       return eventBase(context, method, params, {
         requestId,
@@ -796,6 +970,42 @@ export function buildDashboardEventFromAppServerMessage(
         reason: asString(params.reason),
         availableDecisions: asStringArray(params.availableDecisions)
       });
+    case "mcpServer/elicitation/request":
+      return eventBase(context, method, params, {
+        requestId,
+        kind: "input",
+        phase: "waiting",
+        title: "MCP input requested",
+        detail: shorten(asString(params.message) ?? "MCP server needs input"),
+        reason: asString(params.message)
+      });
+    case "applyPatchApproval":
+      return eventBase(context, method, params, {
+        requestId,
+        kind: "approval",
+        phase: "waiting",
+        title: "Patch approval requested",
+        detail: shorten(asString(params.reason) ?? primaryPath(params) ?? "Patch approval requested"),
+        reason: asString(params.reason),
+        grantRoot: asString(params.grantRoot),
+        availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
+      });
+    case "execCommandApproval": {
+      const command = Array.isArray(params.command)
+        ? params.command.filter((entry): entry is string => typeof entry === "string").join(" ")
+        : undefined;
+      return eventBase(context, method, params, {
+        requestId,
+        kind: "approval",
+        phase: "waiting",
+        title: "Command approval requested",
+        detail: shorten(command ?? asString(params.reason) ?? "Command approval requested"),
+        command,
+        cwd: asString(params.cwd),
+        reason: asString(params.reason),
+        availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
+      });
+    }
     case "item/tool/call":
       return eventBase(context, method, params, {
         requestId,
@@ -847,6 +1057,8 @@ export function buildNeedsUserStateFromServerRequest(message: AppServerServerReq
       requestId,
       threadId,
       createdAt: new Date().toISOString(),
+      requestMethod: message.method,
+      responseKind: "approvalDecision",
       turnId: extractTurnId(params),
       itemId: extractItemId(params),
       reason: asString(params.reason),
@@ -863,6 +1075,8 @@ export function buildNeedsUserStateFromServerRequest(message: AppServerServerReq
       requestId,
       threadId,
       createdAt: new Date().toISOString(),
+      requestMethod: message.method,
+      responseKind: "approvalDecision",
       turnId: extractTurnId(params),
       itemId: extractItemId(params),
       reason: asString(params.reason),
@@ -877,10 +1091,78 @@ export function buildNeedsUserStateFromServerRequest(message: AppServerServerReq
       requestId,
       threadId,
       createdAt: new Date().toISOString(),
+      requestMethod: message.method,
+      responseKind: "toolInput",
       turnId: extractTurnId(params),
       itemId: extractItemId(params),
       reason: asString(params.reason) ?? asString(params.prompt),
+      questions: asNeedsUserQuestions(params.questions),
       availableDecisions: asStringArray(params.availableDecisions)
+    };
+  }
+
+  if (message.method === "mcpServer/elicitation/request") {
+    const schema = asRecord(params.requestedSchema);
+    return {
+      kind: "input",
+      requestId,
+      threadId,
+      createdAt: new Date().toISOString(),
+      requestMethod: message.method,
+      responseKind: "mcpElicitation",
+      turnId: extractTurnId(params),
+      reason: asString(params.message),
+      questions: parseMcpElicitationQuestions(schema),
+      requestedSchema: schema
+    };
+  }
+
+  if (message.method === "item/permissions/requestApproval") {
+    return {
+      kind: "approval",
+      requestId,
+      threadId,
+      createdAt: new Date().toISOString(),
+      requestMethod: message.method,
+      responseKind: "permissionsApproval",
+      turnId: extractTurnId(params),
+      itemId: extractItemId(params),
+      reason: asString(params.reason),
+      cwd: asString(params.cwd),
+      availableDecisions: ["accept", "acceptForSession"],
+      requestedPermissions: asRecord(params.permissions)
+    };
+  }
+
+  if (message.method === "applyPatchApproval") {
+    return {
+      kind: "approval",
+      requestId,
+      threadId,
+      createdAt: new Date().toISOString(),
+      requestMethod: message.method,
+      responseKind: "legacyReview",
+      reason: asString(params.reason),
+      grantRoot: asString(params.grantRoot),
+      availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
+    };
+  }
+
+  if (message.method === "execCommandApproval") {
+    const command = Array.isArray(params.command)
+      ? params.command.filter((entry): entry is string => typeof entry === "string").join(" ")
+      : undefined;
+    return {
+      kind: "approval",
+      requestId,
+      threadId,
+      createdAt: new Date().toISOString(),
+      requestMethod: message.method,
+      responseKind: "legacyReview",
+      reason: asString(params.reason),
+      command,
+      cwd: asString(params.cwd),
+      availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
     };
   }
 

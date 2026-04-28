@@ -301,6 +301,270 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return null;
       }
 
+      const TURN_SIGNAL_MAX_AGE_MS = 6000;
+      const ACTIVITY_CUE_MAX_AGE_MS = 4800;
+
+      function turnSignalDurationMs(phase) {
+        switch (phase) {
+          case "started":
+            return 2800;
+          case "completed":
+            return 3400;
+          case "interrupted":
+            return 4200;
+          case "failed":
+            return 4800;
+          default:
+            return TURN_SIGNAL_MAX_AGE_MS;
+        }
+      }
+
+      function turnSignalLabelForPhase(phase) {
+        switch (phase) {
+          case "started":
+            return "START";
+          case "completed":
+            return "DONE";
+          case "interrupted":
+            return "STOP";
+          case "failed":
+            return "FAIL";
+          default:
+            return "";
+        }
+      }
+
+      function turnSignalToneForPhase(phase) {
+        switch (phase) {
+          case "started":
+            return "started";
+          case "completed":
+            return "completed";
+          case "interrupted":
+            return "interrupted";
+          case "failed":
+            return "failed";
+          default:
+            return "started";
+        }
+      }
+
+      function recentTurnSignalForAgent(snapshot, agent) {
+        if (!snapshot || !agent || !agent.threadId) {
+          return null;
+        }
+        const now = Date.now();
+        const recentTurnEvents = (snapshot.events || [])
+          .filter((event) =>
+            event
+            && event.threadId === agent.threadId
+            && event.kind === "turn"
+            && ["started", "completed", "interrupted", "failed"].includes(event.phase)
+          )
+          .sort((left, right) => {
+            const leftAt = Date.parse(left.createdAt || "");
+            const rightAt = Date.parse(right.createdAt || "");
+            return (Number.isFinite(rightAt) ? rightAt : 0) - (Number.isFinite(leftAt) ? leftAt : 0);
+          });
+        for (const event of recentTurnEvents) {
+          const createdAtMs = Date.parse(event.createdAt || "");
+          const durationMs = turnSignalDurationMs(event.phase);
+          if (
+            !Number.isFinite(createdAtMs)
+            || now - createdAtMs > durationMs
+            || createdAtMs > now + TURN_SIGNAL_MAX_AGE_MS
+          ) {
+            continue;
+          }
+          const label = turnSignalLabelForPhase(event.phase);
+          if (!label) {
+            continue;
+          }
+          return {
+            key: typedNotificationKey(event) || ["turn-signal", agent.threadId, event.phase, event.createdAt || ""].join("::"),
+            label,
+            tone: turnSignalToneForPhase(event.phase),
+            startedAtMs: createdAtMs,
+            durationMs,
+            title: event.title || "",
+            detail: event.detail || ""
+          };
+        }
+        return null;
+      }
+
+      function activityCueDurationMs(mode) {
+        switch (mode) {
+          case "plan":
+            return 2600;
+          case "command":
+            return 2200;
+          case "file":
+            return 2400;
+          case "tool":
+            return 2200;
+          case "approval":
+            return 3200;
+          case "input":
+            return 3400;
+          case "resolved":
+            return 2200;
+          default:
+            return ACTIVITY_CUE_MAX_AGE_MS;
+        }
+      }
+
+      function activityCueForEvent(event) {
+        if (!event) {
+          return null;
+        }
+        if (event.method === "turn/plan/updated" || event.method === "item/plan/delta") {
+          return { mode: "plan", label: "PLAN" };
+        }
+        if (
+          event.method === "item/commandExecution/outputDelta"
+          || (event.method === "item/started" && event.kind === "command")
+        ) {
+          return { mode: "command", label: "RUN" };
+        }
+        if (
+          event.method === "turn/diff/updated"
+          || event.method === "item/fileChange/outputDelta"
+          || (event.method === "item/started" && event.kind === "fileChange")
+        ) {
+          return { mode: "file", label: "EDIT" };
+        }
+        if (
+          event.method === "item/tool/call"
+          || (event.method === "item/started" && event.kind === "tool")
+        ) {
+          return { mode: "tool", label: "TOOL" };
+        }
+        if (
+          event.method === "item/commandExecution/requestApproval"
+          || event.method === "item/fileChange/requestApproval"
+        ) {
+          return { mode: "approval", label: "WAIT" };
+        }
+        if (event.method === "item/tool/requestUserInput") {
+          return { mode: "input", label: "ASK" };
+        }
+        if (event.method === "serverRequest/resolved" && (event.kind === "approval" || event.kind === "input")) {
+          return { mode: "resolved", label: "OK" };
+        }
+        return null;
+      }
+
+      function requestCueProfileForAgent(agent, cue, event = null) {
+        if (!cue) {
+          return null;
+        }
+        const need = agent && agent.needsUser ? agent.needsUser : null;
+        if (cue.mode === "approval" || (cue.mode === "resolved" && event && event.kind === "approval")) {
+          const decisionCount = Math.max(
+            2,
+            Math.min(
+              4,
+              Array.isArray(need && need.availableDecisions) && need.availableDecisions.length > 0
+                ? need.availableDecisions.length
+                : 3
+            )
+          );
+          const approvalType =
+            need && need.networkApprovalContext ? "network"
+            : event && event.method === "item/fileChange/requestApproval" ? "file"
+            : need && need.command ? "command"
+            : "general";
+          return {
+            kind: "approval",
+            decisionCount,
+            approvalType
+          };
+        }
+        if (cue.mode === "input" || (cue.mode === "resolved" && event && event.kind === "input")) {
+          const questions = Array.isArray(need && need.questions) ? need.questions : [];
+          const requiredCount = questions.filter((question) => question && question.required !== false).length;
+          const optionCount = questions.filter((question) => question && Array.isArray(question.options) && question.options.length > 0).length;
+          const secretCount = questions.filter((question) => question && question.isSecret === true).length;
+          return {
+            kind: "input",
+            questionCount: Math.max(1, Math.min(4, questions.length || 1)),
+            requiredCount: Math.max(0, Math.min(4, requiredCount)),
+            optionCount: Math.max(0, Math.min(4, optionCount)),
+            secretCount: Math.max(0, Math.min(2, secretCount))
+          };
+        }
+        return null;
+      }
+
+      function recentActivityCueForAgent(snapshot, agent) {
+        if (!snapshot || !agent || !agent.threadId) {
+          return null;
+        }
+        const now = Date.now();
+        const recentEvents = (snapshot.events || [])
+          .filter((event) => event && event.threadId === agent.threadId)
+          .sort((left, right) => {
+            const leftAt = Date.parse(left.createdAt || "");
+            const rightAt = Date.parse(right.createdAt || "");
+            return (Number.isFinite(rightAt) ? rightAt : 0) - (Number.isFinite(leftAt) ? leftAt : 0);
+          });
+        for (const event of recentEvents) {
+          const cue = activityCueForEvent(event);
+          if (!cue) {
+            continue;
+          }
+          const createdAtMs = Date.parse(event.createdAt || "");
+          const durationMs = activityCueDurationMs(cue.mode);
+          if (
+            !Number.isFinite(createdAtMs)
+            || now - createdAtMs > durationMs
+            || createdAtMs > now + ACTIVITY_CUE_MAX_AGE_MS
+          ) {
+            continue;
+          }
+          return {
+            key: typedNotificationKey(event) || ["activity-cue", agent.threadId, cue.mode, event.createdAt || ""].join("::"),
+            mode: cue.mode,
+            label: cue.label,
+            startedAtMs: createdAtMs,
+            durationMs,
+            requestProfile: requestCueProfileForAgent(agent, cue, event),
+            title: event.title || "",
+            detail: event.detail || ""
+          };
+        }
+        return null;
+      }
+
+      function buildWorkstationCueEffect(cue, absoluteCellX, absoluteCellY, workstationX, workstationY, workstationWidth, workstationHeight, workstationSortRow, workstationSortFootY, options = {}) {
+        if (!cue || !cue.mode || !options.slotId) {
+          return null;
+        }
+        const effectX = absoluteCellX + Math.round(workstationX + workstationWidth * 0.1);
+        const effectY = absoluteCellY + Math.round(workstationY + workstationHeight * 0.08);
+        const effectWidth = Math.max(12, Math.round(workstationWidth * 0.56));
+        const effectHeight = Math.max(9, Math.round(workstationHeight * 0.34));
+        return {
+          kind: "cue-effect",
+          key: cue.key || ["workstation-cue", options.slotId, cue.mode, cue.startedAtMs || ""].join("::"),
+          mode: cue.mode,
+          x: effectX,
+          y: effectY,
+          width: effectWidth,
+          height: effectHeight,
+          flipX: options.mirrored === true,
+          z: 10.5,
+          startedAtMs: Number.isFinite(cue.startedAtMs) ? Number(cue.startedAtMs) : Date.now(),
+          durationMs: Number.isFinite(cue.durationMs) ? Number(cue.durationMs) : 2200,
+          requestProfile: cue.requestProfile || null,
+          depthBaseY: Number.isFinite(options.depthBaseY) ? Math.round(options.depthBaseY) : null,
+          depthRow: Number.isFinite(workstationSortRow) ? Math.round(workstationSortRow) : null,
+          depthFootY: Number.isFinite(workstationSortFootY) ? Math.round(workstationSortFootY) : null,
+          enteringReveal: options.enteringReveal === true
+        };
+      }
+
       function splitShellWords(command) {
         const text = String(command || "").trim();
         const parts = [];
@@ -591,6 +855,10 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return null;
       }
 
+      function shouldSuppressHistoricalHydrationNotification(snapshot, agent, previous) {
+        return !previous && agentLooksHistoricallyHydrated(snapshot && snapshot.projectRoot, agent);
+      }
+
 
       function renderAgentHover(snapshot, agent, options = {}) {
         const lead = parentLabelFor(snapshot, agent);
@@ -623,6 +891,243 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const meta = metaParts.join('<span class="agent-hover-separator"> · </span>');
 
         return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(hoverTitle)}</strong></div>\${worktreeHtml}<div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div><div class="agent-hover-meta">\${meta}</div></div>\`;
+      }
+
+      function threadHistoryEntryTimeMs(entry) {
+        if (!entry || typeof entry.createdAt !== "string") {
+          return 0;
+        }
+        const value = Date.parse(entry.createdAt);
+        return Number.isFinite(value) ? value : 0;
+      }
+
+      function historyToneForEvent(event) {
+        if (!event) {
+          return { tone: "system", label: "Note" };
+        }
+        if (event.kind === "message") {
+          if (
+            event.method === "thread/read/agentMessage"
+            || event.method === "item/agentMessage/delta"
+            || event.itemType === "agentMessage"
+          ) {
+            return { tone: "agent", label: "Agent" };
+          }
+          if (event.method && event.method.startsWith("item/reasoning/")) {
+            return { tone: "thinking", label: "Think" };
+          }
+          return { tone: "agent", label: "Agent" };
+        }
+        if (event.kind === "approval") {
+          return { tone: "waiting", label: "Wait" };
+        }
+        if (event.kind === "input") {
+          return { tone: "input", label: "Ask" };
+        }
+        if (event.kind === "command") {
+          return { tone: "run", label: "Run" };
+        }
+        if (event.kind === "fileChange") {
+          return { tone: "edit", label: "Edit" };
+        }
+        if (event.kind === "tool") {
+          return { tone: "tool", label: "Tool" };
+        }
+        if (event.kind === "turn") {
+          return { tone: "plan", label: "Turn" };
+        }
+        return { tone: "system", label: "Note" };
+      }
+
+      function historyBodyForEvent(event) {
+        if (!event) {
+          return "";
+        }
+        if (event.kind === "approval" || event.kind === "input") {
+          return event.detail || event.title || "Waiting for input.";
+        }
+        if (event.kind === "command" || event.kind === "fileChange" || event.kind === "tool" || event.kind === "turn") {
+          return event.detail || event.title || event.method || "Updated.";
+        }
+        return event.detail || event.title || "Updated.";
+      }
+
+      function threadHistoryIconUrl(entry) {
+        if (entry && entry.iconUrl) {
+          return entry.iconUrl;
+        }
+        switch (entry && entry.tone) {
+          case "agent":
+            return eventIconUrlForActivityType("agentMessage");
+          case "user":
+            return eventIconUrlForThreadItemType("userMessage");
+          case "waiting":
+            return eventIconUrlForActivityType("approval");
+          case "input":
+            return eventIconUrlForActivityType("input");
+          case "run":
+            return eventIconUrlForActivityType("commandExecution", { isCommand: true });
+          case "edit":
+            return eventIconUrlForActivityType("fileChange");
+          case "tool":
+            return eventIconUrlForActivityType("mcpToolCall");
+          case "plan":
+          case "thinking":
+            return eventIconUrlForThreadItemType("plan") || eventIconUrlForMethod("turn/plan/updated");
+          default:
+            return eventIconUrlForThreadItemType("agentMessage");
+        }
+      }
+
+      function threadEntryExpansionStateKey(threadId, entryKey) {
+        return [threadId || "", entryKey || ""].join("::");
+      }
+
+      function threadEntryLooksLong(body) {
+        const text = String(body || "");
+        if (!text.trim()) {
+          return false;
+        }
+        const explicitLines = text.split(/\\r\\n|\\r|\\n/).length;
+        return explicitLines > 8 || text.length > 520;
+      }
+
+      function threadEntryExpanded(threadId, entryKey) {
+        const key = threadEntryExpansionStateKey(threadId, entryKey);
+        return Boolean(state.expandedThreadEntries && state.expandedThreadEntries[key]);
+      }
+
+      function renderThreadHistoryEntry(snapshot, agent, entry) {
+        const entryKey = String(entry.key || [entry.tone || "entry", entry.createdAt || "", entry.body || ""].join("::"));
+        const iconUrl = threadHistoryIconUrl(entry);
+        const collapsible = threadEntryLooksLong(entry.body);
+        const expanded = collapsible && threadEntryExpanded(agent.threadId, entryKey);
+        const bodyClass = \`office-map-thread-body\${collapsible && !expanded ? " is-collapsed" : ""}\`;
+        const expandedStateKey = threadEntryExpansionStateKey(agent.threadId, entryKey);
+        const commandBar = entry.tone === "run"
+          ? '<div class="office-map-thread-window-bar"><span>cmd.exe</span><span class="office-map-thread-window-lights"><i></i><i></i><i></i></span></div>'
+          : "";
+        const moreHtml = collapsible
+          ? \`<button type="button" class="office-map-thread-more" data-action="toggle-thread-entry" data-thread-entry-state-key="\${escapeHtml(expandedStateKey)}" aria-expanded="\${expanded ? "true" : "false"}">\${expanded ? "Show less" : "Show more"}</button>\`
+          : "";
+        return \`<article class="office-map-thread-entry is-\${escapeHtml(entry.tone)}" data-thread-entry-key="\${escapeHtml(entryKey)}" data-thread-entry-state-key="\${escapeHtml(expandedStateKey)}">\${commandBar}<div class="office-map-thread-entry-meta">\${iconUrl ? \`<img class="office-map-thread-icon" src="\${escapeHtml(iconUrl)}" alt="" aria-hidden="true" />\` : ""}<span class="office-map-thread-pill is-\${escapeHtml(entry.tone)}">\${escapeHtml(entry.label)}</span><span class="office-map-thread-time">\${escapeHtml(formatUpdatedAt(entry.createdAt || agent.updatedAt))}</span></div><div class="\${bodyClass}" data-thread-entry-body="true">\${escapeHtml(entry.body)}</div>\${moreHtml}</article>\`;
+      }
+
+      function recentThreadHistoryEntries(snapshot, agent) {
+        if (!snapshot || !agent || !agent.threadId) {
+          return [];
+        }
+        const entries = [];
+        const seenKeys = new Set();
+        const seenFingerprints = new Set();
+        const pushEntry = (entry) => {
+          if (!entry || !entry.body) {
+            return;
+          }
+          const key = String(entry.key || "");
+          const fingerprint = [entry.tone || "", String(entry.body || "").trim().toLowerCase()].join("::");
+          if (key && seenKeys.has(key)) {
+            return;
+          }
+          if (fingerprint && seenFingerprints.has(fingerprint)) {
+            return;
+          }
+          if (key) {
+            seenKeys.add(key);
+          }
+          if (fingerprint) {
+            seenFingerprints.add(fingerprint);
+          }
+          entries.push(entry);
+        };
+        const activityText = normalizeDisplayText(
+          snapshot.projectRoot,
+          agent && agent.activityEvent && typeof agent.activityEvent.title === "string"
+            ? agent.activityEvent.title
+            : ""
+        );
+        if (agent.activityEvent && agent.activityEvent.type === "userMessage" && activityText) {
+          pushEntry({
+            key: ["user", agent.threadId, activityText].join("::"),
+            tone: "user",
+            label: "You",
+            body: activityText,
+            createdAt: agent.updatedAt,
+            iconUrl: eventIconUrlForThreadItemType("userMessage")
+          });
+        }
+        (snapshot.events || [])
+          .filter((event) => event && event.threadId === agent.threadId && event.kind !== "status")
+          .sort((left, right) => threadHistoryEntryTimeMs(left) - threadHistoryEntryTimeMs(right))
+          .forEach((event) => {
+            const body = normalizeDisplayText(snapshot.projectRoot, historyBodyForEvent(event));
+            const tone = historyToneForEvent(event);
+            pushEntry({
+              key: event.id || [event.threadId || agent.threadId, event.kind, event.method, event.createdAt || ""].join("::"),
+              tone: tone.tone,
+              label: tone.label,
+              body,
+              createdAt: event.createdAt,
+              title: event.title || "",
+              iconUrl: eventIconUrlForMethod(event.method) || eventIconUrlForThreadItemType(event.itemType) || threadHistoryIconUrl({ tone: tone.tone })
+            });
+          });
+        const latestMessage = latestAgentMessage(snapshot.projectRoot, agent);
+        if (latestMessage) {
+          pushEntry({
+            key: ["latest", agent.threadId].join("::"),
+            tone: "agent",
+            label: "Agent",
+            body: latestMessage,
+            createdAt: agent.updatedAt,
+            iconUrl: eventIconUrlForActivityType("agentMessage")
+          });
+        }
+        if (agent.needsUser && (agent.needsUser.kind === "approval" || agent.needsUser.kind === "input")) {
+          const hasMatchingRequestEvent = (snapshot.events || []).some((event) =>
+            event
+            && event.threadId === agent.threadId
+            && event.kind === agent.needsUser.kind
+            && (
+              !agent.needsUser.requestId
+              || !event.requestId
+              || event.requestId === agent.needsUser.requestId
+            )
+          );
+          const requestBody = normalizeDisplayText(
+            snapshot.projectRoot,
+            agent.needsUser.command || agent.needsUser.reason || agent.detail || "Waiting on you."
+          );
+          if (!hasMatchingRequestEvent) {
+            pushEntry({
+              key: ["needs-user", agent.needsUser.requestId, requestBody].join("::"),
+              tone: agent.needsUser.kind === "approval" ? "waiting" : "input",
+              label: agent.needsUser.kind === "approval" ? "Wait" : "Ask",
+              body: requestBody,
+              createdAt: agent.updatedAt,
+              iconUrl: eventIconUrlForActivityType(agent.needsUser.kind)
+            });
+          }
+        }
+        return entries
+          .sort((left, right) => threadHistoryEntryTimeMs(left) - threadHistoryEntryTimeMs(right))
+          .slice(-8);
+      }
+
+      function renderAgentThreadCard(snapshot, agent, options = {}) {
+        const projectRoot = threadViewProjectRoot(snapshot, agent) || "";
+        const historyEntries = recentThreadHistoryEntries(snapshot, agent);
+        const historyHtml = historyEntries.length > 0
+          ? historyEntries.map((entry) => renderThreadHistoryEntry(snapshot, agent, entry)).join("")
+          : '<div class="office-map-thread-empty">No recent thread activity yet.</div>';
+        const lead = parentLabelFor(snapshot, agent);
+        const subtitle = [
+          titleCaseWords(agentKindLabel(snapshot, agent)),
+          lead ? "with " + lead : "",
+          formatUpdatedAt(agent.updatedAt)
+        ].filter(Boolean).join(" · ");
+        const cardClass = options.closing ? "office-map-thread-card is-closing" : "office-map-thread-card";
+        return \`<section class="\${cardClass}" data-agent-thread-card="true"><div class="office-map-thread-card-header"><div><div class="office-map-thread-card-title">\${escapeHtml(displayAgentLabel(snapshot, agent))}</div><div class="office-map-thread-card-subtitle">\${escapeHtml(subtitle)}</div></div><button type="button" class="office-map-thread-close" data-action="close-agent-thread" data-project-root="\${escapeHtml(projectRoot)}" data-thread-id="\${escapeHtml(agent.threadId || "")}" aria-label="Close history">×</button></div><div class="office-map-thread-card-tag">Thread history</div><div class="office-map-thread-history">\${historyHtml}</div></section>\`;
       }
 
       function flattenRooms(rooms) {
@@ -1051,39 +1556,59 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const workstationSortRow = Math.floor((workstationSortFootY - depthBaseY) / sceneTile);
         const anchorX = absoluteCellX + Math.round(workstationX + workstationWidth * 0.5);
         const anchorY = absoluteCellY + Math.round(boothHeight * 0.72);
+        const activityCue = recentActivityCueForAgent(snapshot, agent);
+        const shell = [
+          buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, {
+            flipX: mirrored,
+            enteringReveal: options.enteringReveal === true,
+            depthBaseY: options.depthBaseY,
+            depthRow: deskDepthRow,
+            depthFootY: deskDepthFootY,
+            depthBias: DESK_SHELL_DEPTH_BIAS
+          }),
+          buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, {
+            flipX: mirrored,
+            enteringReveal: options.enteringReveal === true,
+            depthBaseY: options.depthBaseY,
+            depthRow: chairDepthRow,
+            depthFootY: chairDepthFootY,
+            depthBias: CHAIR_DEPTH_BIAS
+          }),
+          buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, {
+            flipX: mirrored,
+            enteringReveal: options.enteringReveal === true,
+            depthBaseY: options.depthBaseY,
+            depthRow: workstationSortRow,
+            depthFootY: workstationSortFootY,
+            depthBias: WORKSTATION_FRONT_DEPTH_BIAS
+          })
+        ];
+        const workstationCueEffect = buildWorkstationCueEffect(
+          activityCue,
+          absoluteCellX,
+          absoluteCellY,
+          workstationX,
+          workstationY,
+          workstationWidth,
+          workstationHeight,
+          workstationSortRow,
+          workstationSortFootY,
+          options
+        );
+        if (workstationCueEffect) {
+          shell.push(workstationCueEffect);
+        }
         const visual = {
-          shell: [
-            buildPixiSpriteDef(deskSprite, absoluteCellX + deskX, absoluteCellY + deskY, deskScale, 7, {
-              flipX: mirrored,
-              enteringReveal: options.enteringReveal === true,
-              depthBaseY: options.depthBaseY,
-              depthRow: deskDepthRow,
-              depthFootY: deskDepthFootY,
-              depthBias: DESK_SHELL_DEPTH_BIAS
-            }),
-            buildPixiSpriteDef(chair, absoluteCellX + chairX, absoluteCellY + chairY, chairScale, 8, {
-              flipX: mirrored,
-              enteringReveal: options.enteringReveal === true,
-              depthBaseY: options.depthBaseY,
-              depthRow: chairDepthRow,
-              depthFootY: chairDepthFootY,
-              depthBias: CHAIR_DEPTH_BIAS
-            }),
-            buildPixiSpriteDef(computerSprite, absoluteCellX + workstationX, absoluteCellY + workstationY, workstationScale, 9, {
-              flipX: mirrored,
-              enteringReveal: options.enteringReveal === true,
-              depthBaseY: options.depthBaseY,
-              depthRow: workstationSortRow,
-              depthFootY: workstationSortFootY,
-              depthBias: WORKSTATION_FRONT_DEPTH_BIAS
-            })
-          ],
+          shell,
           glow: (agent && isBusyAgent(agent) && state !== "waiting" && state !== "blocked")
             ? {
                 x: absoluteCellX + Math.round(workstationX + workstationWidth * 0.19),
                 y: absoluteCellY + Math.round(workstationY + workstationHeight * 0.14),
                 width: Math.max(8, Math.round(workstationWidth * 0.36)),
                 height: Math.max(5, Math.round(workstationHeight * 0.16)),
+                color: state === "validating" ? 0x69c7ff : 0x4bd69f,
+                alpha: state === "validating" ? 0.28 : 0.24,
+                pulse: state === "validating",
                 enteringReveal: options.enteringReveal === true
               }
             : null,

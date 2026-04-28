@@ -1,11 +1,12 @@
 import * as http from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
 import * as os from "node:os";
 
+import { resolveReadableRoomsFilePath, scaffoldRoomsFile } from "@codex-agents-office/core";
 import * as vscode from "vscode";
 
 const VIEW_ID = "codexAgentsOffice.view";
@@ -91,7 +92,7 @@ class OfficeViewProvider implements vscode.WebviewViewProvider, vscode.Disposabl
 
     const filePath = scaffoldIfMissing
       ? await scaffoldRoomsFile(projectRoot)
-      : getRoomsFilePath(projectRoot);
+      : await resolveReadableRoomsFilePath(projectRoot);
 
     const document = await vscode.workspace.openTextDocument(filePath);
     await vscode.window.showTextDocument(document, { preview: false });
@@ -504,33 +505,6 @@ function createNonce(): string {
     nonce += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
   return nonce;
-}
-
-function getConfigDir(projectRoot: string): string {
-  return path.join(projectRoot, ".codex-agents");
-}
-
-function getRoomsFilePath(projectRoot: string): string {
-  return path.join(getConfigDir(projectRoot), "rooms.xml");
-}
-
-async function scaffoldRoomsFile(projectRoot: string): Promise<string> {
-  const filePath = getRoomsFilePath(projectRoot);
-  try {
-    await stat(filePath);
-    return filePath;
-  } catch {
-    await mkdir(getConfigDir(projectRoot), { recursive: true });
-    const roomName = path.basename(projectRoot) || "Workspace";
-    const xml = [
-      '<agentOffice version="1">',
-      `  <room id="root" name="${escapeXml(roomName)}" path="." x="0" y="0" width="24" height="16" />`,
-      "</agentOffice>",
-      ""
-    ].join("\n");
-    await writeFile(filePath, xml, "utf8");
-    return filePath;
-  }
 }
 
 async function resolveWorkspaceServerEntry(projectRoot: string, extensionPath: string): Promise<string> {

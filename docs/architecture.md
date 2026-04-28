@@ -38,11 +38,11 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](./integrati
 
 6. Per-project room config
 
-   Each project can define its own spatial hierarchy in `.codex-agents/rooms.xml`. Rooms map to directory prefixes so the same session can move between rooms as its working files change.
+   Each project can define its own spatial hierarchy in a saved `rooms.xml` file under Agents Office user data, keyed by project root. Rooms map to directory prefixes so the same session can move between rooms as its working files change. Legacy project-local `.codex-agents/rooms.xml` files are still readable as a fallback.
 
 7. Per-project appearance roster
 
-   New sessions get a deterministic random appearance. Overrides are stored in `.codex-agents/agents.json`, which locks their look until changed.
+   New sessions get a deterministic random appearance. Overrides are stored in the matching per-project `agents.json` under Agents Office user data, which locks their look until changed.
 
    In addition to that per-project appearance roster, the browser now has a machine-local hat selection stored in Agents Office user data. That `hatId` is applied to every local agent in the assembled snapshot and is also serialized through shared-room fleet sync so remote peers keep their own hat styling.
 
@@ -59,15 +59,21 @@ Local session JSONL files are still useful as a fallback, and Codex can persist 
 The live browser path now uses a hybrid approach:
 
 - `thread/list` and `thread/read` stay authoritative for stable thread state
-- `thread/list` is discovery-oriented only; ongoing occupancy also follows `thread/read` turn state so a `notLoaded` thread with an in-progress turn still stays live on the floor
+- when desktop-backed `thread/read` returns a stale transcript timestamp but `thread/list` has already advanced, the monitor preserves the fresher `thread/list` timestamp for current-workload classification
+- ongoing occupancy also follows `thread/read` turn state so a `notLoaded` thread with an in-progress turn, or a fresh interrupted turn without a final answer, still stays live on the floor
+- recent non-final desktop work events extend the local workload clock even when a restarted observer is still read-only or the app-server reports the top-level thread as idle, preventing active work from cooling into rec-room visibility between reply chunks
+- fresh unhydrated `notLoaded` desktop threads with no readable turns are treated as short-lived planning state for about 8 seconds after a user prompt; the completed read-only fallback is capped to the 3-second finished cooldown so a completed thread does not look active several minutes later
 - active `thread/list` rows are always retained in the tracked local-thread set even when they are older than the normal recent-thread cutoff, so a live desktop session is subscribed on startup before its next visible delta
 - active and recent threads are resumed on the observer connection so the app can receive live `turn/*`, `item/*`, approval, input, and `serverRequest/resolved` events
 - observer runtime unload notifications such as `thread/closed` or `thread/status/changed -> notLoaded` are treated as subscription state, not as proof that the underlying thread resolved; `notLoaded` now gets a short 3-second confirmation cooldown before the monitor clears ongoing occupancy
-- quiet desk-live local work can remain current for about 3 minutes when it is still on a live subscription or sitting in a transient `notLoaded` transport state, so slow Codex thinking gaps do not bounce the avatar into rest
+- non-final `turn/completed` and `turn/interrupted` events are treated as update boundaries, not stop signals, so desktop sessions stay desk-owned between assistant progress messages until a final-answer message or hard terminal state arrives
+- quiet desk-live local work can remain current for about 3 minutes when it has recent non-final activity, is still on a live subscription, or is sitting in a transient `notLoaded` transport state, so slow Codex thinking gaps do not bounce the avatar into rest
+- first-hydration desktop state is now treated as baseline occupancy instead of fresh activity when the thread timestamps are already historical, so delayed observer attaches do not replay stale message toasts or late doorway-entry motion for older Codex sessions
 - slow desktop `thread/resume` attaches now happen in the background so the web server does not block initial rendering on them
 - desktop-backed `thread/resume` can still take tens of seconds, so the observer keeps a wider 60-second attach budget before it marks that live path degraded and falls back to read-only behavior
 - watched thread JSONL paths trigger quick re-reads when a local session changes
-- reread desktop rollout threads only synthesize message notifications from the newest assistant text when the live subscription path is degraded or read-only
+- reread desktop rollout threads synthesize message notifications from the newest assistant text when no equivalent recent live message event exists, so a subscribed thread can still toast a final answer if the live terminal notification is missed
+- those synthesized assistant-message events keep commentary and other non-final responses as update events; only a `final_answer` assistant message becomes a completion event that can start the short stop cooldown
 - streamed `item/agentMessage/delta` notifications stay enabled on the observer connection so Codex reply toasts can update immediately from the typed live feed
 - non-final commentary messages on interrupted desktop turns are still treated as active work so subscribed agents do not briefly vacate their desk between commentary updates
 - completed process-only items such as `reasoning` or `contextCompaction` now settle out of synthetic `thinking` once the turn is done, so finished desktop threads do not keep reading as active
@@ -77,7 +83,24 @@ The live browser path now uses a hybrid approach:
 
 In fleet mode, every discovered workspace now keeps a live `ProjectLiveMonitor`. Selection in the UI only changes what is centered in the browser; it does not rebuild the live monitor set.
 
-The observer does attach to resumable threads now, but only for active/recent sessions and only to observe. It does not answer approval or input requests; it only visualizes them.
+The observer does attach to resumable threads now, but only for active/recent sessions. The browser can send approval decisions from the `Needs You` queue and local `tool/requestUserInput` answers from inline queue composers back through that same app-server connection. Generic follow-up chat is only browser-actionable for threads owned by the same app-server connection; observed desktop, VS Code, and CLI Codex threads remain view-only because the observer cannot reliably inject a normal chat message into those already-open clients. Their browser action is an explicit terminal handoff that launches `codex resume <thread> [message]` when the local terminal launcher is available.
+
+Hook-backed Claude `PermissionRequest` and `Elicitation` waits are also browser-actionable now, but through a different local bridge: the Agent SDK sidecar hook writes the request into the matching per-project `claude-hooks/<session-id>.jsonl` file under Agents Office user data, waits on a response file under that same project-scoped user-data area, and returns the official structured hook output after the browser answers. Agents Office also appends a synthetic resolution marker into the Claude hook sidecar so the durable queue clears immediately instead of waiting for a later Claude event.
+
+For `tool/requestUserInput`, the verified response payload is keyed by question id:
+
+```json
+{
+  "answers": {
+    "mode": { "answers": ["Fast"] },
+    "notes": { "answers": ["Browser path validation."] }
+  }
+}
+```
+
+That shape was verified from `codex app-server generate-json-schema` and then exercised end to end against a mock app-server before documenting it here.
+
+Browser queue gating follows the question schema: required questions must be answered before submit, while optional questions may stay blank and are omitted from the payload.
 
 Sources:
 
@@ -119,9 +142,10 @@ Sources:
 - map and terminal-style views through `?view=map|terminal`
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
 - local threads remain seated while the thread is still ongoing, even if they pause between visible events or the latest turn already looks done
+- session-oriented browser views now also treat local `isOngoing` threads as busy, so quiet in-progress Codex work stays consistent between the map, recent-session lists, and other current-workload summaries
 - transient `status.type = notLoaded` unloads now wait about 3 seconds for a confirming reread before a local thread is allowed to lose ongoing occupancy
-- subscribed or transiently `notLoaded` desk-live locals now also keep their workstation for about 3 minutes after the last update before the browser lets them cool into rec-room behavior
-- once a top-level thread actually stops, it keeps its workstation for a short 5-second cooldown so the final reply remains readable before it cools into rec-area visibility
+- recent non-final, subscribed, or transiently `notLoaded` desk-live locals now also keep their workstation for about 3 minutes after the last update before the browser lets them cool into rec-room behavior
+- once a top-level thread actually stops, it keeps its workstation for a short 3-second cooldown so the final reply remains readable before it cools into rec-area visibility
 - stale local `notLoaded` sessions no longer occupy desks just because they are still recent; workstation seating now requires true ongoing work or the explicit stop cooldown
 - after that grace window, only recent top-level lead sessions cool down into the rec area; finished subagents despawn instead of idling there
 - lead sessions with active subagents now move into a compact stacked left-side boss-office column, with each boss workstation rendered inside its own small office shell
@@ -136,7 +160,9 @@ Sources:
   - repeated workstation rows for repeated Codex agent roles
   - agent-anchored file-change notifications for current agents, showing filename-first copy and available `+/-` line deltas
   - shared fleet-only sky backdrop with parallax pixel-cloud layers behind the tower, while individual rooms no longer paint their own cloud mural
-- hover/session detail surfaces for longer text instead of large scene overlays
+- hover/session detail surfaces for longer text instead of large scene overlays, while local Codex agents can now open a compact right-edge floor chat panel for recent typed history without routing through the session panel first
+- when a scene-native thread card is open, map hover tooltips are suppressed until the card closes so the reply/history surface does not fight for the same space; resting agents stage slightly left/down while their chat is open, and successful sends create a short desk-work intent until official live state catches up
+- the scene chat panel is reconciled by stable thread/message keys instead of being recreated on every fleet refresh, so live text updates do not replay the panel slide-in; only newly appended message bubbles get the short bottom-stack animation, and a bottom-scrolled history stays pinned to the newest content
 - browser map layout now derives from a tile-grid settings model instead of renderer-local pixel literals
 - internal scene settings define prefab geometry and spacing such as tile size, boss-booth size, desk-pod span, top-band depth, cubicle-group spacing, column spacing, and rec-strip depth
 - the scene tile is now a fixed `16px` unit in both normal and compact map modes so grid placement aligns with native PixelOffice asset sizing
@@ -146,6 +172,7 @@ Sources:
 - the retained browser map path now uses a persistent Pixi scene host plus HTML anchor overlays for toast positioning, so map updates can mutate scene entities without replacing the scene shell
 - routed avatar movement in the Pixi scene now uses a lightweight grid pathfinder against room occupancy instead of direct straight-line scene tweens
 - floor-depth sorting in the Pixi scene now uses explicit logical rows: moving agents sort from their current foot-tile row, while workstation shells and seated avatars sort from the workstation footprint row, so overlap follows the same "lower floor cell stays in front" rule during pass-bys
+- exit ghosts now persist across scene refreshes until their doorway walk and fade complete, and room changes split into a doorway exit in the old room plus a doorway entry in the destination room instead of retargeting one live sprite across rooms
 - rec-area idle behavior is scene-config-driven: seated flip cadence, provider-trip rarity, resting walk speed, held-item base size, and global held-item scale all come from `packages/web/src/config/scene-definitions.json`
 - provider furniture definitions now also carry optional visual approach offsets so resting avatars can keep their 1x1 foot tile on the walkable row while still reaching close to the vending machine, cooler, or shelf sprite
 - the current default rec-provider mapping is bookshelf -> `book`, cooler -> `water-bottle`, and vending -> a mixed snack/soda/juice pool
@@ -275,8 +302,19 @@ Current mapping:
   waiting-on-desk pose, raised-hand marker, ask-user toast, and durable needs-you queue entry
 - blocked failures without `needsUser`
   blocked standing-on-desk pose, exclamation marker only for explicit system or failed activity evidence, and failure toast treatment
+- waiting desk work now also pulses its `...`/hand cue so active waits still read as live work
+- blocked desk work now gets a subtle shake treatment so explicit failures read differently from ordinary seated occupancy
+- validating desk work now uses a brighter pulsing workstation glow instead of the generic busy glow
+- seated planning/scanning/editing/running/validating/delegating work now uses per-state Pixi micro-motion profiles instead of one shared workstation bob
 - head markers now render smaller than the original 16px pass so they sit above the sprite more quietly and stay visually secondary to toasts
 - the thinking light is intentionally transient and drops away once the first visible assistant message/toast is present, so speech evidence replaces the generic “still thinking” cue
+- recent typed `turn/*` lifecycle events now also render short above-head Pixi badges (`START`, `DONE`, `STOP`, `FAIL`) so turn transitions remain visible even when the toast layer is busy
+- recent typed plan, command, file/diff, and tool-call events now also render brief animated Pixi activity cues (`PLAN`, `RUN`, `EDIT`, `TOOL`) near the actor so those item-level actions read in-scene instead of only through toast churn
+- typed approval waits, input waits, and `serverRequest/resolved` queue-clear events now also render short `WAIT`, `ASK`, and `OK` cues so the in-scene request lifecycle matches the durable `Needs You` queue
+- those activity cues now include mode-specific icon adornments and per-mode icon animation so the scene can differentiate the cue family visually before the user reads the label text
+- recent typed workstation activity now also emits short desk-side Pixi effects keyed to the same cue mode, so command/edit/tool/request motion is visible on the station itself instead of only in floating text chips
+- approval waits now encode decision breadth and approval type in that workstation effect, while input waits encode question count, required-question load, and schema richness so request shape is visible without opening the queue
+- local Codex agents now expose a scene-native click target that opens a single right-edge thread history panel with recent typed thread history. The scene panel is read-only and does not include Send, resume, launch, or copy controls. The card closes with a short slide motion on outside click or `Escape`; long message bubbles clamp to eight lines with a `Show more` toggle, and command-like entries reuse the toast command-window language with event icons
 - `item/*` command execution
   running / completed / failed command notifications, rendered as a command-prompt style mini window with monospace command text
   one command window toast is kept per agent; new commands append to the bottom, keep the last 3 lines, and extend the visible lifetime
@@ -286,6 +324,8 @@ Current mapping:
   agent-anchored create / edit / delete / move toasts, with filename-first copy, optional `+/-` line deltas, and image preview when possible
 - shared toast stack model
   command and file-change toasts now use the same stacking and lifetime path, while preserving their distinct visual shells
+- message-toast replacement scope
+  reply/message toasts can prune older toasts for the same agent/thread so the latest speech stays visible, but they do not clear the global toast list for unrelated agents
 - `turn/*`
   turn started / finished / interrupted / failed status transitions
 - `webSearch`
@@ -298,11 +338,12 @@ Current mapping:
   generic item fallbacks and the visual audit page resolve from `/assets/pixel-office/sprites/icons/thread-item/*.svg` plus reused exact-method icons where appropriate
 - icon audit route
   `/icon-audit` renders the current official thread-item list and every exact method icon for visual inspection
+- scene effects audit route
+  `/scene-effects-audit` serves the normal client bundle against mocked typed approval/input fleet data so workstation request signatures can be visually validated without waiting for a live `Needs You` case
 
 Remaining roadmap:
 
-- stronger in-scene motion for turn and approval lifecycle
-- direct action affordances from queue items back into the originating Codex surface
+- richer request-to-motion coverage for more typed methods beyond the current badges, cue chips, workstation effects, and queue-aware request signatures
 - clearer styling differences between typed Codex truth and Claude inference
 
 ## Current workstation model
@@ -322,6 +363,7 @@ The active office view currently favors an open station language over enclosed c
 - left and right seats face opposite directions inside each pod
 - seated agents flip with the workstation direction and align to the desk/chair reach point
 - lead-session arrivals, subagent arrivals, and all departures use the center-top room entrance as the path anchor so workers visibly enter and leave through the doorway
+- ordinary refreshes now reuse a settled same-slot target when the layout delta is only a tiny no-op drift, so polling does not look like an unnecessary seat shuffle
 - finished subagents now keep a longer readable desk cooldown before they walk back out through that doorway instead of vanishing immediately
 - lead sessions with active subagents move into a dedicated left-side boss-office column; the column starts one floor tile below the floor start and uses contiguous 3-tile-tall office slots so four bosses can stack in a standard room while still reading as offices instead of rounded placeholder frames
 - hovering a boss reveals arrow lines from that office to the related spawned subagents
@@ -341,6 +383,7 @@ The active office view currently favors an open station language over enclosed c
 - the current browser renderer is Pixi-first for the office map, with HTML retained only for overlays, controls, and fallback terminal output
 - browser placement rules are intentionally a little stickier than raw workload freshness, because a live local thread should not visually bounce desk -> rec -> desk during short polling gaps
 - Codex-local desk seating now also treats app-server `status.type = "active"` as the decisive occupancy signal, so an active session does not drop into the rec strip just because its summarized state temporarily reads waiting or recently done
+- once `isOngoing` is present on a local thread, the browser keeps that thread classified as busy across both workstation and session-list logic until the ongoing signal actually clears, instead of letting it cool off in one surface while still reading as active in another
 - actor behavior is now explicitly split from universal modes: desk-seated work (`planning`, `scanning`, `thinking`, `editing`, `running`, `validating`, `delegating`, `waiting`), desk-blocked-standing (`blocked`), resting/recent-finished (`done`, `idle`), and non-local/cloud (`cloud`)
 
 ## Secondary Claude support
@@ -353,7 +396,9 @@ Claude support uses a deliberately weaker contract than Codex:
 - the snapshot builder can include recent Claude sessions for matching project roots
 - recent Claude session messages can now be read through the supported Agent SDK `getSessionMessages()` API before falling back to raw JSONL transcript sampling
 - transcript-only Claude session state is still inferred from recent tool uses such as read, edit, bash, and task delegation when no typed hook signal exists
-- optional project-local hook sidecars in `.codex-agents/claude-hooks/<session-id>.jsonl` can be produced either by a Claude Code hook script or by the exported Agent SDK sidecar bridge, and they upgrade Claude sessions to typed permission, tool, subagent, and stop state
+- optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl` can be produced either by a Claude Code hook script or by the exported Agent SDK sidecar bridge, and they upgrade Claude sessions to typed permission, tool, subagent, and stop state
+- the same Agent SDK sidecar bridge can now hold `PermissionRequest` and `Elicitation` hooks open while the browser writes a response file under the same project-scoped user-data area, then return the official hook decision back to Claude
+- the browser `Needs You` queue can now answer hook-backed Claude approval waits and schema-backed elicitation forms when the sidecar record came from that Agent SDK bridge
 - Claude agents are rendered in the same room model, but with explicit provenance/confidence so transcript inference and hook-backed state do not pretend to have Codex-grade app-server coverage
 
 This is useful because it broadens observability across the machine, but it should remain visually and architecturally secondary to the official Codex path.
@@ -362,7 +407,7 @@ This is useful because it broadens observability across the machine, but it shou
 
 Cursor support now has two paths:
 
-- a local typed adapter that reads Cursor hook sidecars under `.codex-agents/cursor-hooks/*.jsonl`, with the repo-shipped project hooks defined in `.cursor/hooks.json`
+- a local typed adapter that reads Cursor hook sidecars under the matching per-project Agents Office user-data folder, with the repo-shipped project hooks defined in `.cursor/hooks.json`
 - the official cloud-agent API when `CURSOR_API_KEY` is configured or a saved app-level Cursor API key exists
 
 The local typed adapter:
@@ -380,6 +425,7 @@ The cloud typed adapter:
 - surfaces typed status, summary, branch, repo, and target URL data
 
 Cursor still does not provide Codex-style local live thread subscriptions here, and the documented webhook surface only covers terminal `ERROR` / `FINISHED` cloud-agent status changes, so Cursor visibility remains hook-and-poll based rather than app-server-grade live streaming.
+Cursor also remains read-only in Agents Office; there is still no shipped browser write-back path for local or cloud Cursor agents.
 
 ## Secondary OpenClaw support
 

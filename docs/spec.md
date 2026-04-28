@@ -23,7 +23,18 @@ It should show:
 - the 4 most recent lead sessions resting in the rec area
 - hover cards and session panels for longer detail
 - a durable cross-project `Needs You` queue when approvals or inputs are pending
+- direct local approval controls inside that queue when the source is a typed Codex approval wait
+- direct local input controls inside that queue when the source is a typed Codex `tool/requestUserInput` wait
+- direct local reply controls inside that queue only when the source is an app-server-owned typed local Codex input wait without schema-backed questions
+- direct local approval/input controls inside that queue when the source is a typed Claude hook-backed `PermissionRequest` or schema-backed `Elicitation` wait
+- direct local session reply controls in session cards when the source is an app-server-owned typed Codex thread
+- observed desktop, VS Code, and CLI Codex threads must stay view-only for generic browser chat, and the scene thread panel must not expose Send, resume, launch, or copy controls
+- local Codex reply controls must steer active in-flight turns and must not call `turn/start` for an active thread just because the observer row has not loaded its turn list yet
 - subtle in-scene motion and placement cues rather than a detached dashboard
+- transient above-head turn badges for recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events
+
+For typed `tool/requestUserInput` waits, queue submit should stay disabled until every required question is answered, while optional prompts may stay blank and be omitted from the app-server `answers` payload.
+For hook-backed Claude elicitation forms, queue submit should require only the fields marked required by the Claude-requested schema.
 
 The browser map should be treated as a retained 2D scene, not a stream of HTML snapshots.
 Live data should update scene entities in place instead of rebuilding the office subtree by `innerHTML`.
@@ -90,6 +101,31 @@ Per-mode actor handling:
 - `done` -> resting/recent-finished with a short post-stop desk cooldown before cooling off
 - `idle` -> resting/inactive off-desk state
 - `cloud` -> non-local/cloud state
+- `waiting` should also get a subtle pulse in its bubble/raised-hand cue so desk waits do not read as frozen
+- `blocked` should get a subtle shake treatment so failure blocks read differently from ordinary desk occupancy
+- `validating` should get a brighter pulsing workstation glow than ordinary busy desk work
+
+Recent typed turn lifecycle handling:
+
+- `turn/started` -> short above-head `START` badge
+- `turn/completed` -> short above-head `DONE` badge
+- `turn/interrupted` -> short above-head `STOP` badge
+- `turn/failed` -> short above-head `FAIL` badge
+- these badges should be brief scene-native cues layered above the ordinary state markers, not durable dashboard labels
+
+Recent typed activity cue handling:
+
+- `turn/plan/updated` and `item/plan/delta` -> brief animated `PLAN` cue near the actor
+- `item/commandExecution/outputDelta` and typed command-item starts -> brief animated `RUN` cue near the actor/workstation
+- `turn/diff/updated`, `item/fileChange/outputDelta`, and typed file-change item starts -> brief animated `EDIT` cue near the actor/workstation
+- `item/tool/call` and typed tool-item starts -> brief animated `TOOL` cue near the actor
+- `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` -> brief animated `WAIT` cue near the actor while the durable approval queue entry is active
+- `item/tool/requestUserInput` -> brief animated `ASK` cue near the actor while the durable input queue entry is active
+- `serverRequest/resolved` for approval/input requests -> brief animated `OK` cue near the actor to acknowledge queue clearance
+- these cues should stay short-lived, scene-native, and motion-first; they are not a replacement for the durable toast or queue surfaces
+- each cue mode should also carry a distinct icon/motion treatment inside the chip so the scene does not depend only on the text label to communicate the activity type
+- workstation-seated activity should also raise a short non-text visual treatment on or around the workstation itself so item/request activity does not collapse back to text-only chips
+- structured request waits should expose at least some of their shape in-scene, such as approval decision breadth or input question/required load, instead of rendering every request as the same generic wait
 
 Normalized provenance/confidence rules are:
 
@@ -102,8 +138,8 @@ Prefer official Codex surfaces first:
 
 - `codex app-server`
 - `codex cloud list --json`
-- `.codex-agents/rooms.xml`
-- `.codex-agents/agents.json`
+- saved per-project `rooms.xml` in Agents Office user data
+- saved per-project `agents.json` in Agents Office user data
 
 Claude local logs and Cursor background agents are secondary inputs. They can enrich visibility, but they should not blur the distinction between typed Codex truth and inferred state.
 
@@ -136,8 +172,13 @@ Current browser settings surfaces are:
 - A local Codex session should stay on a desk whenever app-server still reports `status.type = "active"`, even if its active flags currently mean waiting for approval or user input, or the latest visible item has already reached a recent `done` summary.
 - Active local subagents should remain visible from that same runtime-active signal even if the transient `isCurrent` flag has already moved to a sibling update or the parent thread.
 - Waiting sessions stay on-desk; only resting lead sessions belong in the rec area after the session is no longer active at the app-server/runtime level.
+- If `thread/list` reports a fresher desktop-backed Codex thread than `thread/read`, that fresher timestamp should drive current-workload and seating decisions.
+- Fresh non-final local Codex work events such as command, file, tool, plan, or turn activity should refresh desk-currentness even when the observer temporarily sees the thread as `readOnly` or `idle`.
+- Fresh unhydrated desktop `notLoaded` rows with no readable turns should reserve a desk for about 8 seconds as just-sent prompts, but stale `notLoaded` fallback rows must only use the 3-second finished cooldown and must not keep finished threads desk-active for minutes.
+- `thread/closed`, non-final `turn/completed`, and non-final `turn/interrupted` events must not release a workstation by themselves. They are observer/update boundaries; workstation release begins only after a final answer, hard failure/archive, or confirmed idle unload.
 - A local thread that is still truly ongoing may keep its workstation through short-lived freshness/current signal dips between polls, and `notLoaded` locals now get a short 3-second confirmation cooldown before the monitor accepts that unload as real.
-- Quiet local desk-live work now gets a longer about-3-minute stay-on-desk window after its last update when it is still subscribed or sitting in a transient `notLoaded` state, so Codex does not walk to the rec area between slow reply chunks.
+- A fresh read-only `notLoaded` Codex thread without a final answer should stay desk-seated through quiet text gaps rather than walking to the rec area between commentary updates.
+- Quiet local desk-live work now gets a longer about-3-minute stay-on-desk window after its last update when it has recent non-final activity, is still subscribed, or is sitting in a transient `notLoaded` state, so Codex does not walk to the rec area between slow reply chunks.
 - Workstation release should be conservative. Ordinary poll jitter, UI rerenders, debug toggles, or temporary freshness gaps must not pull a still-working agent off a desk.
 - A workstation should only be released when the thread has actually settled into a resting/finished state according to the browser placement rules, with the explicit post-stop cooldown described below.
 - The rec area should keep at most the 4 most recent lead sessions visible;
@@ -152,7 +193,7 @@ Current browser settings surfaces are:
 
 - The office floor should use a tile grid as its primary layout system.
 - Scene sprite metadata and room-interaction definitions should load from startup-read config files instead of being hard-coded inside the browser runtime strings.
-- Rooms from `.codex-agents/rooms.xml` define the outer floor bounds; internal furniture/layout is then placed on a tile grid inside those room bounds.
+- Rooms from the saved per-project `rooms.xml` define the outer floor bounds; internal furniture/layout is then placed on a tile grid inside those room bounds.
 - The grid starts at the end of the wall band and continues through the whole visible floor area to the bottom of the room.
 - The renderer may scale tiles to fit available width, but object placement should stay grid-derived rather than free-floating.
 - Whole-scene fit scaling may vary by container, but prefab geometry should stay consistent across tower, selected-workspace, and focused single-workspace rendering.
@@ -343,6 +384,7 @@ Worktree identity rules:
 - `thinking` uses the light marker above the actor's head only before the first visible assistant message/toast arrives.
 - `planning` uses the clipboard marker above the actor's head.
 - head markers render at a reduced small-icon size so they stay readable without overpowering the sprite or toast layers
+- seated active desk states should not all share one generic bob; planning, scanning, editing, running, validating, and delegating should each have distinct but subtle micro-motion
 - when the exclamation marker is shown, the hover summary should prefer the current error detail over stale latest-message text
 - blocked failure hover summaries should render that error text in red so it reads as the reason for the `!`, not as ordinary chat
 
@@ -350,9 +392,13 @@ Current-workload rules:
 
 - local threads stay current while the live monitor still considers them ongoing
 - `notLoaded` threads still stay current when `thread/read` shows an in-progress turn
+- fresh read-only `notLoaded` desktop threads without a final answer stay current through quiet text gaps, with `thread/list` freshness overriding stale `thread/read` timestamps for that classification
+- recent non-final local work events can keep desktop-backed threads current through temporary `readOnly` or `idle` observer gaps
+- fresh unhydrated `notLoaded` timestamps with no readable turns get an about-8-second planning-current window after a user prompt; older fallback rows cool out instead of staying desk-seated
 - observer-owned unload/runtime-idle transitions do not count as an immediate stop by themselves; `thread/status/changed -> notLoaded` now waits about 3 seconds and a reread confirmation before the monitor drops the thread out of ongoing work
-- subscribed or transiently `notLoaded` local desk-live states can stay current for about 3 minutes between updates before they settle into rest
-- once a local top-level thread actually stops, it should keep its workstation for about 5 seconds so the last reply can still be read before cooling into rec-area idle visibility
+- non-final turn completion/interruption does not count as session completion; only final-answer completion or hard terminal state should start the desk cooldown
+- recent non-final, subscribed, or transiently `notLoaded` local desk-live states can stay current for about 3 minutes between updates before they settle into rest
+- once a local top-level thread actually stops, it should keep its workstation for about 3 seconds so the last reply can still be read before cooling into rec-area idle visibility
 - stale local `notLoaded` threads that are no longer ongoing must not keep a workstation just because freshness/currentness still marks them recent
 - completed process-only items such as `plan`, `reasoning`, and `contextCompaction` should settle to `done` while recent, then age to `idle`; they must not leave a finished thread stuck in synthetic `thinking`
 - stale blocked/waiting history should not remain current forever without ongoing state or a current user need
@@ -364,14 +410,23 @@ Current-workload rules:
 - Command-window toasts should aggregate per agent instead of stacking duplicates.
 - Keep one command toast per agent, append new command lines at the bottom, and cap it at 3 visible lines.
 - Read-like shell actions such as `sed`, `cat`, `rg`, `ls`, `find`, and `tree` should collapse into short summary toasts instead of echoing raw commands.
+- Message/reply toasts may replace older toasts for the same agent/thread so the latest speech stays readable, but they must not clear unrelated agents' active toasts.
 - Final reply text should not disappear just because command/read toasts also happened on the same thread.
 - Agent-anchored toasts should track the agent root while the agent is moving, instead of staying frozen at the original spawn point.
 
 ## Visual expectations
 
 - The office map should communicate state mostly through motion, placement, hover cards, and the session panel.
+- Clicking a replyable scene agent should open one compact chat panel on the right edge of that project floor, not a card anchored above the avatar.
+- While a scene chat panel is open, hover tooltips should close and remain closed until the chat closes.
+- The scene chat panel should use compact pixel/toast-like message bubbles, stay inside the visible floor viewport, and slide in/out quickly.
+- Live refreshes must not recreate an already-open scene chat panel or replay its slide-in animation. Update keyed message rows in place, animate only newly appended bubbles from the bottom stack, and avoid full scene redraws for text-only thread changes.
+- If the user is scrolled to the bottom of the scene chat history, new messages should keep the history pinned to the bottom. If the user has scrolled upward, refreshes should preserve that reading position.
+- Scene chat message bubbles should clamp long content to eight visible lines with a tappable `Show more` / `Show less` control. Command-style entries should use the command toast/window visual language and thread/event icons where available.
+- A resting agent with an open chat should stage slightly left/down from its idle position. Closing without sending should dismiss it back to idle placement, while sending should close the chat and reserve a short desk-work intent until official live state seats it at a workstation.
 - Entering, leaving, and seat-change movement should read as short routed walks across the floor, not teleports between idle and desk states.
 - Ordinary polling or view refresh must not look like movement. If a destination did not meaningfully change, the agent should keep its current placement.
+- A visible room change should render as two motions: an old-room exit toward that room's door and a new-room entry from the destination room's door. The renderer must not reinterpret old-room coordinates inside the destination room.
 - Avoid large task-title overlays inside the room scene.
 - Keep Codex-native typed state visually distinct from inferred Claude state when provenance matters.
 - Avoid avatar flash-in/flash-out effects for workstation occupancy.

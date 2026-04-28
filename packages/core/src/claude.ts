@@ -3,9 +3,9 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
 import { ensureAgentAppearance } from "./appearance";
-import { claudeHooksFilePath, getClaudeSdkSessionRecords, listClaudeSdkSessions } from "./claude-agent-sdk";
+import { getClaudeSdkSessionRecords, listClaudeSdkSessions, resolveReadableClaudeHooksFilePath } from "./claude-agent-sdk";
 import type { DiscoveredProject } from "./project-paths";
-import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, DashboardEvent, NeedsUserState } from "./types";
+import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 const LOG_HEAD_BYTES = 4096;
@@ -127,6 +127,88 @@ function claudeEventKindFromActivityEvent(event: AgentActivityEvent | null): Das
     return "message";
   }
   return "other";
+}
+
+function titleCaseIdentifier(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
+}
+
+function parseClaudeSchemaOptions(schema: Record<string, unknown>): NeedsUserQuestion["options"] {
+  const enumValues = stringArray(schema.enum);
+  if (enumValues.length > 0) {
+    return enumValues.map((value) => ({
+      label: value,
+      description: value
+    }));
+  }
+
+  const oneOf = Array.isArray(schema.oneOf) ? schema.oneOf : [];
+  const options = oneOf
+    .map((entry) => {
+      const option = asRecord(entry);
+      if (!option) {
+        return null;
+      }
+      const constValue = typeof option.const === "string" ? option.const : null;
+      if (!constValue) {
+        return null;
+      }
+      return {
+        label: typeof option.title === "string" && option.title.trim().length > 0 ? option.title : constValue,
+        description: typeof option.description === "string" && option.description.trim().length > 0 ? option.description : constValue
+      };
+    })
+    .filter((option): option is NonNullable<typeof option> => Boolean(option));
+  return options.length > 0 ? options : null;
+}
+
+function parseClaudeElicitationQuestions(record: Record<string, unknown>): NeedsUserQuestion[] | null {
+  const requestedSchema = asRecord(record.requested_schema);
+  if (!requestedSchema) {
+    return null;
+  }
+  const properties = asRecord(requestedSchema.properties);
+  if (!properties) {
+    return null;
+  }
+  const required = new Set(stringArray(requestedSchema.required));
+  const questions = Object.entries(properties)
+    .map(([id, rawSchema]) => {
+      const schema = asRecord(rawSchema);
+      if (!schema) {
+        return null;
+      }
+      const header =
+        typeof schema.title === "string" && schema.title.trim().length > 0
+          ? schema.title.trim()
+          : titleCaseIdentifier(id);
+      const question =
+        typeof schema.description === "string" && schema.description.trim().length > 0
+          ? schema.description.trim()
+          : header;
+      return {
+        header,
+        id,
+        question,
+        required: required.has(id),
+        isSecret: schema.writeOnly === true || schema.format === "password",
+        options: parseClaudeSchemaOptions(schema)
+      } satisfies NeedsUserQuestion;
+    })
+    .filter((question) => question !== null);
+  return questions.length > 0 ? questions : null;
 }
 
 function claudeEventFromSummary(input: {
@@ -769,6 +851,7 @@ export function summariseClaudeHookRecord(input: {
   const requestId =
     stringValue(input.record, "request_id", "requestId")
     ?? `${input.sessionId}:${hookEventName}:${updatedAt}`;
+  const browserActionable = input.record.hook_source === "claude-agent-sdk";
 
   if (hookEventName === "PermissionRequest") {
     const detail =
@@ -792,7 +875,8 @@ export function summariseClaudeHookRecord(input: {
         reason: stringValue(input.record, "reason", "message") ?? shorten(detail, 88),
         command: stringValue(toolInput, "command", "cmd") ?? undefined,
         cwd,
-        grantRoot: extractToolPaths(toolInput)[0] ?? undefined
+        grantRoot: extractToolPaths(toolInput)[0] ?? undefined,
+        ...(browserActionable ? { availableDecisions: ["accept", "decline"] } : {})
       },
       latestMessage: null,
       isOngoing: true
@@ -818,14 +902,59 @@ export function summariseClaudeHookRecord(input: {
         kind: "input",
         requestId,
         reason: shorten(detail, 88),
-        cwd
+        cwd,
+        ...(browserActionable
+          ? (() => {
+            const questions = parseClaudeElicitationQuestions(input.record);
+            return questions ? { questions } : {};
+          })()
+          : {})
       },
       latestMessage: null,
       isOngoing: true
     };
   }
 
-  if (hookEventName === "UserPromptSubmit") {
+  if (hookEventName === "AgentsOfficePermissionDecision") {
+    const action = stringValue(input.record, "action") ?? "accept";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "planning",
+      detail: action === "decline" ? "Permission denied" : "Permission approved",
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "AgentsOfficeElicitationResponse") {
+    const action = stringValue(input.record, "action") ?? "accept";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "planning",
+      detail:
+        action === "decline" ? "Input request declined"
+        : action === "cancel" ? "Input request cancelled"
+        : "Input submitted",
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "UserPromptSubmit" || hookEventName === "UserPromptExpansion") {
     const detail = stringValue(input.record, "prompt", "message", "text") ?? "Updated plan";
     const paths = extractPathsFromText(detail);
     return {
@@ -1070,6 +1199,42 @@ export function summariseClaudeHookRecord(input: {
     };
   }
 
+  if (hookEventName === "TaskCreated") {
+    const detail = stringValue(input.record, "task_subject", "task_description", "message") ?? "Task created";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "delegating",
+      detail: shorten(detail, 88),
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
+    };
+  }
+
+  if (hookEventName === "PermissionDenied") {
+    const detail = stringValue(input.record, "reason", "message") ?? "Permission denied";
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "blocked",
+      detail: shorten(detail, 88),
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: false
+    };
+  }
+
   if (hookEventName === "ElicitationResult") {
     const action = stringValue(input.record, "action") ?? "accept";
     return {
@@ -1199,6 +1364,23 @@ export function summariseClaudeHookRecord(input: {
       needsUser: null,
       latestMessage: null,
       isOngoing: hookEventName === "WorktreeCreate"
+    };
+  }
+
+  if (hookEventName === "PostToolBatch") {
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "thinking",
+      detail: "Tool batch completed",
+      updatedAt,
+      paths: [cwd],
+      activityEvent: null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
     };
   }
 
@@ -1389,7 +1571,9 @@ async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Pro
   if (sdkSessions && sdkSessions.length > 0) {
     return Promise.all(
       sdkSessions.map(async (session) => {
-        const hookSample = await readLogSample(claudeHooksFilePath(projectRoot, session.sessionId)).catch(() => null);
+        const hookSample = await resolveReadableClaudeHooksFilePath(projectRoot, session.sessionId)
+          .then((filePath) => readLogSample(filePath))
+          .catch(() => null);
         const hookRecords = hookSample ? [...hookSample.headRecords, ...hookSample.tailRecords] : [];
         const updatedAt = Math.max(session.updatedAt, hookSample?.mtimeMs ?? 0);
         const summary = summariseClaudeSession(
@@ -1428,7 +1612,9 @@ async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Pro
       const records = [...sample.headRecords, ...sample.tailRecords];
       const cwd = extractProjectRoot(records) ?? projectRoot;
       const sessionId = file.path.match(/([0-9a-f-]{36})\.jsonl$/i)?.[1] ?? file.path;
-      const hookSample = await readLogSample(claudeHooksFilePath(projectRoot, sessionId)).catch(() => null);
+      const hookSample = await resolveReadableClaudeHooksFilePath(projectRoot, sessionId)
+        .then((filePath) => readLogSample(filePath))
+        .catch(() => null);
       const hookRecords = hookSample ? [...hookSample.headRecords, ...hookSample.tailRecords] : [];
       const updatedAt = Math.max(file.updatedAt, hookSample?.mtimeMs ?? 0);
       const summary = summariseClaudeSession(

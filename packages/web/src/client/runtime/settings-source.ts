@@ -17,6 +17,14 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
         integrationSettingsPending: false,
         appearanceSettingsPending: false,
         integrationSettingsError: null,
+        needsUserActionRequestIds: [],
+        needsUserActionErrorsByRequestId: {},
+        needsUserInputDrafts: {},
+        openAgentThread: null,
+        closingAgentThread: null,
+        replyComposer: null,
+        replyThreadWorkIntents: {},
+        expandedThreadEntries: {},
         multiplayerSettings: { ...defaultIntegrationSettings().multiplayer },
         multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },
         multiplayerDraftDirty: false,
@@ -64,11 +72,13 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       const RESTING_DORMANT_MS = 15 * 60 * 1000;
       const DEPARTING_AGENT_TTL_MS = 900;
       const SUBAGENT_DEPARTING_AGENT_TTL_MS = 3200;
+      const HISTORICAL_HYDRATION_SUPPRESS_MS = 30000;
       let lastSceneRenderToken = null;
       let lastFleetSemanticToken = null;
       const recentLeadDisplayMemory = new Map();
       const activeRecentLeadReservations = new Map();
       const recSlotMemory = new Map();
+      const baselineProjectHydrationAt = new Map();
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));
       function projectInfo(projectRoot) {

@@ -39,14 +39,14 @@ The project goal is not generic chat replay. It is live workload visibility:
 - `.codex/agents`
   Local Codex subagent definitions used for demos and role testing.
 - `.codex-agents`
-  Per-project runtime data such as `rooms.xml` and appearance overrides.
+  Legacy project-local runtime path. New per-project runtime data lives in Agents Office user data keyed by project root, with `.codex-agents` kept as a read-compatible fallback.
 
 ## Working rules
 
 - Treat the current workload view as the primary product surface.
 - Prefer official Codex surfaces over transcript scraping.
-- Keep rooms data-driven through `.codex-agents/rooms.xml`.
-- Keep appearance persistence in `.codex-agents/agents.json`.
+- Keep rooms data-driven through the saved per-project `rooms.xml` in Agents Office user data.
+- Keep appearance persistence in the saved per-project `agents.json` in Agents Office user data.
 - Do not introduce fake “boss” agents as the main solution path.
   If current desktop visibility is missing, prefer improving real session discovery.
 - The office map should communicate activity mostly through motion, placement, hover cards, and the session panel.
@@ -103,9 +103,10 @@ lsof -tiTCP:4181 -sTCP:LISTEN | xargs -r kill
 pkill -f 'packages/web/dist/server.js --port 4181'
 ```
 
-- If launching through the CLI entrypoint, rebuild both packages first:
+- If launching through the CLI entrypoint, rebuild core, web, and CLI packages first:
 
 ```bash
+npm run build -w packages/core
 npm run build -w packages/web
 npm run build -w packages/cli
 node packages/cli/dist/index.js web --port 4181
@@ -141,7 +142,14 @@ node packages/web/dist/server.js --port 4181
 - Keep the browser map fixed to live agents on desks plus the 4 most recent lead sessions in the rec area.
 - Keep browser layout responsive across wide and narrow screens.
 - Empty rooms should read as quiet space, not error states.
-- Rec Room is for waiting/resting agents only.
+- Rec Room is for resting/recent-finished lead sessions only.
+- Waiting, blocked, validating, running, and other still-live local Codex work should stay at workstations.
+- When `thread/list` reports a fresher desktop-backed Codex thread than `thread/read`, preserve the fresher `thread/list` timestamp for current-workload classification.
+- Fresh non-final local Codex work activity such as command, file, tool, plan, or turn events should refresh current-workload seating even when a restarted observer temporarily sees the thread as `readOnly` or `idle`.
+- Browser replies are only supported for Codex threads owned by the same app-server connection as Agents Office outside the scene chat. The in-scene agent thread panel is read-only history only; do not present generic browser Send, resume, or launch controls there.
+- A fresh desktop `notLoaded` thread timestamp with no readable turns should reserve a desk for about 8 seconds as a just-sent prompt, but stale `notLoaded` recovery must fall back to the 3-second finished cooldown rather than keeping a finished thread desk-active for minutes.
+- Do not treat `thread/closed`, `turn/completed`, or `turn/interrupted` as proof that an active Codex session is finished. Keep the desk until a final-answer message, hard failure/archive, or confirmed idle unload releases it.
+- A fresh read-only `notLoaded` Codex thread without a final answer should remain desk-seated through quiet text gaps; once a top-level thread actually stops, keep the desk for about 3 seconds before cooling into rec-room visibility.
 - Workstations should match the chosen PixelOffice station language consistently across rows.
 - Command-window toasts should aggregate per agent instead of stacking duplicate windows.
   Keep one toast per agent, append new command lines at the bottom, and cap the bubble at 3 visible lines.

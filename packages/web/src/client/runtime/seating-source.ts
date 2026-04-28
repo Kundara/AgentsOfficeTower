@@ -1,5 +1,5 @@
 export const CLIENT_RUNTIME_SEATING_SOURCE = `
-      const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 5000;
+      const TOP_LEVEL_DONE_WORKSTATION_GRACE_MS = 3000;
       const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;
       const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
       const QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS = 3 * 60 * 1000;
@@ -14,6 +14,22 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
         return agent && agent.parentThreadId
           ? SUBAGENT_DONE_WORKSTATION_GRACE_MS
           : TOP_LEVEL_DONE_WORKSTATION_GRACE_MS;
+      }
+
+      function hasReplyThreadWorkIntent(agent) {
+        const threadId = agent && agent.threadId ? String(agent.threadId) : "";
+        if (!threadId || !state.replyThreadWorkIntents) {
+          return false;
+        }
+        const expiresAt = Number(state.replyThreadWorkIntents[threadId]);
+        if (!Number.isFinite(expiresAt)) {
+          return false;
+        }
+        if (Date.now() > expiresAt) {
+          delete state.replyThreadWorkIntents[threadId];
+          return false;
+        }
+        return true;
       }
 
       function hasCurrentLocalDeskGrace(agent, maxAgeMs = CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS) {
@@ -37,6 +53,9 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
           return false;
         }
         if (agent.source === "local") {
+          if (hasReplyThreadWorkIntent(agent)) {
+            return true;
+          }
           const stoppedAt = parseAgentUpdatedAt(agent.stoppedAt);
           if (Number.isFinite(stoppedAt)) {
             return Date.now() - stoppedAt <= workstationDoneGraceMs(agent);
@@ -46,9 +65,10 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
               const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
               return agent.isCurrent === true
                 && Number.isFinite(updatedAt)
-                && Date.now() - updatedAt <= workstationDoneGraceMs(agent);
+                && Date.now() - updatedAt <= Math.max(workstationDoneGraceMs(agent), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS);
             }
             return agent.isOngoing === true
+              || agent.isCurrent === true
               || hasCurrentLocalDeskGrace(agent, QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS);
           }
           if (agent.statusText === "active") {
@@ -61,6 +81,12 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
             return agent.isCurrent === true
               && agent.state !== "idle"
               && agent.state !== "done";
+          }
+          if (agent.isOngoing === true) {
+            return true;
+          }
+          if (agent.isCurrent === true) {
+            return true;
           }
           if (agent.state === "done") {
             return agent.isCurrent === true;

@@ -5,6 +5,7 @@ import { readJsonBody, notFound, sendAbsoluteFileAsset, sendHtml, sendJson, send
 import { buildServerMeta } from "./server-metadata";
 import { renderHtml } from "../render/render-html";
 import { renderIconAuditHtml } from "../render/render-icon-audit-html";
+import { renderSceneEffectsAuditHtml } from "../render/render-scene-effects-audit-html";
 import { renderZOrderAuditHtml } from "../render/render-z-order-audit-html";
 import type { FleetLiveService } from "./fleet-live-service";
 import type { ServerOptions } from "./server-types";
@@ -147,6 +148,24 @@ async function handleZOrderAuditRoute(context: RequestContext): Promise<boolean>
   }
 
   sendHtml(context.response, renderZOrderAuditHtml());
+  return true;
+}
+
+async function handleSceneEffectsAuditRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET", "HEAD") || context.url.pathname !== "/scene-effects-audit") {
+    return false;
+  }
+
+  if (requestMethod(context) === "HEAD") {
+    context.response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    context.response.end();
+    return true;
+  }
+
+  sendHtml(context.response, renderSceneEffectsAuditHtml());
   return true;
 }
 
@@ -319,6 +338,96 @@ async function handleAppearanceRoute(context: RequestContext): Promise<boolean> 
   return true;
 }
 
+async function handleNeedsUserRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "POST") || context.url.pathname !== "/api/needs-user/respond") {
+    return false;
+  }
+
+  const payload = await readJsonBody(context.request);
+  if (typeof payload.projectRoot !== "string" || typeof payload.requestId !== "string" || typeof payload.decision !== "string") {
+    sendJson(context.response, 400, { error: "projectRoot, requestId, and decision are required" });
+    return true;
+  }
+
+  if (!["accept", "acceptForSession", "decline", "cancel"].includes(payload.decision)) {
+    sendJson(context.response, 400, { error: "decision must be accept, acceptForSession, decline, or cancel" });
+    return true;
+  }
+
+  const decision = payload.decision as "accept" | "acceptForSession" | "decline" | "cancel";
+
+  try {
+    await context.service.respondToApprovalRequest(payload.projectRoot, payload.requestId, decision);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendJson(context.response, 400, { error: message });
+    return true;
+  }
+
+  sendJson(context.response, 200, { ok: true });
+  return true;
+}
+
+async function handleNeedsUserInputRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "POST") || context.url.pathname !== "/api/needs-user/answer") {
+    return false;
+  }
+
+  const payload = await readJsonBody(context.request);
+  if (
+    typeof payload.projectRoot !== "string"
+    || typeof payload.requestId !== "string"
+    || typeof payload.answers !== "object"
+    || !payload.answers
+    || Array.isArray(payload.answers)
+  ) {
+    sendJson(context.response, 400, { error: "projectRoot, requestId, and answers are required" });
+    return true;
+  }
+
+  try {
+    await context.service.respondToInputRequest(
+      payload.projectRoot,
+      payload.requestId,
+      payload.answers as Record<string, { answers: string[] }>
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendJson(context.response, 400, { error: message });
+    return true;
+  }
+
+  sendJson(context.response, 200, { ok: true });
+  return true;
+}
+
+async function handleThreadReplyRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "POST") || context.url.pathname !== "/api/thread/reply") {
+    return false;
+  }
+
+  const payload = await readJsonBody(context.request);
+  if (
+    typeof payload.projectRoot !== "string"
+    || typeof payload.threadId !== "string"
+    || typeof payload.text !== "string"
+  ) {
+    sendJson(context.response, 400, { error: "projectRoot, threadId, and text are required" });
+    return true;
+  }
+
+  try {
+    await context.service.sendThreadReply(payload.projectRoot, payload.threadId, payload.text);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendJson(context.response, 400, { error: message });
+    return true;
+  }
+
+  sendJson(context.response, 200, { ok: true });
+  return true;
+}
+
 async function handleRoomsScaffoldRoute(context: RequestContext): Promise<boolean> {
   if (!matchesMethod(context, "POST") || context.url.pathname !== "/api/rooms/scaffold") {
     return false;
@@ -350,6 +459,7 @@ const ROUTES: RouteHandler[] = [
   handleVendorRoute,
   handleHomeRoute,
   handleIconAuditRoute,
+  handleSceneEffectsAuditRoute,
   handleZOrderAuditRoute,
   handleFleetRoute,
   handleServerMetaRoute,
@@ -358,6 +468,9 @@ const ROUTES: RouteHandler[] = [
   handleProjectFileRoute,
   handleEventsRoute,
   handleAppearanceRoute,
+  handleNeedsUserRoute,
+  handleNeedsUserInputRoute,
+  handleThreadReplyRoute,
   handleRoomsScaffoldRoute,
   handleRefreshRoute
 ];
