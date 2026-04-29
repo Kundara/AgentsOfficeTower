@@ -64,6 +64,10 @@ test("canonicalizeProjectPath unwraps Codex desktop wrapper cwd values", () => {
     "/mnt/f/Unity/ChickenCoop"
   );
   assert.equal(
+    canonicalizeProjectPath("\\mnt\\c\\Users\\User\\AgentsOfficeTower"),
+    "/mnt/c/Users/User/AgentsOfficeTower"
+  );
+  assert.equal(
     canonicalizeProjectPath("/mnt/f/AI/CodexAgentsOffice/F:/Unity/ChickenCoop"),
     "/mnt/f/Unity/ChickenCoop"
   );
@@ -108,7 +112,7 @@ test("configured Codex discovery uses project-local freshness signals instead of
     const discovered = await discoverCodexConfiguredProjects(10, configPath);
 
     assert.equal(discovered.length, 1);
-    assert.equal(discovered[0].root, projectRoot);
+    assert.equal(discovered[0].root, canonicalizeProjectPath(projectRoot));
     assert.ok(discovered[0].updatedAt >= Math.floor(freshMs / 1000));
     assert.ok(discovered[0].updatedAt > Math.floor(oldMs / 1000));
   } finally {

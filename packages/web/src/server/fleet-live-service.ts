@@ -39,6 +39,25 @@ export function filterFreshDiscoveredProjects(
   );
 }
 
+export function mergeDiscoveredProjectRootsWithSeeds(
+  discoveredRoots: string[],
+  seedRoots: string[]
+): string[] {
+  const roots: string[] = [];
+  const seen = new Set<string>();
+
+  for (const root of [...discoveredRoots, ...seedRoots]) {
+    const identityKey = projectPathIdentityKey(root);
+    if (!identityKey || seen.has(identityKey)) {
+      continue;
+    }
+    seen.add(identityKey);
+    roots.push(root);
+  }
+
+  return roots;
+}
+
 export class FleetLiveService {
   private static readonly PROJECT_DISCOVERY_LIMIT = 200;
   private static readonly PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
@@ -305,12 +324,12 @@ export class FleetLiveService {
         return preferredRootsByIdentity.get(identityKey) ?? project.root;
       })
       .filter((root): root is string => Boolean(root));
+    const seedRoots = normalizedSeeds.map((project) => project.root);
     const nextProjectRoots = this.explicitProjects
-      ? normalizedSeeds.map((project) => project.root)
-      : (
-        rawDiscoveredProjects.length > 0
-          ? discoveredRoots
-          : normalizedSeeds.map((project) => project.root)
+      ? seedRoots
+      : mergeDiscoveredProjectRootsWithSeeds(
+        rawDiscoveredProjects.length > 0 ? discoveredRoots : [],
+        seedRoots
       );
     const nextProjects = buildProjectDescriptors(nextProjectRoots);
     const nextRoots = new Set(nextProjects.map((project) => project.root));

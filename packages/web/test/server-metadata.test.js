@@ -4,7 +4,8 @@ const assert = require("node:assert/strict");
 const { buildServerMeta } = require("../dist/server-metadata.js");
 const {
   DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS,
-  filterFreshDiscoveredProjects
+  filterFreshDiscoveredProjects,
+  mergeDiscoveredProjectRootsWithSeeds
 } = require("../dist/server/fleet-live-service.js");
 
 test("server metadata can reflect the live fleet project set", () => {
@@ -65,4 +66,27 @@ test("fleet discovery hides autodiscovered workspaces older than the internal 7-
   );
 
   assert.deepEqual(visible.map((project) => project.root), ["/fresh"]);
+});
+
+test("fleet discovery keeps seed workspaces when autodiscovery finds other projects", () => {
+  assert.deepEqual(
+    mergeDiscoveredProjectRootsWithSeeds(
+      ["/mnt/c/Users/User/OtherProject"],
+      ["/mnt/c/Users/User/AgentsOfficeTower"]
+    ),
+    [
+      "/mnt/c/Users/User/OtherProject",
+      "/mnt/c/Users/User/AgentsOfficeTower"
+    ]
+  );
+});
+
+test("fleet discovery does not duplicate seed workspaces already found through autodiscovery", () => {
+  assert.deepEqual(
+    mergeDiscoveredProjectRootsWithSeeds(
+      ["\\mnt\\c\\Users\\User\\AgentsOfficeTower"],
+      ["/mnt/c/Users/User/AgentsOfficeTower"]
+    ),
+    ["\\mnt\\c\\Users\\User\\AgentsOfficeTower"]
+  );
 });

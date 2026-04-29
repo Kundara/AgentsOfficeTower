@@ -47,7 +47,12 @@ export function buildCodexCommandCandidates(input: {
   };
 
   pushCandidate(input.codexCliPath, "CODEX_CLI_PATH override");
-  pushCandidate(input.platform === "win32" ? "codex.cmd" : "codex", "Codex CLI on PATH");
+  if (input.platform === "win32") {
+    pushCandidate("codex.cmd", "Codex CLI cmd shim on PATH");
+    pushCandidate("codex.exe", "Codex CLI executable on PATH");
+  } else {
+    pushCandidate("codex", "Codex CLI on PATH");
+  }
   if (input.platform === "win32") {
     const windowsWslCommand = input.windowsWslCommand ?? null;
     pushCandidate(

@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { CodexAppServerClient, parseAppServerMessage } = require("../dist/app-server.js");
+const { appServerCwdParam, CodexAppServerClient, parseAppServerMessage } = require("../dist/app-server.js");
 const {
   buildDashboardEventFromAppServerMessage,
   buildRolloutHookEvent,
@@ -72,6 +72,15 @@ test("parseAppServerMessage distinguishes response, notification, and server req
   assert.deepEqual(
     parseAppServerMessage(JSON.stringify({ id: 7, method: "item/tool/requestUserInput", params: { threadId: "thr_1" } })),
     { kind: "serverRequest", message: { id: 7, method: "item/tool/requestUserInput", params: { threadId: "thr_1" } } }
+  );
+});
+
+test("app-server cwd filters use Windows paths for Windows-backed WSL project roots", () => {
+  assert.equal(
+    appServerCwdParam("/mnt/c/Users/User/AgentsOfficeTower"),
+    process.platform === "win32"
+      ? "C:\\Users\\User\\AgentsOfficeTower"
+      : "/mnt/c/Users/User/AgentsOfficeTower"
   );
 });
 

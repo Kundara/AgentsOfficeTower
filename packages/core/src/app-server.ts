@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { platform } from "node:process";
 
 import type { CodexThread } from "./types";
 import { spawnCodexProcess } from "./codex-command";
@@ -29,6 +30,21 @@ interface TextUserInput {
   type: "text";
   text: string;
   text_elements: unknown[];
+}
+
+export function appServerCwdParam(cwd: string | null | undefined): string | null {
+  if (!cwd) {
+    return null;
+  }
+
+  const match = cwd.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
+  if (platform !== "win32" || !match) {
+    return cwd;
+  }
+
+  const drive = match[1].toUpperCase();
+  const rest = match[2].replace(/\//g, "\\");
+  return `${drive}:\\${rest}`;
 }
 
 export interface ToolRequestUserInputAnswer {
@@ -264,7 +280,7 @@ export class CodexAppServerClient {
     sourceKinds?: string[];
   }): Promise<CodexThread[]> {
     const result = await this.request<ThreadListResult>("thread/list", {
-      cwd: params.cwd ?? null,
+      cwd: appServerCwdParam(params.cwd),
       limit: params.limit ?? 12,
       sourceKinds: params.sourceKinds ?? [
         "cli",

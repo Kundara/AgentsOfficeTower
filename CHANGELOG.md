@@ -48,6 +48,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed fleet autodiscovery on Windows so the browser keeps the launched seed workspace visible when another adapter discovers work first, recognizes `codex.exe` PATH candidates, normalizes Codex app-server `\mnt\c\...` roots onto `/mnt/c/...`, and sends Windows-native cwd filters back to the app-server so those projects can populate their agents.
 - Fixed browser `Needs You` approval actions for current Codex app-server builds by sending approval responses as structured JSON-RPC results instead of bare decision strings.
 - Fixed browser Codex replies for current app-server builds by sending the required `text_elements` field on text turn inputs.
 - Fixed browser chat action submissions so a stalled local app-server request times out with a visible error instead of leaving the composer stuck in a permanent sending state.

@@ -42,7 +42,8 @@ test("Windows app bundle candidate is included after PATH", () => {
       windowsAppPath: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe"
     }),
     [
-      { command: "codex.cmd", label: "Codex CLI on PATH" },
+      { command: "codex.cmd", label: "Codex CLI cmd shim on PATH" },
+      { command: "codex.exe", label: "Codex CLI executable on PATH" },
       {
         command: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe",
         label: "Codex Windows app bundle"
@@ -59,7 +60,8 @@ test("Windows candidates include a WSL Codex fallback before the app bundle", ()
       windowsAppPath: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe"
     }),
     [
-      { command: "codex.cmd", label: "Codex CLI on PATH" },
+      { command: "codex.cmd", label: "Codex CLI cmd shim on PATH" },
+      { command: "codex.exe", label: "Codex CLI executable on PATH" },
       { command: "wsl.exe", label: "Codex CLI via WSL", argsPrefix: ["--exec", "codex"] },
       { command: "C:\\Windows\\System32\\wsl.exe", label: "Codex CLI via WSL", argsPrefix: ["--exec", "codex"] },
       {

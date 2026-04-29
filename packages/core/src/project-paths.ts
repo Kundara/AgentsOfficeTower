@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, normalize } from "node:path";
+import { platform } from "node:process";
 
 import { withAppServerClient } from "./app-server";
 import type { CodexThread } from "./types";
@@ -18,14 +19,15 @@ const MAX_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 400;
 const CODEX_PROJECT_DISCOVERY_THREAD_MULTIPLIER = 20;
 
 async function projectDiscoveryUpdatedAt(root: string, fallbackUpdatedAt: number): Promise<number> {
+  const filesystemRoot = filesystemPathForProjectRoot(root);
   const candidatePaths = [
-    root,
-    join(root, ".git"),
-    join(root, ".git", "index"),
-    join(root, ".git", "HEAD"),
-    join(root, ".git", "logs", "HEAD"),
-    join(root, ".codex-agents"),
-    join(root, ".codex-agents", "rooms.xml")
+    filesystemRoot,
+    join(filesystemRoot, ".git"),
+    join(filesystemRoot, ".git", "index"),
+    join(filesystemRoot, ".git", "HEAD"),
+    join(filesystemRoot, ".git", "logs", "HEAD"),
+    join(filesystemRoot, ".codex-agents"),
+    join(filesystemRoot, ".codex-agents", "rooms.xml")
   ];
   const candidateUpdatedAt = await Promise.all(candidatePaths.map(async (path) => {
     try {
@@ -42,8 +44,23 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/[\\/]+$/, "");
 }
 
+function normalizeProjectPath(value: string): string {
+  return trimTrailingSlash(normalize(value).replace(/\\/g, "/"));
+}
+
 function isWindowsBackedWslPath(value: string): boolean {
   return /^\/mnt\/[a-z]\//i.test(value);
+}
+
+function filesystemPathForProjectRoot(root: string): string {
+  const match = root.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
+  if (platform !== "win32" || !match) {
+    return root;
+  }
+
+  const drive = match[1].toUpperCase();
+  const rest = match[2].replace(/\//g, "\\");
+  return `${drive}:\\${rest}`;
 }
 
 function unwrapCodexDesktopProjectPath(raw: string): string {
@@ -76,20 +93,27 @@ export function canonicalizeProjectPath(input: string | null | undefined): strin
   if (nestedWindowsMountMatch) {
     const drive = nestedWindowsMountMatch[1].toLowerCase();
     const rest = nestedWindowsMountMatch[2].replace(/\\/g, "/");
-    return trimTrailingSlash(normalize(`/mnt/${drive}/${rest}`));
+    return normalizeProjectPath(`/mnt/${drive}/${rest}`);
   }
 
   const rawWithoutExtendedPrefix = extendedWindowsRaw;
+
+  const windowsBackedAbsoluteWslMatch = rawWithoutExtendedPrefix.match(/^[\\/]+mnt[\\/]+([a-zA-Z])[\\/](.*)$/);
+  if (windowsBackedAbsoluteWslMatch) {
+    const drive = windowsBackedAbsoluteWslMatch[1].toLowerCase();
+    const rest = windowsBackedAbsoluteWslMatch[2].replace(/\\/g, "/");
+    return normalizeProjectPath(`/mnt/${drive}/${rest}`);
+  }
 
   const windowsDriveMatch = rawWithoutExtendedPrefix.match(/^([a-zA-Z]):[\\/](.*)$/);
   if (windowsDriveMatch) {
     const drive = windowsDriveMatch[1].toLowerCase();
     const rest = windowsDriveMatch[2].replace(/\\/g, "/");
-    return trimTrailingSlash(normalize(`/mnt/${drive}/${rest}`));
+    return normalizeProjectPath(`/mnt/${drive}/${rest}`);
   }
 
   if (rawWithoutExtendedPrefix.startsWith("/")) {
-    return trimTrailingSlash(normalize(rawWithoutExtendedPrefix.replace(/\\/g, "/")));
+    return normalizeProjectPath(rawWithoutExtendedPrefix.replace(/\\/g, "/"));
   }
 
   return trimTrailingSlash(rawWithoutExtendedPrefix.replace(/\\/g, "/"));
@@ -209,7 +233,7 @@ export async function discoverCodexConfiguredProjects(
   const existingProjects = (
     await Promise.all(configuredRoots.map(async (root) => {
       try {
-        const entry = await stat(root);
+        const entry = await stat(filesystemPathForProjectRoot(root));
         if (!entry.isDirectory()) {
           return null;
         }
