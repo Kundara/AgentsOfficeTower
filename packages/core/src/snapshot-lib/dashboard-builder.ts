@@ -41,13 +41,24 @@ async function buildLocalAgents(
       if (!readThreads) {
         return threads;
       }
-      return Promise.all(threads.map((thread) => client.readThread(thread.id)));
+      return Promise.all(threads.map(async (thread) =>
+        mergeListedThreadMetadata(await client.readThread(thread.id), thread)
+      ));
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     notes.push(`Local Codex app-server unavailable: ${message}`);
     return [];
   }
+}
+
+function mergeListedThreadMetadata(thread: CodexThread, listedThread: CodexThread): CodexThread {
+  return {
+    ...thread,
+    status: listedThread.status,
+    updatedAt: Math.max(thread.updatedAt, listedThread.updatedAt),
+    path: listedThread.path ?? thread.path
+  };
 }
 
 export async function buildDashboardSnapshotFromState(input: {

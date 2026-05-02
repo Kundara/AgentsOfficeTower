@@ -1,14 +1,17 @@
 import { filterThreadsForProject } from "./project-paths";
 import type { CodexThread } from "./types";
 
-function parentThreadIdForThread(thread: CodexThread): string | null {
-  if (typeof thread.source === "string") {
+function subAgentSourceForThread(thread: CodexThread): unknown {
+  if (typeof thread.source !== "object" || !thread.source) {
     return null;
   }
-  const subAgentSource =
-    typeof thread.source === "object"
-      ? (thread.source as Record<string, unknown>).subAgent
-      : null;
+
+  const source = thread.source as Record<string, unknown>;
+  return source.subAgent ?? source.subagent ?? null;
+}
+
+function parentThreadIdForThread(thread: CodexThread): string | null {
+  const subAgentSource = subAgentSourceForThread(thread);
   const threadSpawn =
     typeof subAgentSource === "object" && subAgentSource
       ? (subAgentSource as Record<string, unknown>).thread_spawn

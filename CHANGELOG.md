@@ -48,6 +48,8 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed Codex CLI and subagent discovery against current app-server builds by explicitly sorting `thread/list` by `updated_at`, preventing resumed or long-running CLI threads created earlier from falling out of the small current-workload page.
+- Fixed Codex subagent metadata parsing to tolerate the current generated schema shape, including `subAgent.thread_spawn.agent_nickname` / `agent_role`, and surfaced `collabAgentToolCall` parent activity as delegated work.
 - Fixed fleet autodiscovery on Windows so the browser keeps the launched seed workspace visible when another adapter discovers work first, recognizes `codex.exe` PATH candidates, normalizes Codex app-server `\mnt\c\...` roots onto `/mnt/c/...`, and sends Windows-native cwd filters back to the app-server so those projects can populate their agents.
 - Fixed browser `Needs You` approval actions for current Codex app-server builds by sending approval responses as structured JSON-RPC results instead of bare decision strings.
 - Fixed browser Codex replies for current app-server builds by sending the required `text_elements` field on text turn inputs.

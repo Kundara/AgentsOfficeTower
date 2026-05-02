@@ -157,7 +157,7 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
           isOngoing: inferredOngoing,
           statusText: thread.status.type,
           role: resolvedRole,
-          nickname: thread.agentNickname,
+          nickname: thread.agentNickname ?? sourceMeta.agentNickname,
           isSubagent: Boolean(resolvedRole),
           state: syncedMessageSummary.summary.state,
           detail: syncedMessageSummary.summary.detail,

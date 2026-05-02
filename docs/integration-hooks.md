@@ -120,6 +120,7 @@ How we use it:
 - find threads for a specific project
 - detect newly active or changed local sessions
 - decide which threads need a full `thread/read`
+- request `sortKey: "updated_at"` and `sortDirection: "desc"` explicitly because current app-server defaults to created-time ordering, which can hide resumed CLI or subagent work from a small current-workload page
 - preserve the fresher `thread/list.updatedAt` when desktop-backed `thread/read` returns a stale hydrated transcript timestamp for the same thread
 
 ### Codex configured project discovery
@@ -407,8 +408,12 @@ What we read from Codex:
 - `thread.source`
 - `subAgent.thread_spawn.parent_thread_id`
 - `subAgent.thread_spawn.depth`
-- role hints from prompt text and user message text
+- `subAgent.thread_spawn.agent_nickname`
+- `subAgent.thread_spawn.agent_role`
+- top-level `thread.agentNickname`
 - `thread.agentRole`
+- role hints from prompt text and user message text as a legacy fallback
+- `collabAgentToolCall` items for parent-thread delegation status, including the current `receiverThreadIds` / `agentsStates` shape when present
 
 How we use it:
 

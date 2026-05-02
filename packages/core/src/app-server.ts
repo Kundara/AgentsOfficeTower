@@ -13,6 +13,9 @@ interface ThreadListResult {
   data: CodexThread[];
 }
 
+type ThreadListSortKey = "created_at" | "updated_at";
+type SortDirection = "asc" | "desc";
+
 interface TurnStartResult {
   turn: {
     id: string;
@@ -278,10 +281,14 @@ export class CodexAppServerClient {
     cwd?: string;
     limit?: number;
     sourceKinds?: string[];
+    sortKey?: ThreadListSortKey;
+    sortDirection?: SortDirection;
   }): Promise<CodexThread[]> {
     const result = await this.request<ThreadListResult>("thread/list", {
       cwd: appServerCwdParam(params.cwd),
       limit: params.limit ?? 12,
+      sortKey: params.sortKey ?? "updated_at",
+      sortDirection: params.sortDirection ?? "desc",
       sourceKinds: params.sourceKinds ?? [
         "cli",
         "vscode",

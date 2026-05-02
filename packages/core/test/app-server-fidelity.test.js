@@ -14,7 +14,10 @@ const {
 const {
   applyRecentActivityEvent,
   buildDashboardSnapshotFromState,
+  inferThreadAgentRole,
   parentThreadIdForThread,
+  parseThreadSourceMeta,
+  pickThreadLabel,
   summariseThread
 } = require("../dist/snapshot.js");
 const { applyCurrentWorkloadState, isCurrentWorkloadAgent } = require("../dist/workload.js");
@@ -82,6 +85,22 @@ test("app-server cwd filters use Windows paths for Windows-backed WSL project ro
       ? "C:\\Users\\User\\AgentsOfficeTower"
       : "/mnt/c/Users/User/AgentsOfficeTower"
   );
+});
+
+test("thread/list requests current workload ordering explicitly", async () => {
+  const requests = [];
+  const client = Object.create(CodexAppServerClient.prototype);
+  client.request = async (method, params) => {
+    requests.push({ method, params });
+    return { data: [] };
+  };
+
+  await client.listThreads({ cwd: "/tmp/CodexAgentsOffice", limit: 5 });
+
+  assert.equal(requests[0].method, "thread/list");
+  assert.equal(requests[0].params.sortKey, "updated_at");
+  assert.equal(requests[0].params.sortDirection, "desc");
+  assert.equal(requests[0].params.limit, 5);
 });
 
 test("command approval requests become typed approval events", () => {
@@ -1744,6 +1763,88 @@ test("parentThreadIdForThread extracts ancestor ids from subagent metadata", () 
   assert.equal(parentThreadIdForThread(thread), "thr_parent");
 });
 
+test("subagent source metadata accepts current nickname and role fields", () => {
+  const thread = {
+    ...sampleThread(),
+    source: {
+      subAgent: {
+        thread_spawn: {
+          parent_thread_id: "thr_parent",
+          depth: 2,
+          agent_nickname: "Ada",
+          agent_role: "worker"
+        }
+      }
+    },
+    agentNickname: null,
+    agentRole: null
+  };
+
+  assert.deepEqual(parseThreadSourceMeta(thread), {
+    sourceKind: "subAgent",
+    parentThreadId: "thr_parent",
+    depth: 2,
+    agentNickname: "Ada",
+    agentRole: "worker"
+  });
+  assert.equal(pickThreadLabel(thread), "Ada");
+  assert.equal(inferThreadAgentRole(thread, "subAgent"), "worker");
+});
+
+test("subagent source metadata tolerates lowercase schema key", () => {
+  const thread = {
+    ...sampleThread(),
+    source: {
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: "thr_parent",
+          depth: 1,
+          agent_nickname: "Casey",
+          agent_role: "explorer"
+        }
+      }
+    },
+    agentNickname: null,
+    agentRole: null
+  };
+
+  assert.equal(parentThreadIdForThread(thread), "thr_parent");
+  assert.equal(parseThreadSourceMeta(thread).agentNickname, "Casey");
+  assert.equal(inferThreadAgentRole(thread, "subAgent"), "explorer");
+});
+
+test("collab agent tool calls summarize parent sessions as delegating", () => {
+  const thread = {
+    ...sampleThread(),
+    turns: [
+      {
+        id: "turn_1",
+        status: "inProgress",
+        error: null,
+        items: [
+          {
+            type: "collabAgentToolCall",
+            id: "call_1",
+            tool: "spawn_agent",
+            status: "inProgress",
+            senderThreadId: "thr_parent",
+            receiverThreadIds: ["thr_child_a", "thr_child_b"],
+            prompt: "Check the latest app-server API.",
+            model: null,
+            reasoningEffort: null,
+            agentsStates: {}
+          }
+        ]
+      }
+    ]
+  };
+
+  const summary = summariseThread(thread);
+  assert.equal(summary.state, "delegating");
+  assert.equal(summary.detail, "Spawning 2 subagents");
+  assert.equal(summary.activityEvent?.type, "collabAgentToolCall");
+});
+
 test("active local threads remain current even when the last update is stale", async () => {
   const staleThread = {
     ...sampleThread(),
@@ -2160,6 +2261,38 @@ test("codex local adapter keeps parent threads available even when only the chil
     cwd: "/tmp/CodexAgentsOffice",
     source: {
       subAgent: {
+        thread_spawn: {
+          parent_thread_id: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    turns: []
+  };
+
+  const selected = selectProjectThreadsWithParents(
+    "/tmp/CodexAgentsOffice",
+    [parentThread, childThread],
+    24
+  );
+
+  assert.deepEqual(selected.map((thread) => thread.id), ["thr_child", "thr_parent"]);
+});
+
+test("codex local adapter follows lowercase subagent parent metadata", () => {
+  const parentThread = {
+    ...sampleThread(),
+    id: "thr_parent",
+    cwd: "/mnt/f/SomeOtherWorkspace",
+    source: "cli",
+    turns: []
+  };
+  const childThread = {
+    ...sampleThread(),
+    id: "thr_child",
+    cwd: "/tmp/CodexAgentsOffice",
+    source: {
+      subagent: {
         thread_spawn: {
           parent_thread_id: "thr_parent",
           depth: 1

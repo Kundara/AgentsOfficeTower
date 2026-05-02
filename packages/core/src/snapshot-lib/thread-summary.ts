@@ -57,10 +57,46 @@ function threadTurns(thread: CodexThread): CodexTurn[] {
   return Array.isArray(thread.turns) ? thread.turns : [];
 }
 
+function sourceRecord(thread: CodexThread): Record<string, unknown> | null {
+  return typeof thread.source === "object" && thread.source
+    ? thread.source as Record<string, unknown>
+    : null;
+}
+
+function subAgentSourceForThread(thread: CodexThread): unknown {
+  const source = sourceRecord(thread);
+  return source ? source.subAgent ?? source.subagent ?? null : null;
+}
+
+function threadSpawnSourceForThread(thread: CodexThread): Record<string, unknown> | null {
+  const subAgentSource = subAgentSourceForThread(thread);
+  const threadSpawn =
+    typeof subAgentSource === "object" && subAgentSource
+      ? (subAgentSource as Record<string, unknown>).thread_spawn
+      : null;
+  return typeof threadSpawn === "object" && threadSpawn
+    ? threadSpawn as Record<string, unknown>
+    : null;
+}
+
+function sourceStringValue(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function sourceAgentNickname(thread: CodexThread): string | null {
+  return sourceStringValue(threadSpawnSourceForThread(thread), "agent_nickname");
+}
+
+function sourceAgentRole(thread: CodexThread): string | null {
+  return sourceStringValue(threadSpawnSourceForThread(thread), "agent_role");
+}
+
 export function pickThreadLabel(thread: CodexThread): string {
+  const agentNickname = thread.agentNickname ?? sourceAgentNickname(thread);
   return (
+    agentNickname ??
     thread.name ??
-    thread.agentNickname ??
     shortenText(thread.preview || thread.id, 42)
   );
 }
@@ -304,42 +340,64 @@ export function parseThreadSourceMeta(thread: CodexThread): {
   sourceKind: string;
   parentThreadId: string | null;
   depth: number;
+  agentNickname: string | null;
+  agentRole: string | null;
 } {
   if (typeof thread.source === "string") {
     return {
       sourceKind: thread.source,
       parentThreadId: null,
-      depth: 0
+      depth: 0,
+      agentNickname: null,
+      agentRole: null
     };
   }
 
-  const subAgentSource =
-    typeof thread.source === "object"
-      ? (thread.source as Record<string, unknown>).subAgent
-      : null;
-  const threadSpawn =
-    typeof subAgentSource === "object" && subAgentSource
-      ? (subAgentSource as Record<string, unknown>).thread_spawn
-      : null;
+  const subAgentSource = subAgentSourceForThread(thread);
+  const threadSpawn = threadSpawnSourceForThread(thread);
 
   if (typeof threadSpawn === "object" && threadSpawn) {
     return {
       sourceKind: "subAgent",
       parentThreadId:
-        typeof (threadSpawn as Record<string, unknown>).parent_thread_id === "string"
-          ? ((threadSpawn as Record<string, unknown>).parent_thread_id as string)
+        typeof threadSpawn.parent_thread_id === "string"
+          ? threadSpawn.parent_thread_id
           : null,
       depth:
-        typeof (threadSpawn as Record<string, unknown>).depth === "number"
-          ? ((threadSpawn as Record<string, unknown>).depth as number)
-          : 1
+        typeof threadSpawn.depth === "number"
+          ? threadSpawn.depth
+          : 1,
+      agentNickname: sourceAgentNickname(thread),
+      agentRole: sourceAgentRole(thread)
+    };
+  }
+
+  if (subAgentSource === "review" || subAgentSource === "compact") {
+    return {
+      sourceKind: subAgentSource === "review" ? "subAgentReview" : "subAgentCompact",
+      parentThreadId: null,
+      depth: 1,
+      agentNickname: null,
+      agentRole: null
+    };
+  }
+
+  if (subAgentSource === "memory_consolidation" || typeof subAgentSource === "object") {
+    return {
+      sourceKind: "subAgentOther",
+      parentThreadId: null,
+      depth: 1,
+      agentNickname: null,
+      agentRole: null
     };
   }
 
   return {
     sourceKind: "unknown",
     parentThreadId: null,
-    depth: 0
+    depth: 0,
+    agentNickname: null,
+    agentRole: null
   };
 }
 
@@ -364,7 +422,7 @@ export function inferThreadAgentRole(thread: CodexThread, sourceKind: string): s
       return extractedUserRole;
     }
   }
-  return thread.agentRole;
+  return thread.agentRole ?? sourceAgentRole(thread);
 }
 
 function turnHasFinalAnswer(turn: CodexTurn): boolean {
@@ -636,6 +694,38 @@ export function summariseThread(thread: CodexThread): {
           action: "updated",
           path: thread.cwd,
           title: tool,
+          isImage: false
+        }
+      };
+    }
+    case "collabToolCall":
+    case "collabAgentToolCall": {
+      const tool = typeof item.tool === "string" ? item.tool : "subagent";
+      const status = typeof item.status === "string" ? item.status : "inProgress";
+      const receiverCount =
+        Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds.length
+        : typeof item.receiverThreadId === "string" ? 1
+        : 0;
+      const detail =
+        tool === "spawn_agent" || tool === "spawn_agents"
+          ? receiverCount > 0
+            ? `Spawning ${receiverCount} subagent${receiverCount === 1 ? "" : "s"}`
+            : "Spawning subagent"
+          : tool === "wait_agent" || tool === "wait"
+            ? "Waiting on subagents"
+            : tool;
+      return {
+        state:
+          status === "failed" || status === "declined" ? "blocked"
+          : !treatAsInProgress && status === "completed" ? settledRecentState
+          : "delegating",
+        detail: status === "failed" || status === "declined" ? summarizeFailedItemDetail(item, detail) : detail,
+        paths: [thread.cwd],
+        activityEvent: {
+          type: item.type,
+          action: "updated",
+          path: thread.cwd,
+          title: detail,
           isImage: false
         }
       };
