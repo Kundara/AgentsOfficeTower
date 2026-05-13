@@ -64,6 +64,9 @@ Current use:
 - parses app-server notifications
 - parses server-initiated JSON-RPC requests such as approvals and input prompts
 - summarizes `turn/plan/updated` from the documented `{ explanation?, plan }` payload and `turn/diff/updated` from the documented `{ diff }` payload
+- normalizes newer activity/diagnostic notifications including file patch updates, MCP progress, terminal interaction, Codex hook runs, guardian auto-review, model reroute/verification notices, warnings, MCP startup/login failures, rate-limit notices, and Windows sandbox/setup warnings
+- provides an explicit unsuccessful response to `item/tool/call` dynamic-tool requests because Agents Office does not execute arbitrary dynamic tools for observed Codex turns
+- exposes `npm run check:codex-protocol` as a local drift check against the installed `codex app-server generate-ts --experimental` method set
 
 Important note:
 
@@ -75,16 +78,26 @@ Important note:
 
 This means app-server is now both the main truth source and the first-class local event bus for browser notifications.
 
-Signals currently left on the table from the official app-server events page:
+Signals intentionally classified as low-workload or no-op today:
 
 - `thread/tokenUsage/updated`
+- `skills/changed`
+- `thread/name/updated`
+- `thread/goal/updated`
+- `thread/goal/cleared`
+- `account/updated`
+- `app/list/updated`
+- `remoteControl/status/changed`
+- `externalAgentConfig/import/completed`
+- `fs/changed`
 - `fuzzyFileSearch/sessionUpdated`
 - `fuzzyFileSearch/sessionCompleted`
-- `windowsSandbox/setupCompleted`
+- `thread/realtime/*`
+- `account/login/completed`
 
 Current stance:
 
-- these notifications are documented and valid, but they do not currently affect workload state, toast rendering, or browser office occupancy
+- these notifications are documented and valid, but they do not currently affect workload state or office occupancy; when useful, they are kept as status events or human-readable notes rather than live desk activity
 
 Resolution details:
 
@@ -165,8 +178,8 @@ How we use it:
 - keep fresh read-only desktop turns without a final answer desk-live through quiet text gaps, using the merged `thread/list` freshness when `thread/read` lags
 - use recent non-final command, file, tool, plan, or turn events as workload freshness for local desktop threads even when the observer is temporarily `readOnly` or the app-server thread status currently reads `idle`
 - treat a fresh unhydrated `notLoaded` desktop timestamp with no readable turns as a just-sent prompt for an about-8-second planning-current window, not as a completed reply
-- debounce `thread/status/changed -> notLoaded` for about 3 seconds and confirm it with a reread before clearing ongoing local work
-- keep quiet desk-live local work current for about 3 minutes when it has recent non-final activity, is still subscribed, or is sitting in a transient `notLoaded` transport state
+- treat `thread/status/changed -> notLoaded` as a reread trigger rather than completion; an already observed ongoing local thread stays ongoing unless the reread exposes a final answer
+- keep quiet desk-live local work current for about 3 minutes as a fallback when it has recent non-final activity, is still subscribed, or is sitting in a transient `notLoaded` transport state; explicit live-monitor ongoing state is not capped by that fallback
 - infer subagent parentage and depth
 - generate `resumeCommand`
 - map the session into project rooms using extracted paths
@@ -231,9 +244,9 @@ Current-workload occupancy rules on top of that state:
 - a fresh read-only `notLoaded` desktop thread without a final answer still stays `isCurrent` through quiet text gaps, even if `thread/read` returned an older transcript timestamp than `thread/list`
 - recent non-final local work events can also keep a desktop-backed thread `isCurrent` through temporary `readOnly` or `idle` observer gaps
 - stale `notLoaded` fallback replies are capped to the 3-second finished cooldown; they should not keep a finished top-level thread current for minutes
-- observer-owned unload/runtime-idle transitions such as `thread/closed` or `thread/status/changed -> notLoaded` are not treated as immediate stop signals by themselves; `notLoaded` now waits about 3 seconds and a reread confirmation before the monitor clears ongoing local state
-- non-final `turn/completed` and `turn/interrupted` notifications keep the thread live instead of marking it stopped; only a final-answer `agentMessage`, hard failure, archive, or confirmed idle unload starts workstation release
-- recent non-final, subscribed, or transiently `notLoaded` desk-live local states now keep currentness and workstation eligibility for about 3 minutes between updates before settling to rest
+- observer-owned unload/runtime-idle transitions such as `thread/closed` or `thread/status/changed -> notLoaded` are not stop signals by themselves; `notLoaded` rereads only clear ongoing local state when they reveal a final answer
+- non-final `turn/completed` and `turn/interrupted` notifications keep the thread live instead of marking it stopped; only a final-answer `agentMessage`, hard failure, or archive starts workstation release
+- recent non-final, subscribed, or transiently `notLoaded` desk-live local states keep currentness and workstation eligibility for about 3 minutes as a fallback between updates, while explicit monitor-tracked ongoing threads remain desk-live until final answer or hard terminal state
 - local desk occupancy no longer uses a generic freshness fallback for non-idle summaries; if a thread is not ongoing, not waiting on the user, and not inside the stop grace window, it is no longer `isCurrent`
 - once a top-level thread actually stops, it remains current and workstation-seated for about 3 seconds so final reply text can still surface before the lead cools into rec-area visibility
 - stale local `notLoaded` threads no longer keep a workstation just because they are still recent or subscribed; desk seating now requires actual ongoing work or the explicit stop grace
@@ -484,6 +497,7 @@ Verified current app-server response and input contracts:
 - command and file approval requests are answered with `{ decision }`
 - MCP elicitation requests are answered with `{ action: "accept", content, _meta: null }`
 - permission-profile approvals are answered with `{ permissions, scope }`, where `scope` is `turn` or `session`
+- dynamic tool-call requests are answered with `{ success: false, contentItems: [{ type: "inputText", text: "..." }] }` so a Codex turn does not wait indefinitely on an observer that cannot execute that tool
 
 ### `codex cloud list --json`
 
@@ -878,9 +892,11 @@ How it works:
 - `/api/fleet` provides the current normalized snapshot
 - `/api/multiplayer` exposes the current multiplayer transport status; it is currently a disabled placeholder until a secured sync path exists
 - `/api/events` streams live fleet updates over SSE
+- `/api/web-cli/query` exposes loopback-only, read-only `recent` and `last` lookups by repo name for the CLI; it returns projected agent/event summaries from the live local fleet or the latest coordinated team cache
+- `/api/web-cli/team-fleet` accepts a bounded same-origin browser POST of the already-rendered shared-room fleet so local CLI queries can read the same coordinated data without connecting directly to PartyKit
 - `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
 - browser-side rendering starts from `client/index.ts`, executes the generated `app-runtime.ts` module, and then delegates behavior across the focused runtime section files
-- optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, a server-backed multiplayer device identity for self-peer suppression across local viewers, per-project share preferences, and remote-only floor cooldown handling live in `multiplayer-source.ts`
+- optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, a server-backed multiplayer device identity for self-peer suppression across local viewers, per-project share preferences, remote-only floor cooldown handling, and the debounced team-fleet cache post for `web query scope=team` live in `multiplayer-source.ts`
 
 - server-sent events from `/api/events`
 

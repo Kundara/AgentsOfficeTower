@@ -103,15 +103,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         return sortAgentsStably(
           \`\${snapshot.projectRoot}::\${compact ? "compact-resting" : "resting"}\`,
           snapshot.agents
-            .filter((agent) => {
-              if (agent.source === "cloud") {
-                return false;
-              }
-              if (shouldSeatAtWorkstation(agent)) {
-                return false;
-              }
-              return agent.state === "idle" || agent.state === "done";
-            })
+            .filter((agent) => isFinishedLeadForRec(agent))
         );
       }
 
@@ -670,6 +662,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
               const avatarY = roomY + slot.y + stagedOffset.y;
               const anchorX = avatarX + Math.round(tile * 0.4);
               const anchorY = avatarY + Math.round(tile * 0.6);
+              const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1 : 1.08);
               model.recAgents.push({
                 id: agent.id,
                 key: agentKey(snapshot.projectRoot, agent),
@@ -686,11 +679,11 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 turnSignal: recentTurnSignalForAgent(snapshot, agent),
                 activityCue: recentActivityCueForAgent(snapshot, agent),
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
-                sprite: avatarForAgent(agent).url,
+                sprite: avatarSize.avatar.url,
                 x: avatarX,
                 y: avatarY,
-                width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
-                height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                width: avatarSize.width,
+                height: avatarSize.height,
                 depthBaseY: room.floorTop,
                 bubble: "...",
                 flip: slot.flip
@@ -705,8 +698,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 y: anchorY,
                 left: avatarX,
                 top: avatarY,
-                width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
-                height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                width: avatarSize.width,
+                height: avatarSize.height,
                 threadId: agent.threadId || "",
                 replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                 focusKey: focusAgentKey(snapshot, agent),
@@ -722,6 +715,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
               const avatarY = roomY + slot.y + stagedOffset.y;
               const anchorX = avatarX + Math.round(tile * 0.4);
               const anchorY = avatarY + Math.round(tile * 0.6);
+              const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1 : 1.08);
               model.recAgents.push({
                 id: agent.id,
                 key: agentKey(snapshot.projectRoot, agent),
@@ -738,11 +732,11 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 turnSignal: recentTurnSignalForAgent(snapshot, agent),
                 activityCue: recentActivityCueForAgent(snapshot, agent),
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
-                sprite: avatarForAgent(agent).url,
+                sprite: avatarSize.avatar.url,
                 x: avatarX,
                 y: avatarY,
-                width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
-                height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                width: avatarSize.width,
+                height: avatarSize.height,
                 depthBaseY: room.floorTop,
                 bubble: null,
                 flip: slot.flip
@@ -757,8 +751,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 y: anchorY,
                 left: avatarX,
                 top: avatarY,
-                width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
-                height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                width: avatarSize.width,
+                height: avatarSize.height,
                 threadId: agent.threadId || "",
                 replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                 focusKey: focusAgentKey(snapshot, agent),

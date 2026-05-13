@@ -35,6 +35,11 @@ interface TextUserInput {
   text_elements: unknown[];
 }
 
+interface DynamicToolCallResponse {
+  contentItems: Array<{ type: "inputText"; text: string }>;
+  success: boolean;
+}
+
 export function appServerCwdParam(cwd: string | null | undefined): string | null {
   if (!cwd) {
     return null;
@@ -275,6 +280,20 @@ export class CodexAppServerClient {
 
   respondToApprovalRequest(requestId: number, decision: string): void {
     this.respondToServerRequest(requestId, { decision });
+  }
+
+  respondToDynamicToolCallUnsupported(requestId: number, tool: string | null | undefined): void {
+    const toolLabel = tool && tool.trim().length > 0 ? tool.trim() : "dynamic tool";
+    const response: DynamicToolCallResponse = {
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: `Agents Office observes Codex workload but does not execute ${toolLabel} dynamic tool requests.`
+        }
+      ]
+    };
+    this.respondToServerRequest(requestId, response);
   }
 
   async listThreads(params: {

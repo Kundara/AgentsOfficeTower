@@ -7,9 +7,12 @@ export const MULTIPLAYER_SCRIPT = `
       let multiplayerModulePromise = null;
       let multiplayerBroadcastTimer = null;
       let multiplayerPruneTimer = null;
+      let webCliTeamFleetSyncTimer = null;
+      let pendingWebCliTeamFleet = null;
       const MULTIPLAYER_STALE_MS = 30000;
       const MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS = 60 * 60 * 1000;
       const MULTIPLAYER_BROADCAST_DEBOUNCE_MS = 700;
+      const WEB_CLI_TEAM_FLEET_SYNC_DEBOUNCE_MS = 1000;
       const MULTIPLAYER_NICKNAME_MAX_LENGTH = 12;
 
       function sanitizeMultiplayerField(value) {
@@ -303,6 +306,66 @@ export const MULTIPLAYER_SCRIPT = `
         const notes = ensureSnapshotNotes(snapshot).filter((note) => note !== sharedProjectCooldownNote());
         notes.push(sharedProjectCooldownNote());
         snapshot.notes = notes;
+      }
+
+      function snapshotHasSharedData(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
+          return false;
+        }
+        if (snapshot.sharedRemoteOnly === true) {
+          return true;
+        }
+        if (Array.isArray(snapshot.sharedParticipantLabels) && snapshot.sharedParticipantLabels.length > 0) {
+          return true;
+        }
+        return Array.isArray(snapshot.agents) && snapshot.agents.some((agent) => agent && agent.network);
+      }
+
+      function fleetHasSharedData(fleet) {
+        return Boolean(
+          fleet
+          && Array.isArray(fleet.projects)
+          && fleet.projects.some((snapshot) => snapshotHasSharedData(snapshot))
+        );
+      }
+
+      function scheduleWebCliTeamFleetSync(fleet) {
+        if (screenshotMode || !fleet || typeof fetch !== "function") {
+          return;
+        }
+        pendingWebCliTeamFleet = cloneValue(fleet);
+        if (webCliTeamFleetSyncTimer) {
+          clearTimeout(webCliTeamFleetSyncTimer);
+        }
+        webCliTeamFleetSyncTimer = setTimeout(() => {
+          webCliTeamFleetSyncTimer = null;
+          void syncWebCliTeamFleetNow();
+        }, WEB_CLI_TEAM_FLEET_SYNC_DEBOUNCE_MS);
+      }
+
+      async function syncWebCliTeamFleetNow() {
+        const fleet = pendingWebCliTeamFleet;
+        pendingWebCliTeamFleet = null;
+        if (!fleet) {
+          return;
+        }
+        const hasSharedData = fleetHasSharedData(fleet);
+        const payloadFleet = hasSharedData
+          ? fleet
+          : { generatedAt: fleet.generatedAt || new Date().toISOString(), projects: [] };
+        try {
+          await fetch("/api/web-cli/team-fleet", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-agents-office-web-cli-cache": "1"
+            },
+            body: JSON.stringify({
+              fleet: payloadFleet,
+              hasSharedData
+            })
+          });
+        } catch {}
       }
 
       function activeSharedPeerCount() {
@@ -620,6 +683,7 @@ export const MULTIPLAYER_SCRIPT = `
         queueSnapshotEvents(previousNotificationFleet, nextNotificationFleet);
         queueAgentNotifications(previousNotificationFleet, nextNotificationFleet);
         state.fleet = fleet;
+        scheduleWebCliTeamFleetSync(fleet);
         lastFleetSemanticToken = nextFleetSemanticToken;
         if (state.selected !== "all") {
           const exists = state.fleet.projects.some((project) => project.projectRoot === state.selected);

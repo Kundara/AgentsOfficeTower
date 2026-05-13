@@ -8,7 +8,8 @@ import { renderIconAuditHtml } from "../render/render-icon-audit-html";
 import { renderSceneEffectsAuditHtml } from "../render/render-scene-effects-audit-html";
 import { renderZOrderAuditHtml } from "../render/render-z-order-audit-html";
 import type { FleetLiveService } from "./fleet-live-service";
-import type { ServerOptions } from "./server-types";
+import type { FleetResponse, ServerOptions } from "./server-types";
+import type { WebCliCommand, WebCliItemType, WebCliQueryRequest, WebCliScope } from "./web-cli-query";
 
 interface RequestContext {
   request: IncomingMessage;
@@ -24,6 +25,8 @@ const PIXI_BROWSER_BUNDLE = resolve(__dirname, "../../../../node_modules/pixi.js
 const EASYSTAR_BROWSER_BUNDLE = resolve(__dirname, "../../../../node_modules/easystarjs/bin/easystar-0.4.4.min.js");
 const PARTYSOCKET_BROWSER_DIR = resolve(__dirname, "../../../../node_modules/partysocket/dist");
 const CLIENT_BUNDLE_DIR = resolve(__dirname, "../client");
+const WEB_CLI_TEAM_FLEET_MAX_BYTES = 2 * 1024 * 1024;
+const WEB_CLI_CACHE_HEADER = "x-agents-office-web-cli-cache";
 
 function requestMethod(context: RequestContext): string {
   return context.request.method ?? "GET";
@@ -31,6 +34,131 @@ function requestMethod(context: RequestContext): string {
 
 function matchesMethod(context: RequestContext, ...methods: string[]): boolean {
   return methods.includes(requestMethod(context));
+}
+
+function firstHeader(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+  return value ?? null;
+}
+
+function normalizeHeaderHost(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return new URL(`http://${value}`).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOriginHost(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return new URL(value).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackAddress(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.toLowerCase().replace(/^::ffff:/, "");
+  return normalized === "::1"
+    || normalized === "0:0:0:0:0:0:0:1"
+    || normalized.startsWith("127.");
+}
+
+function isLoopbackHost(value: string | null): boolean {
+  const host = normalizeHeaderHost(value);
+  return host === "localhost" || host === "::1" || host?.startsWith("127.") === true;
+}
+
+function isLoopbackWebCliRequest(context: RequestContext): boolean {
+  return isLoopbackAddress(context.request.socket.remoteAddress)
+    && isLoopbackHost(firstHeader(context.request.headers.host));
+}
+
+function requestOriginMatchesHost(context: RequestContext): boolean {
+  const origin = firstHeader(context.request.headers.origin);
+  if (!origin) {
+    return true;
+  }
+  const originHost = normalizeOriginHost(origin);
+  const requestHost = firstHeader(context.request.headers.host)?.toLowerCase() ?? null;
+  return Boolean(originHost && requestHost && originHost === requestHost);
+}
+
+function parseWebCliCommand(value: string | null): WebCliCommand | null {
+  return value === "recent" || value === "last" ? value : null;
+}
+
+function parseWebCliScope(value: string | null): WebCliScope | null {
+  if (!value) {
+    return "local";
+  }
+  return value === "local" || value === "team" ? value : null;
+}
+
+function parseWebCliItemType(value: string | null): WebCliItemType | undefined | null {
+  if (!value) {
+    return undefined;
+  }
+  return value === "agents" || value === "events" || value === "all" ? value : null;
+}
+
+function parseLimit(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function nullableParam(url: URL, key: string): string | undefined {
+  const value = url.searchParams.get(key);
+  return value && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function parseWebCliQuery(context: RequestContext): WebCliQueryRequest | { error: string } {
+  const repo = nullableParam(context.url, "repo");
+  const command = parseWebCliCommand(context.url.searchParams.get("command"));
+  const scope = parseWebCliScope(context.url.searchParams.get("scope"));
+  const type = parseWebCliItemType(context.url.searchParams.get("type"));
+
+  if (!repo) {
+    return { error: "repo is required" };
+  }
+  if (!command) {
+    return { error: "command must be recent or last" };
+  }
+  if (!scope) {
+    return { error: "scope must be local or team" };
+  }
+  if (type === null) {
+    return { error: "type must be agents, events, or all" };
+  }
+
+  return {
+    repo,
+    command,
+    scope,
+    values: {
+      limit: parseLimit(context.url.searchParams.get("limit")),
+      type,
+      state: nullableParam(context.url, "state"),
+      source: nullableParam(context.url, "source"),
+      kind: nullableParam(context.url, "kind"),
+      since: nullableParam(context.url, "since"),
+      agent: nullableParam(context.url, "agent")
+    }
+  };
 }
 
 async function handleAssetRoute(context: RequestContext): Promise<boolean> {
@@ -196,6 +324,73 @@ async function handleMultiplayerStatusRoute(context: RequestContext): Promise<bo
     return false;
   }
   sendJson(context.response, 200, context.service.getMultiplayerStatus());
+  return true;
+}
+
+async function handleWebCliTeamFleetRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "POST") || context.url.pathname !== "/api/web-cli/team-fleet") {
+    return false;
+  }
+
+  if (!isLoopbackWebCliRequest(context)) {
+    sendJson(context.response, 403, { error: "web CLI cache updates are only accepted from loopback clients" });
+    return true;
+  }
+
+  if (!requestOriginMatchesHost(context)) {
+    sendJson(context.response, 403, { error: "origin does not match this Agents Office server" });
+    return true;
+  }
+
+  if (firstHeader(context.request.headers[WEB_CLI_CACHE_HEADER]) !== "1") {
+    sendJson(context.response, 403, { error: "missing internal web CLI cache header" });
+    return true;
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = await readJsonBody(context.request, { maxBytes: WEB_CLI_TEAM_FLEET_MAX_BYTES });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendJson(context.response, message === "Request body too large" ? 413 : 400, { error: message });
+    return true;
+  }
+
+  const fleet = payload.fleet;
+  if (!fleet || typeof fleet !== "object" || !Array.isArray((fleet as { projects?: unknown }).projects)) {
+    sendJson(context.response, 400, { error: "fleet.projects is required" });
+    return true;
+  }
+
+  const hasSharedData = typeof payload.hasSharedData === "boolean" ? payload.hasSharedData : undefined;
+  context.service.setCoordinatedTeamFleet(fleet as FleetResponse, hasSharedData);
+  sendJson(context.response, 200, { ok: true });
+  return true;
+}
+
+async function handleWebCliQueryRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET") || context.url.pathname !== "/api/web-cli/query") {
+    return false;
+  }
+
+  if (!isLoopbackWebCliRequest(context)) {
+    sendJson(context.response, 403, { error: "web CLI queries are only available from loopback clients" });
+    return true;
+  }
+
+  const query = parseWebCliQuery(context);
+  if ("error" in query) {
+    sendJson(context.response, 400, { error: query.error });
+    return true;
+  }
+
+  const result = await context.service.queryWebCli(query);
+  if (!result.ok) {
+    sendJson(context.response, result.status, { error: result.error, candidates: result.candidates ?? [] });
+    return true;
+  }
+
+  sendJson(context.response, 200, result.response);
   return true;
 }
 
@@ -464,6 +659,8 @@ const ROUTES: RouteHandler[] = [
   handleFleetRoute,
   handleServerMetaRoute,
   handleMultiplayerStatusRoute,
+  handleWebCliTeamFleetRoute,
+  handleWebCliQueryRoute,
   handleIntegrationSettingsRoute,
   handleProjectFileRoute,
   handleEventsRoute,

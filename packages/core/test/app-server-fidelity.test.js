@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const { appServerCwdParam, CodexAppServerClient, parseAppServerMessage } = require("../dist/app-server.js");
 const {
+  buildAppServerDiagnosticNote,
   buildDashboardEventFromAppServerMessage,
   buildRolloutHookEvent,
   buildThreadReadAgentMessageEvent,
@@ -138,6 +139,29 @@ test("approval responses use the current app-server response envelope", async ()
   };
   client.respondToApprovalRequest(41, "accept");
   assert.deepEqual(sent, [{ id: 41, result: { decision: "accept" } }]);
+});
+
+test("unsupported dynamic tool requests get an explicit failed response", () => {
+  const sent = [];
+  const client = Object.create(CodexAppServerClient.prototype);
+  client.send = (payload) => {
+    sent.push(payload);
+  };
+  client.respondToDynamicToolCallUnsupported(72, "browser_snapshot");
+  assert.deepEqual(sent, [
+    {
+      id: 72,
+      result: {
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: "Agents Office observes Codex workload but does not execute browser_snapshot dynamic tool requests."
+          }
+        ]
+      }
+    }
+  ]);
 });
 
 test("monitor routes command approval decisions through the app-server approval helper", async () => {
@@ -852,7 +876,7 @@ test("final agent message notification stops an ongoing monitored thread", () =>
   assert.equal(monitor.stoppedAtByThreadId.has(thread.id), true);
 });
 
-test("notLoaded status waits for a short cooldown before stopping an ongoing monitored thread", async () => {
+test("confirmed notLoaded without a final answer keeps an ongoing monitored thread live", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
     includeCloud: false
@@ -884,20 +908,49 @@ test("notLoaded status waits for a short cooldown before stopping an ongoing mon
   monitor.client = {
     readThread: async () => dormantNotLoadedThread
   };
-  monitor.handleAppServerNotification({
-    method: "thread/status/changed",
-    params: {
-      threadId: thread.id,
-      status: {
-        type: "notLoaded"
-      }
-    }
-  });
+
+  await monitor.confirmDormantNotLoadedThread(thread.id);
 
   assert.equal(monitor.ongoingThreadIds.has(thread.id), true);
   assert.equal(monitor.stoppedAtByThreadId.has(thread.id), false);
+});
 
-  await new Promise((resolve) => setTimeout(resolve, 3200));
+test("confirmed notLoaded with a final answer stops an ongoing monitored thread", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const thread = {
+    ...sampleThread(),
+    status: { type: "active" },
+    updatedAt: Math.floor(Date.now() / 1000)
+  };
+  const finalNotLoadedThread = {
+    ...thread,
+    status: { type: "notLoaded" },
+    turns: [
+      {
+        ...thread.turns[0],
+        status: "completed",
+        items: [
+          {
+            id: "item_final",
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(thread.id, thread);
+  monitor.markThreadLive(thread.id);
+  monitor.client = {
+    readThread: async () => finalNotLoadedThread
+  };
+
+  await monitor.confirmDormantNotLoadedThread(thread.id);
 
   assert.equal(monitor.ongoingThreadIds.has(thread.id), false);
   assert.equal(monitor.stoppedAtByThreadId.has(thread.id), true);
@@ -1162,6 +1215,168 @@ test("tool call server requests become typed tool events", () => {
   assert.equal(event.itemId, "item_tool");
   assert.equal(event.title, "Tool call requested");
   assert.equal(event.detail, "browser_snapshot");
+});
+
+test("monitor fails unsupported dynamic tool server requests instead of hanging the turn", () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const capturedResponses = [];
+  const scheduledThreadRefreshes = [];
+
+  monitor.client = {
+    respondToDynamicToolCallUnsupported(requestId, tool) {
+      capturedResponses.push({ requestId, tool });
+    }
+  };
+  monitor.threads.set("thr_123", {
+    ...sampleThread(),
+    id: "thr_123",
+    cwd: "/tmp/CodexAgentsOffice"
+  });
+  monitor.scheduleThreadRefresh = (threadId) => {
+    scheduledThreadRefreshes.push(threadId);
+  };
+  monitor.scheduleSnapshot = () => {};
+
+  monitor.handleAppServerServerRequest({
+    id: 72,
+    method: "item/tool/call",
+    params: {
+      threadId: "thr_123",
+      turnId: "turn_9",
+      callId: "call_tool",
+      namespace: "browser",
+      tool: "snapshot",
+      arguments: {}
+    }
+  });
+
+  assert.deepEqual(capturedResponses, [{ requestId: 72, tool: "browser.snapshot" }]);
+  assert.deepEqual(scheduledThreadRefreshes, ["thr_123"]);
+  assert.equal(monitor.recentEvents[0].kind, "tool");
+  assert.equal(monitor.recentEvents[0].itemId, "call_tool");
+  assert.equal(monitor.recentEvents[0].detail, "browser.snapshot");
+});
+
+test("newer app-server activity notifications normalize into workload events", () => {
+  const patchEvent = buildDashboardEventFromAppServerMessage(
+    { projectRoot: "/tmp/CodexAgentsOffice" },
+    {
+      method: "item/fileChange/patchUpdated",
+      params: {
+        threadId: "thr_123",
+        turnId: "turn_9",
+        itemId: "item_patch",
+        changes: [
+          {
+            path: "/tmp/CodexAgentsOffice/packages/core/src/live-monitor.ts",
+            kind: "update",
+            diff: "@@"
+          }
+        ]
+      }
+    }
+  );
+  assert.equal(patchEvent.kind, "fileChange");
+  assert.equal(patchEvent.phase, "updated");
+  assert.equal(patchEvent.path, "/tmp/CodexAgentsOffice/packages/core/src/live-monitor.ts");
+
+  const progressEvent = buildDashboardEventFromAppServerMessage(
+    { projectRoot: "/tmp/CodexAgentsOffice" },
+    {
+      method: "item/mcpToolCall/progress",
+      params: {
+        threadId: "thr_123",
+        turnId: "turn_9",
+        itemId: "item_mcp",
+        message: "Fetching records"
+      }
+    }
+  );
+  assert.equal(progressEvent.kind, "tool");
+  assert.equal(progressEvent.itemType, "mcpToolCall");
+  assert.equal(progressEvent.detail, "Fetching records");
+
+  const terminalEvent = buildDashboardEventFromAppServerMessage(
+    { projectRoot: "/tmp/CodexAgentsOffice" },
+    {
+      method: "item/commandExecution/terminalInteraction",
+      params: {
+        threadId: "thr_123",
+        turnId: "turn_9",
+        itemId: "item_cmd",
+        processId: "proc_1",
+        stdin: "y\n"
+      }
+    }
+  );
+  assert.equal(terminalEvent.kind, "command");
+  assert.equal(terminalEvent.title, "Terminal input");
+
+  const hookEvent = buildDashboardEventFromAppServerMessage(
+    { projectRoot: "/tmp/CodexAgentsOffice" },
+    {
+      method: "hook/started",
+      params: {
+        threadId: "thr_123",
+        turnId: "turn_9",
+        run: {
+          id: "hook_1",
+          eventName: "PostToolUse",
+          sourcePath: "/tmp/CodexAgentsOffice/.codex/hooks/check.js",
+          status: "running"
+        }
+      }
+    }
+  );
+  assert.equal(hookEvent.kind, "tool");
+  assert.equal(hookEvent.title, "Hook started");
+  assert.equal(hookEvent.detail, "PostToolUse");
+});
+
+test("newer app-server diagnostic notifications become notes or non-actionable events", () => {
+  const warning = {
+    method: "warning",
+    params: {
+      threadId: "thr_123",
+      message: "Configuration is using a deprecated key"
+    }
+  };
+  const event = buildDashboardEventFromAppServerMessage(
+    { projectRoot: "/tmp/CodexAgentsOffice" },
+    warning
+  );
+  assert.equal(event.kind, "item");
+  assert.equal(event.phase, "failed");
+  assert.equal(event.title, "Codex warning");
+  assert.equal(buildAppServerDiagnosticNote(warning), "Codex warning: Configuration is using a deprecated key");
+
+  const mcpNote = buildAppServerDiagnosticNote({
+    method: "mcpServer/startupStatus/updated",
+    params: {
+      name: "docs",
+      status: "failed",
+      error: "missing command"
+    }
+  });
+  assert.equal(mcpNote, "Codex MCP server status: docs failed: missing command");
+
+  const sandboxEvent = buildDashboardEventFromAppServerMessage(
+    { projectRoot: "/tmp/CodexAgentsOffice" },
+    {
+      method: "windowsSandbox/setupCompleted",
+      params: {
+        mode: "elevated",
+        success: false,
+        error: "setup denied"
+      }
+    }
+  );
+  assert.equal(sandboxEvent.kind, "item");
+  assert.equal(sandboxEvent.phase, "failed");
+  assert.equal(sandboxEvent.detail, "setup denied");
 });
 
 test("turn plan updates summarize the documented explanation and plan payload", () => {
@@ -3216,6 +3431,53 @@ test("initial discovery still subscribes active older threads before their first
   assert.equal(agent.detail, "Still working before the next delta lands.");
 });
 
+test("subscription sync keeps stale ongoing notLoaded threads subscribed", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false,
+    localLimit: 1
+  });
+  const staleOngoingThread = {
+    ...sampleThread(),
+    id: "thr_ongoing_not_loaded",
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor((Date.now() - 60 * 60 * 1000) / 1000),
+    turns: [
+      {
+        id: "turn_live",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_commentary",
+            type: "agentMessage",
+            text: "Still working between visible updates.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+  const resumedThreadIds = [];
+
+  monitor.threads.set(staleOngoingThread.id, staleOngoingThread);
+  monitor.markThreadLive(staleOngoingThread.id);
+  monitor.client = {
+    listLoadedThreads: async () => [],
+    resumeThread: async (threadId) => {
+      resumedThreadIds.push(threadId);
+      return staleOngoingThread;
+    },
+    readThread: async () => staleOngoingThread,
+    unsubscribeThread: async () => "unsubscribed"
+  };
+
+  await monitor.syncThreadSubscriptions();
+
+  assert.deepEqual(resumedThreadIds, [staleOngoingThread.id]);
+  assert.equal(monitor.subscribedThreadIds.has(staleOngoingThread.id), true);
+});
+
 test("initial discovery recovers a loaded current thread missing from cwd-scoped thread/list", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
@@ -3313,6 +3575,50 @@ test("discoverThreads scopes app-server thread listing to the current project ro
       limit: 40
     }
   ]);
+});
+
+test("discovery does not stop ongoing threads missing from the current list page", async () => {
+  const projectRoot = "/tmp/CodexAgentsOffice";
+  const monitor = new ProjectLiveMonitor({
+    projectRoot,
+    includeCloud: false,
+    localLimit: 1
+  });
+  const staleOngoingThread = {
+    ...sampleThread(),
+    id: "thr_missing_ongoing",
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor((Date.now() - 60 * 60 * 1000) / 1000),
+    turns: [
+      {
+        id: "turn_live",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_commentary",
+            type: "agentMessage",
+            text: "Still working even though this list page missed the row.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(staleOngoingThread.id, staleOngoingThread);
+  monitor.markThreadLive(staleOngoingThread.id);
+  monitor.client = {
+    listThreads: async () => [],
+    listLoadedThreads: async () => [],
+    resumeThread: async () => staleOngoingThread,
+    readThread: async () => staleOngoingThread
+  };
+
+  await monitor.discoverThreads();
+
+  assert.equal(monitor.ongoingThreadIds.has(staleOngoingThread.id), true);
+  assert.equal(monitor.stoppedAtByThreadId.has(staleOngoingThread.id), false);
 });
 
 test("recent read-only notLoaded local replies stay current briefly after restart recovery stalls", () => {

@@ -5,6 +5,7 @@ import { cwd, exit } from "node:process";
 import { resolve } from "node:path";
 
 import { runDemoPreview } from "./demo-preview";
+import { runWebQuery } from "./web-query";
 import {
   buildAsepriteExportCommand,
   buildDashboardSnapshot,
@@ -28,6 +29,7 @@ Usage:
   codex-agents-office snapshot [projectRoot] [--history]
   codex-agents-office watch [projectRoot] [--history]
   codex-agents-office web [--port 4181] [--host 127.0.0.1] [projectRoot...]
+  codex-agents-office web query <repo> <recent|last> [scope=local|team] [limit=10] [type=agents|events|all] [--json]
   codex-agents-office demo preview [--port 4181] [--host 127.0.0.1] [--duration 75] [--keep]
   codex-agents-office aseprite inspect [file]
   codex-agents-office presence boss [projectRoot]
@@ -37,6 +39,7 @@ Usage:
 
 Omit project roots for normal fleet-mode web deploys.
 Pass project roots only when you intentionally want a pinned single-project or multi-project view.
+Use web query to read the running local web server's current local or coordinated team snapshot.
 `);
 }
 
@@ -197,6 +200,15 @@ async function runDemo(args: string[]): Promise<void> {
   exit(1);
 }
 
+async function runWeb(args: string[]): Promise<void> {
+  if (args[0] === "query") {
+    await runWebQuery(args.slice(1), usage);
+    return;
+  }
+
+  await startWebServer(args);
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
@@ -216,7 +228,7 @@ async function main(): Promise<void> {
   }
 
   if (command === "web") {
-    await startWebServer(args);
+    await runWeb(args);
     return;
   }
 

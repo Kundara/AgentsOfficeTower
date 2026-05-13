@@ -302,7 +302,7 @@ function extractTurnId(value: unknown): string | undefined {
 
 function extractItemId(value: unknown): string | undefined {
   const record = asRecord(value);
-  return record ? asString(record.itemId ?? record.item_id ?? record.id) : undefined;
+  return record ? asString(record.itemId ?? record.item_id ?? record.callId ?? record.call_id ?? record.id) : undefined;
 }
 
 export function collectPaths(value: unknown, output = new Set<string>()): Set<string> {
@@ -379,11 +379,20 @@ function isLiveAppServerMethod(method: string): boolean {
     || method === "item/reasoning/summaryPartAdded"
     || method === "item/reasoning/textDelta"
     || method === "item/commandExecution/outputDelta"
+    || method === "item/commandExecution/terminalInteraction"
     || method === "item/fileChange/outputDelta"
+    || method === "item/fileChange/patchUpdated"
+    || method === "item/mcpToolCall/progress"
     || method === "item/commandExecution/requestApproval"
     || method === "item/fileChange/requestApproval"
     || method === "item/tool/requestUserInput"
     || method === "item/tool/call"
+    || method === "item/autoApprovalReview/started"
+    || method === "item/autoApprovalReview/completed"
+    || method === "hook/started"
+    || method === "hook/completed"
+    || method === "model/rerouted"
+    || method === "model/verification"
     || method === "turn/plan/updated"
     || method === "turn/diff/updated"
   );
@@ -535,6 +544,91 @@ function summarizeTool(item: Record<string, unknown>, fallbackLabel = "MCP tool"
     phase,
     detail: shorten(tool)
   };
+}
+
+function summarizeDynamicTool(params: Record<string, unknown>): string {
+  const namespace = asString(params.namespace);
+  const tool = asString(params.tool) ?? asString(params.name) ?? "Tool";
+  return namespace ? `${namespace}.${tool}` : tool;
+}
+
+function summarizeHookRun(params: Record<string, unknown>): string {
+  const run = asRecord(params.run);
+  return shorten(
+    asString(run?.statusMessage)
+    ?? asString(run?.eventName)
+    ?? asString(run?.sourcePath)
+    ?? "Hook"
+  );
+}
+
+function summarizeGuardianAction(action: unknown): string {
+  const record = asRecord(action);
+  const type = asString(record?.type);
+  if (!record || !type) {
+    return "Approval review";
+  }
+  if (type === "command") {
+    return shorten(asString(record.command) ?? "Command approval review");
+  }
+  if (type === "execve") {
+    const argv = Array.isArray(record.argv)
+      ? record.argv.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    return shorten([asString(record.program), ...argv].filter(Boolean).join(" ") || "Exec approval review");
+  }
+  if (type === "applyPatch") {
+    const files = Array.isArray(record.files)
+      ? record.files.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    return files.length === 1 ? shorten(files[0]) : `${files.length || "Patch"} file approval review`;
+  }
+  if (type === "networkAccess") {
+    return shorten(asString(record.target) ?? asString(record.host) ?? "Network approval review");
+  }
+  if (type === "mcpToolCall") {
+    const server = asString(record.server);
+    const tool = asString(record.toolTitle) ?? asString(record.toolName);
+    return shorten([server, tool].filter(Boolean).join(".") || "MCP tool approval review");
+  }
+  if (type === "requestPermissions") {
+    return shorten(asString(record.reason) ?? "Permission approval review");
+  }
+  return titleCaseIdentifier(type);
+}
+
+function summarizeRawResponseItem(item: Record<string, unknown> | null): string {
+  if (!item) {
+    return "Raw response item";
+  }
+  const type = asString(item.type) ?? "response item";
+  const text =
+    asString(item.text)
+    ?? asString(item.output_text)
+    ?? asString(item.name)
+    ?? asString(item.call_id)
+    ?? asString(item.id);
+  return shorten(text ?? titleCaseIdentifier(type));
+}
+
+function rateLimitDetail(params: Record<string, unknown>): string {
+  const rateLimits = asRecord(params.rateLimits);
+  const reached = asString(rateLimits?.rateLimitReachedType);
+  const limitName = asString(rateLimits?.limitName);
+  if (reached && limitName) {
+    return `${limitName}: ${reached}`;
+  }
+  return reached ?? limitName ?? "Rate limits updated";
+}
+
+function diagnosticMessage(params: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = asString(params[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
 }
 
 function eventBase(
@@ -795,6 +889,68 @@ export function buildDashboardEventFromAppServerMessage(
   const requestId = "id" in message ? String(message.id) : undefined;
 
   switch (method) {
+    case "error": {
+      const detail = diagnosticMessage(params, "message", "error") || "Codex app-server error";
+      return eventBase(context, method, params, {
+        kind: "item",
+        phase: "failed",
+        title: "Codex error",
+        detail: shorten(detail)
+      });
+    }
+    case "warning":
+    case "guardianWarning": {
+      const detail = diagnosticMessage(params, "message") || "Codex warning";
+      return eventBase(context, method, params, {
+        kind: "item",
+        phase: "failed",
+        title: method === "guardianWarning" ? "Guardian warning" : "Codex warning",
+        detail: shorten(detail)
+      });
+    }
+    case "configWarning": {
+      const detail = diagnosticMessage(params, "details", "summary") || "Configuration warning";
+      return eventBase(context, method, params, {
+        kind: "item",
+        phase: "failed",
+        title: "Config warning",
+        detail: shorten(detail),
+        path: asString(params.path) ?? null
+      });
+    }
+    case "deprecationNotice": {
+      const detail = diagnosticMessage(params, "details", "summary") || "Deprecation notice";
+      return eventBase(context, method, params, {
+        kind: "item",
+        phase: "updated",
+        title: "Deprecation notice",
+        detail: shorten(detail)
+      });
+    }
+    case "thread/started":
+    case "thread/archived":
+    case "thread/unarchived":
+    case "thread/closed":
+      return eventBase(context, method, params, {
+        kind: "status",
+        phase:
+          method === "thread/started" ? "started"
+          : method === "thread/archived" || method === "thread/closed" ? "completed"
+          : "updated",
+        title:
+          method === "thread/started" ? "Thread started"
+          : method === "thread/archived" ? "Thread archived"
+          : method === "thread/unarchived" ? "Thread unarchived"
+          : "Thread closed",
+        detail: extractThreadId(params) ?? method
+      });
+    case "thread/tokenUsage/updated":
+      return eventBase(context, method, params, {
+        kind: "status",
+        phase: "updated",
+        title: "Token usage updated",
+        detail: "Token usage updated"
+      });
     case "thread/status/changed": {
       const status = asRecord(params.status);
       const type = asString(status?.type) ?? "unknown";
@@ -911,6 +1067,15 @@ export function buildDashboardEventFromAppServerMessage(
         title: "Command output",
         detail: shorten(asString(params.delta) ?? asString(params.textDelta) ?? "Command output")
       });
+    case "item/commandExecution/terminalInteraction":
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        kind: "command",
+        phase: "updated",
+        title: "Terminal input",
+        detail: shorten(asString(params.stdin) ?? "Terminal input"),
+        command: asString(params.stdin)
+      });
     case "item/fileChange/outputDelta":
       return eventBase(context, method, params, {
         itemId: extractItemId(params),
@@ -919,6 +1084,53 @@ export function buildDashboardEventFromAppServerMessage(
         title: "Patch updated",
         detail: shorten(asString(params.delta) ?? asString(params.textDelta) ?? "Patch output")
       });
+    case "item/fileChange/patchUpdated": {
+      const change = summarizeFileChange({ changes: params.changes }, primaryPath(params));
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        kind: "fileChange",
+        phase: "updated",
+        title: "Patch updated",
+        detail: change.detail,
+        path: change.path,
+        action: change.action,
+        isImage: change.isImage,
+        linesAdded: change.linesAdded,
+        linesRemoved: change.linesRemoved
+      });
+    }
+    case "item/mcpToolCall/progress":
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        itemType: "mcpToolCall",
+        kind: "tool",
+        phase: "updated",
+        title: "MCP tool progress",
+        detail: shorten(asString(params.message) ?? "MCP tool progress")
+      });
+    case "hook/started":
+    case "hook/completed":
+      return eventBase(context, method, params, {
+        itemType: "hook",
+        kind: "tool",
+        phase: method === "hook/completed" ? "completed" : "started",
+        title: method === "hook/completed" ? "Hook completed" : "Hook started",
+        detail: summarizeHookRun(params),
+        path: primaryPath(params.run)
+      });
+    case "item/autoApprovalReview/started":
+    case "item/autoApprovalReview/completed": {
+      const review = asRecord(params.review);
+      const actionDetail = summarizeGuardianAction(params.action);
+      const riskLevel = asString(review?.riskLevel);
+      return eventBase(context, method, params, {
+        itemId: extractItemId(params),
+        kind: "item",
+        phase: method.endsWith("/completed") ? "completed" : "started",
+        title: method.endsWith("/completed") ? "Approval review completed" : "Approval review started",
+        detail: shorten(riskLevel ? `${actionDetail} (${riskLevel})` : actionDetail)
+      });
+    }
     case "item/commandExecution/requestApproval": {
       const networkApprovalContext = asRecord(params.networkApprovalContext) ?? null;
       return eventBase(context, method, params, {
@@ -1010,11 +1222,87 @@ export function buildDashboardEventFromAppServerMessage(
       return eventBase(context, method, params, {
         requestId,
         itemId: extractItemId(params),
+        itemType: "dynamicToolCall",
         kind: "tool",
         phase: "started",
         title: "Tool call requested",
-        detail: shorten(asString(params.tool) ?? asString(params.name) ?? "Tool")
+        detail: shorten(summarizeDynamicTool(params))
       });
+    case "rawResponseItem/completed": {
+      const item = asRecord(params.item);
+      return eventBase(context, method, params, {
+        itemId: extractItemId(item ?? params),
+        itemType: asString(item?.type) ?? "responseItem",
+        kind: "item",
+        phase: "completed",
+        title: "Response item completed",
+        detail: summarizeRawResponseItem(item)
+      });
+    }
+    case "model/rerouted":
+      return eventBase(context, method, params, {
+        kind: "item",
+        phase: "updated",
+        title: "Model rerouted",
+        detail: shorten(`${asString(params.fromModel) ?? "model"} -> ${asString(params.toModel) ?? "model"}`)
+      });
+    case "model/verification":
+      return eventBase(context, method, params, {
+        kind: "item",
+        phase: "updated",
+        title: "Model verification",
+        detail: asStringArray(params.verifications).join(", ") || "Model verification"
+      });
+    case "mcpServer/startupStatus/updated": {
+      const status = asString(params.status) ?? "updated";
+      return eventBase(context, method, params, {
+        kind: "tool",
+        phase:
+          status === "failed" || status === "cancelled" ? "failed"
+          : status === "ready" ? "completed"
+          : "started",
+        title:
+          status === "failed" ? "MCP server failed"
+          : status === "ready" ? "MCP server ready"
+          : "MCP server starting",
+        detail: shorten(asString(params.error) ?? asString(params.name) ?? status)
+      });
+    }
+    case "mcpServer/oauthLogin/completed": {
+      const success = params.success === true;
+      return eventBase(context, method, params, {
+        kind: "tool",
+        phase: success ? "completed" : "failed",
+        title: success ? "MCP login completed" : "MCP login failed",
+        detail: shorten(asString(params.error) ?? asString(params.name) ?? "MCP OAuth")
+      });
+    }
+    case "account/rateLimits/updated":
+      return eventBase(context, method, params, {
+        kind: "status",
+        phase: "updated",
+        title: "Rate limits updated",
+        detail: rateLimitDetail(params)
+      });
+    case "windows/worldWritableWarning": {
+      const sampleCount = Array.isArray(params.samplePaths) ? params.samplePaths.length : 0;
+      const extraCount = typeof params.extraCount === "number" && Number.isFinite(params.extraCount) ? params.extraCount : 0;
+      return eventBase(context, method, params, {
+        kind: "item",
+        phase: "failed",
+        title: "Windows permission warning",
+        detail: `${sampleCount + extraCount} world-writable path${sampleCount + extraCount === 1 ? "" : "s"} found`
+      });
+    }
+    case "windowsSandbox/setupCompleted": {
+      const success = params.success === true;
+      return eventBase(context, method, params, {
+        kind: "item",
+        phase: success ? "completed" : "failed",
+        title: success ? "Windows sandbox ready" : "Windows sandbox failed",
+        detail: shorten(asString(params.error) ?? asString(params.mode) ?? "Windows sandbox setup")
+      });
+    }
     case "serverRequest/resolved": {
       const pending = context.pendingRequest ?? null;
       const resolvedRequestId = asString(params.requestId) ?? requestId;
@@ -1037,6 +1325,100 @@ export function buildDashboardEventFromAppServerMessage(
         title: "Request resolved",
         detail: resolvedRequestId ?? method
       });
+    }
+    default:
+      return null;
+  }
+}
+
+export function appServerDiagnosticNotePrefix(method: string): string {
+  switch (method) {
+    case "error":
+      return "Codex app-server error:";
+    case "warning":
+      return "Codex warning:";
+    case "guardianWarning":
+      return "Codex guardian warning:";
+    case "configWarning":
+      return "Codex config warning:";
+    case "deprecationNotice":
+      return "Codex deprecation notice:";
+    case "mcpServer/startupStatus/updated":
+      return "Codex MCP server status:";
+    case "mcpServer/oauthLogin/completed":
+      return "Codex MCP login:";
+    case "account/rateLimits/updated":
+      return "Codex rate limit:";
+    case "windows/worldWritableWarning":
+      return "Codex Windows permission warning:";
+    case "windowsSandbox/setupCompleted":
+      return "Codex Windows sandbox:";
+    default:
+      return `Codex ${method}:`;
+  }
+}
+
+export function buildAppServerDiagnosticNote(message: AppServerNotification): string | null {
+  const params = asRecord(message.params) ?? {};
+  const prefix = appServerDiagnosticNotePrefix(message.method);
+  switch (message.method) {
+    case "error": {
+      const detail = diagnosticMessage(params, "message", "error") || "Unknown app-server error";
+      return `${prefix} ${shorten(detail, 160)}`;
+    }
+    case "warning": {
+      const detail = diagnosticMessage(params, "message") || "Warning";
+      return `${prefix} ${shorten(detail, 160)}`;
+    }
+    case "guardianWarning": {
+      const detail = diagnosticMessage(params, "message") || "Guardian warning";
+      return `${prefix} ${shorten(detail, 160)}`;
+    }
+    case "configWarning": {
+      const summary = diagnosticMessage(params, "summary") || "Configuration warning";
+      const details = diagnosticMessage(params, "details");
+      return `${prefix} ${shorten(details ? `${summary}: ${details}` : summary, 160)}`;
+    }
+    case "deprecationNotice": {
+      const summary = diagnosticMessage(params, "summary") || "Deprecation notice";
+      const details = diagnosticMessage(params, "details");
+      return `${prefix} ${shorten(details ? `${summary}: ${details}` : summary, 160)}`;
+    }
+    case "mcpServer/startupStatus/updated": {
+      const status = asString(params.status);
+      if (status !== "failed" && status !== "cancelled") {
+        return null;
+      }
+      const name = asString(params.name) ?? "MCP server";
+      const error = asString(params.error);
+      return `${prefix} ${shorten(error ? `${name} ${status}: ${error}` : `${name} ${status}`, 160)}`;
+    }
+    case "mcpServer/oauthLogin/completed": {
+      if (params.success === true) {
+        return null;
+      }
+      const name = asString(params.name) ?? "MCP server";
+      const error = asString(params.error);
+      return `${prefix} ${shorten(error ? `${name}: ${error}` : `${name} failed`, 160)}`;
+    }
+    case "account/rateLimits/updated": {
+      const detail = rateLimitDetail(params);
+      return detail === "Rate limits updated" ? null : `${prefix} ${shorten(detail, 160)}`;
+    }
+    case "windows/worldWritableWarning": {
+      const sampleCount = Array.isArray(params.samplePaths) ? params.samplePaths.length : 0;
+      const extraCount = typeof params.extraCount === "number" && Number.isFinite(params.extraCount) ? params.extraCount : 0;
+      if (sampleCount + extraCount <= 0 && params.failedScan !== true) {
+        return null;
+      }
+      const scanDetail = params.failedScan === true ? " scan incomplete" : "";
+      return `${prefix} ${sampleCount + extraCount} world-writable path${sampleCount + extraCount === 1 ? "" : "s"} found${scanDetail}`;
+    }
+    case "windowsSandbox/setupCompleted": {
+      if (params.success === true) {
+        return null;
+      }
+      return `${prefix} ${shorten(asString(params.error) ?? "setup failed", 160)}`;
     }
     default:
       return null;

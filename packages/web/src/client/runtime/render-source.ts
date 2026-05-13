@@ -217,6 +217,24 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         if (Object.prototype.hasOwnProperty.call(eventIconUrls, method)) {
           return eventIconUrls[method];
         }
+        if (method === "item/fileChange/patchUpdated") {
+          return eventIconUrls["item/fileChange/outputDelta"] || null;
+        }
+        if (method === "item/commandExecution/terminalInteraction") {
+          return eventIconUrls["item/commandExecution/outputDelta"] || null;
+        }
+        if (
+          method === "item/mcpToolCall/progress"
+          || method === "mcpServer/startupStatus/updated"
+          || method === "mcpServer/oauthLogin/completed"
+          || method === "hook/started"
+          || method === "hook/completed"
+        ) {
+          return eventIconUrls["item/tool/call"] || null;
+        }
+        if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
+          return eventIconUrls["item/commandExecution/requestApproval"] || null;
+        }
         if (method === "turn/interrupted" || method === "turn/failed") {
           return eventIconUrls["turn/completed"] || null;
         }
@@ -1405,9 +1423,8 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const seatIndex = index % 4;
         const sofa = layout.sofas[Math.floor(seatIndex / 2)];
         const seatWithinSofa = seatIndex % 2;
-        const avatar = avatarForAgent(agent);
-        const avatarScale = compact ? 1.25 : 1.5;
-        const avatarHeight = Math.round(avatar.h * avatarScale);
+        const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5);
+        const avatarHeight = avatarSize.height;
         const sofaWidth = Number(sofa?.sprite?.w) || layout.sofaWidth;
         const seatOffsetRatio = seatWithinSofa === 0 ? 0.18 : 0.62;
         const x = sofa.x + Math.round(sofaWidth * seatOffsetRatio);
@@ -1449,10 +1466,10 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const SEATED_AVATAR_DEPTH_BIAS = 760;
         const WORKSTATION_FRONT_DEPTH_BIAS = 620;
         const state = agent?.state || "idle";
-        const avatar = agent ? avatarForAgent(agent) : null;
-        const avatarScale = compact ? 1.25 : 1.5;
-        const avatarWidth = avatar ? avatar.w * avatarScale : 0;
-        const avatarHeight = avatar ? avatar.h * avatarScale : 0;
+        const avatarSize = agent ? avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5) : null;
+        const avatar = avatarSize ? avatarSize.avatar : null;
+        const avatarWidth = avatarSize ? avatarSize.width : 0;
+        const avatarHeight = avatarSize ? avatarSize.height : 0;
         const mirrored = options.mirrored === true;
         const chair = agent ? chairSpriteForAgent(agent) : pixelOffice.chairs[0];
         const deskSprite = pixelOffice.props.cubiclePanelLeft;

@@ -28,6 +28,8 @@ import type {
 import {
   asRecord,
   asString,
+  appServerDiagnosticNotePrefix,
+  buildAppServerDiagnosticNote,
   buildDashboardEventFromAppServerMessage,
   buildNeedsUserStateFromServerRequest,
   buildThreadReadAgentMessageEvent,
@@ -49,6 +51,7 @@ import {
 import { RECENT_DONE_GRACE_MS } from "./workload";
 
 export {
+  buildAppServerDiagnosticNote,
   buildDashboardEventFromAppServerMessage,
   buildThreadReadAgentMessageEvent,
   hasEquivalentRecentMessageEvent,
@@ -530,6 +533,9 @@ export class ProjectLiveMonitor extends EventEmitter {
 
       for (const threadId of Array.from(this.threads.keys())) {
         if (!projectThreadsById.has(threadId)) {
+          if (this.ongoingThreadIds.has(threadId)) {
+            continue;
+          }
           this.markThreadStopped(threadId);
         }
       }
@@ -578,14 +584,15 @@ export class ProjectLiveMonitor extends EventEmitter {
       .filter((thread) => (
         !this.stoppedAtByThreadId.has(thread.id)
         && (
-        thread.status.type === "active"
-        || isOngoingThread(thread)
-        || (now - thread.updatedAt * 1000) <= ACTIVE_SUBSCRIPTION_WINDOW_MS
+          this.ongoingThreadIds.has(thread.id)
+          || thread.status.type === "active"
+          || isOngoingThread(thread)
+          || (now - thread.updatedAt * 1000) <= ACTIVE_SUBSCRIPTION_WINDOW_MS
         )
       ))
       .sort((left, right) => {
-        const leftActive = left.status.type === "active" ? 1 : 0;
-        const rightActive = right.status.type === "active" ? 1 : 0;
+        const leftActive = left.status.type === "active" || this.ongoingThreadIds.has(left.id) ? 1 : 0;
+        const rightActive = right.status.type === "active" || this.ongoingThreadIds.has(right.id) ? 1 : 0;
         return rightActive - leftActive || right.updatedAt - left.updatedAt;
       })
       .slice(0, MAX_SUBSCRIBED_THREADS);
@@ -765,8 +772,19 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   private handleAppServerNotification(notification: AppServerNotification): void {
+    const diagnosticNote = buildAppServerDiagnosticNote(notification);
     if (!this.belongsToProject(notification)) {
+      if (!extractThreadId(notification.params) && diagnosticNote) {
+        this.clearMatchingNote(appServerDiagnosticNotePrefix(notification.method));
+        this.addNote(diagnosticNote);
+        this.scheduleSnapshot();
+      }
       return;
+    }
+
+    if (diagnosticNote) {
+      this.clearMatchingNote(appServerDiagnosticNotePrefix(notification.method));
+      this.addNote(diagnosticNote);
     }
 
     const threadId = extractThreadId(notification.params);
@@ -877,6 +895,17 @@ export class ProjectLiveMonitor extends EventEmitter {
     );
     if (event) {
       this.pushRecentEvent(event);
+    }
+
+    if (request.method === "item/tool/call") {
+      const numericRequestId = request.id;
+      const requestParams = asRecord(request.params);
+      const tool = asString(requestParams?.tool);
+      const namespace = asString(requestParams?.namespace);
+      this.client?.respondToDynamicToolCallUnsupported(
+        numericRequestId,
+        namespace && tool ? `${namespace}.${tool}` : tool
+      );
     }
 
     const threadId = extractThreadId(request.params);
@@ -1087,14 +1116,23 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     await this.refreshThread(threadId);
     const thread = this.threads.get(threadId) ?? null;
-    if (!thread || isOngoingThread(thread)) {
+    if (!thread) {
+      return;
+    }
+    if (isOngoingThread(thread)) {
+      this.markThreadLive(threadId);
       return;
     }
     if (thread.status.type !== "notLoaded") {
       return;
     }
 
-    this.markThreadStopped(threadId);
+    const latestMessage = latestThreadAgentMessage(thread);
+    if (latestMessage?.phase === "final_answer") {
+      this.markThreadStopped(threadId);
+    } else {
+      this.markThreadLive(threadId);
+    }
     this.scheduleSnapshot();
   }
 }

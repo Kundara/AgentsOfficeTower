@@ -63,9 +63,12 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
           if (agent.statusText === "notLoaded") {
             if (agent.state === "done") {
               const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
-              return agent.isCurrent === true
-                && Number.isFinite(updatedAt)
-                && Date.now() - updatedAt <= Math.max(workstationDoneGraceMs(agent), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS);
+              return agent.isOngoing === true
+                || (
+                  agent.isCurrent === true
+                  && Number.isFinite(updatedAt)
+                  && Date.now() - updatedAt <= Math.max(workstationDoneGraceMs(agent), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS)
+                );
             }
             return agent.isOngoing === true
               || agent.isCurrent === true
@@ -109,6 +112,9 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
 
       function isFinishedLeadForRec(agent) {
         return isRecentLeadCandidate(agent)
+          && agent.isCurrent !== true
+          && agent.isOngoing !== true
+          && !isRuntimeActiveLocalAgent(agent)
           && !shouldSeatAtWorkstation(agent)
           && (agent.state === "idle" || agent.state === "done");
       }

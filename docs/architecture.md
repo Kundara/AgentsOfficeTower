@@ -16,6 +16,8 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](./integrati
 
    In this codebase, that still means we need a runnable Codex executable. We prefer `codex` on `PATH`, allow `CODEX_CLI_PATH` overrides, fall back on native Windows to `wsl.exe --exec codex` when the CLI is only installed inside WSL, fall back to the macOS app bundle binary when present, and on Windows can extract the Store app's packaged `codex.exe` into a local cache and run that copy. When both native/WSL CLI and app runtimes exist, CLI still decides unless the override is set.
 
+   The app-server protocol is version-specific, so this repo also includes `npm run check:codex-protocol`. That check regenerates the installed `codex app-server generate-ts --experimental` bindings into a temporary directory and compares the server notification/request method set against the reviewed allowlist.
+
    Source: [App Server](https://developers.openai.com/codex/app-server)
 
 2. `codex cloud list --json`
@@ -65,9 +67,11 @@ The live browser path now uses a hybrid approach:
 - fresh unhydrated `notLoaded` desktop threads with no readable turns are treated as short-lived planning state for about 8 seconds after a user prompt; the completed read-only fallback is capped to the 3-second finished cooldown so a completed thread does not look active several minutes later
 - active `thread/list` rows are always retained in the tracked local-thread set even when they are older than the normal recent-thread cutoff, so a live desktop session is subscribed on startup before its next visible delta
 - active and recent threads are resumed on the observer connection so the app can receive live `turn/*`, `item/*`, approval, input, and `serverRequest/resolved` events
-- observer runtime unload notifications such as `thread/closed` or `thread/status/changed -> notLoaded` are treated as subscription state, not as proof that the underlying thread resolved; `notLoaded` now gets a short 3-second confirmation cooldown before the monitor clears ongoing occupancy
+- newer app-server notifications such as patch updates, MCP progress, terminal interaction, hook runs, guardian auto-review, model reroutes, warnings, MCP startup failures, rate-limit notices, and Windows sandbox warnings now normalize either into typed dashboard events or snapshot notes instead of disappearing silently
+- if the observer ever receives an `item/tool/call` dynamic-tool server request, it sends an explicit unsuccessful app-server response because Agents Office observes workload but does not execute arbitrary dynamic tools for Codex turns
+- observer runtime unload notifications such as `thread/closed` or `thread/status/changed -> notLoaded` are treated as subscription state, not as proof that the underlying thread resolved; a `notLoaded` reread only clears ongoing occupancy when it exposes a final answer
 - non-final `turn/completed` and `turn/interrupted` events are treated as update boundaries, not stop signals, so desktop sessions stay desk-owned between assistant progress messages until a final-answer message or hard terminal state arrives
-- quiet desk-live local work can remain current for about 3 minutes when it has recent non-final activity, is still on a live subscription, or is sitting in a transient `notLoaded` transport state, so slow Codex thinking gaps do not bounce the avatar into rest
+- quiet desk-live local work can remain current for about 3 minutes as a fallback when it has recent non-final activity, is still on a live subscription, or is sitting in a transient `notLoaded` transport state; explicit live-monitor `isOngoing` state is stronger and keeps the workstation until a final answer or hard terminal state
 - first-hydration desktop state is now treated as baseline occupancy instead of fresh activity when the thread timestamps are already historical, so delayed observer attaches do not replay stale message toasts or late doorway-entry motion for older Codex sessions
 - slow desktop `thread/resume` attaches now happen in the background so the web server does not block initial rendering on them
 - desktop-backed `thread/resume` can still take tens of seconds, so the observer keeps a wider 60-second attach budget before it marks that live path degraded and falls back to read-only behavior
@@ -136,6 +140,7 @@ Sources:
   - all discovered workspaces stay live-monitored at once
   - reserved multiplayer status surface for a future secured sync transport
   - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; those shared-room credentials now restore from machine-local Agents Office user data on launch, each local floor exposes a persisted `Shared` toggle that controls whether that project is broadcast into the room without forcing a floor-shell rebuild, and same-machine browser plus VS Code viewers now share one stored multiplayer device identity so self-peers can be ignored cleanly
+  - read-only `web query` CLI access to the running local web server for bounded `recent` and `last` lookups by repo name, with `local` scope reading the live server fleet and `team` scope reading the latest coordinated shared-room browser cache when available
   - that same Settings popup now includes an image-only left/right hat picker whose selection applies immediately to all local agents and is preserved in machine-local app settings
   - remote shared-room activity now merges client-side onto matching local workspaces when possible, and otherwise stays visible as remote-only floors with a 1-hour cooldown before disappearing after updates stop
   - shared-room payloads now also carry the broadcaster's selected `hatId`, so remote peers stay visually distinct without inventing peer-specific palette logic
@@ -143,12 +148,13 @@ Sources:
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
 - local threads remain seated while the thread is still ongoing, even if they pause between visible events or the latest turn already looks done
 - session-oriented browser views now also treat local `isOngoing` threads as busy, so quiet in-progress Codex work stays consistent between the map, recent-session lists, and other current-workload summaries
-- transient `status.type = notLoaded` unloads now wait about 3 seconds for a confirming reread before a local thread is allowed to lose ongoing occupancy
-- recent non-final, subscribed, or transiently `notLoaded` desk-live locals now also keep their workstation for about 3 minutes after the last update before the browser lets them cool into rec-room behavior
+- transient `status.type = notLoaded` unloads now reread before release, and an already observed ongoing local thread only loses ongoing occupancy when that reread finds a final answer
+- recent non-final, subscribed, or transiently `notLoaded` desk-live locals still keep their workstation for about 3 minutes as a fallback after the last update, while explicit ongoing locals stay seated without that age cap
 - once a top-level thread actually stops, it keeps its workstation for a short 3-second cooldown so the final reply remains readable before it cools into rec-area visibility
 - stale local `notLoaded` sessions no longer occupy desks just because they are still recent; workstation seating now requires true ongoing work or the explicit stop cooldown
 - after that grace window, only recent top-level lead sessions cool down into the rec area; finished subagents despawn instead of idling there
 - lead sessions with active subagents now move into a compact stacked left-side boss-office column, with each boss workstation rendered inside its own small office shell
+- spawned subagents render at 75% of regular agent avatar size while sharing the same workstation placement, depth sorting, hats, and hover anchors as ordinary desk agents
 - session panel includes a durable cross-project "needs you" queue for approval/input waits
   these entries now come from typed request hooks, not from regexes over session detail
   - session cards expose provenance/confidence so Codex-native, Claude transcript, Claude hook-backed, and Cursor API-backed state stay distinguishable
@@ -207,9 +213,11 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
 - `packages/web/src/server/server-metadata.ts`
   Builds startup fleet placeholders and the shared `/api/server-meta` payload shape.
 - `packages/web/src/server/fleet-live-service.ts`
-  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, persists machine-local browser settings such as Cursor credentials, shared-room config, and selected hat state, exposes disabled multiplayer status for future secured sync work, and fans snapshots out over SSE. Fleet-wide cloud task polling still lives here so `codex cloud list` runs once per fleet refresh cycle instead of once per project monitor, with shared backoff when the upstream cloud surface rate-limits. Startup now publishes a placeholder fleet immediately and warms project monitors in the background.
+  Owns `ProjectLiveMonitor` instances, refreshes the active project set, publishes fleet snapshots, exposes the live bound project list for `/api/server-meta`, persists machine-local browser settings such as Cursor credentials, shared-room config, and selected hat state, exposes disabled multiplayer status for future secured sync work, caches the latest browser-coordinated shared-room fleet for read-only CLI queries, and fans snapshots out over SSE. Fleet-wide cloud task polling still lives here so `codex cloud list` runs once per fleet refresh cycle instead of once per project monitor, with shared backoff when the upstream cloud surface rate-limits. Startup now publishes a placeholder fleet immediately and warms project monitors in the background.
 - `packages/web/src/server/router.ts`
-  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, machine-local browser settings, and room scaffolding. Fleet meta and home routes now answer immediately from the current in-memory project list instead of blocking on project discovery.
+  Maps routes to handlers for HTML, static assets, project image previews, fleet/meta APIs, refresh, appearance cycling, machine-local browser settings, read-only web CLI queries, browser-coordinated team-fleet cache updates, and room scaffolding. Fleet meta and home routes now answer immediately from the current in-memory project list instead of blocking on project discovery.
+- `packages/web/src/server/web-cli-query.ts`
+  Implements the bounded read-only query contract for `web query`: repo matching, local/team source selection, `recent`/`last` commands, agent/event filters, result projection, and shared-data guards.
 - `packages/web/src/render/render-html.ts`
   Builds the HTML shell and injects the browser assets.
 - `packages/web/src/client/index.ts`
@@ -229,7 +237,7 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
   - `navigation-source.ts`: navigation grid, avatar routing, per-avatar Pixi node creation including hats, scene hit-target focus, terminal/fleet summaries, and the durable "Needs You" queue.
   - `ui-source.ts`: browser render loop, DOM patching, fleet ingestion, and session-card rendering.
 - `packages/web/src/client/multiplayer-source.ts`
-  Holds the browser-side PartyKit room sync overlay, shared-room draft/input behavior, per-project share preferences, remote-only floor cooldown memory, and remote fleet merge helpers so the realtime room transport stays outside the main renderer script.
+  Holds the browser-side PartyKit room sync overlay, shared-room draft/input behavior, per-project share preferences, remote-only floor cooldown memory, remote fleet merge helpers, and the debounced same-origin post of the already-coordinated shared-room fleet back to the local server for `scope=team` CLI reads.
 - `packages/party`
   Holds the deployable PartyKit room relay that validates and rebroadcasts the browser `fleet-sync` payloads over shared room sockets.
 - `packages/web/src/client/toast-source.ts`

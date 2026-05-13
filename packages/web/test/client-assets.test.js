@@ -150,7 +150,7 @@ test("client runtime keeps current local desk-live work on a workstation through
   );
   assert.match(
     seatingSource,
-    /return agent\.isCurrent === true\n\s+&& Number\.isFinite\(updatedAt\)\n\s+&& Date\.now\(\) - updatedAt <= Math\.max\(workstationDoneGraceMs\(agent\), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS\);/
+    /return agent\.isOngoing === true\n\s+\|\| \(\n\s+agent\.isCurrent === true\n\s+&& Number\.isFinite\(updatedAt\)\n\s+&& Date\.now\(\) - updatedAt <= Math\.max\(workstationDoneGraceMs\(agent\), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS\)\n\s+\);/
   );
   assert.match(
     seatingSource,
@@ -189,6 +189,10 @@ test("client runtime seats current local workload even when its latest item summ
     seatingSource,
     /if \(agent\.isOngoing === true\) {\n\s+return true;\n\s+}\n\s+if \(agent\.isCurrent === true\) {\n\s+return true;\n\s+}\n\s+if \(agent\.state === "done"\) {/
   );
+  assert.match(
+    seatingSource,
+    /function isFinishedLeadForRec\(agent\) {\n\s+return isRecentLeadCandidate\(agent\)\n\s+&& agent\.isCurrent !== true\n\s+&& agent\.isOngoing !== true/
+  );
 });
 
 test("client runtime gives finished subagents a longer workstation cooldown than leads", () => {
@@ -200,6 +204,18 @@ test("client runtime gives finished subagents a longer workstation cooldown than
     seatingSource,
     /return agent && agent\.parentThreadId\s+\? SUBAGENT_DONE_WORKSTATION_GRACE_MS\s+\: TOP_LEVEL_DONE_WORKSTATION_GRACE_MS;/
   );
+});
+
+test("client runtime renders subagent avatars at 75 percent of regular agents", () => {
+  const layoutSource = readRuntimeSource("layout-source.ts");
+  const renderSource = readRuntimeSource("render-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+
+  assert.match(layoutSource, /return normalizedBaseScale \* \(agent && agent\.parentThreadId \? 0\.75 : 1\);/);
+  assert.ok(renderSource.includes("const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5);"));
+  assert.ok(renderSource.includes("const avatarSize = agent ? avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5) : null;"));
+  assert.ok(sceneSource.includes("const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1 : 1.08);"));
+  assert.doesNotMatch(sceneSource, /avatarForAgent\(agent\)\.[wh] \* \(compact \? 1 : 1\.08\)/);
 });
 
 test("client runtime only keeps ordinary local desks for current workload", () => {

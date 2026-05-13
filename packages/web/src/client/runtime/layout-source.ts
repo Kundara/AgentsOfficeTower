@@ -1339,6 +1339,22 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         return roster[stableHash(\`\${agent.appearance.id}:\${agentRole(agent)}:\${agent.id}\`) % roster.length];
       }
 
+      function avatarVisualScaleForAgent(agent, baseScale = 1) {
+        const normalizedBaseScale = Number.isFinite(baseScale) ? Number(baseScale) : 1;
+        return normalizedBaseScale * (agent && agent.parentThreadId ? 0.75 : 1);
+      }
+
+      function avatarVisualSizeForAgent(agent, baseScale = 1) {
+        const avatar = avatarForAgent(agent);
+        const scale = avatarVisualScaleForAgent(agent, baseScale);
+        return {
+          avatar,
+          scale,
+          width: Math.round(avatar.w * scale),
+          height: Math.round(avatar.h * scale)
+        };
+      }
+
       function escapeHtml(value) {
         return String(value)
           .replaceAll("&", "&amp;")

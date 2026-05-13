@@ -1964,9 +1964,12 @@ export function startClientApp(): void {
       let multiplayerModulePromise = null;
       let multiplayerBroadcastTimer = null;
       let multiplayerPruneTimer = null;
+      let webCliTeamFleetSyncTimer = null;
+      let pendingWebCliTeamFleet = null;
       const MULTIPLAYER_STALE_MS = 30000;
       const MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS = 60 * 60 * 1000;
       const MULTIPLAYER_BROADCAST_DEBOUNCE_MS = 700;
+      const WEB_CLI_TEAM_FLEET_SYNC_DEBOUNCE_MS = 1000;
       const MULTIPLAYER_NICKNAME_MAX_LENGTH = 12;
 
       function sanitizeMultiplayerField(value) {
@@ -2260,6 +2263,66 @@ export function startClientApp(): void {
         const notes = ensureSnapshotNotes(snapshot).filter((note) => note !== sharedProjectCooldownNote());
         notes.push(sharedProjectCooldownNote());
         snapshot.notes = notes;
+      }
+
+      function snapshotHasSharedData(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
+          return false;
+        }
+        if (snapshot.sharedRemoteOnly === true) {
+          return true;
+        }
+        if (Array.isArray(snapshot.sharedParticipantLabels) && snapshot.sharedParticipantLabels.length > 0) {
+          return true;
+        }
+        return Array.isArray(snapshot.agents) && snapshot.agents.some((agent) => agent && agent.network);
+      }
+
+      function fleetHasSharedData(fleet) {
+        return Boolean(
+          fleet
+          && Array.isArray(fleet.projects)
+          && fleet.projects.some((snapshot) => snapshotHasSharedData(snapshot))
+        );
+      }
+
+      function scheduleWebCliTeamFleetSync(fleet) {
+        if (screenshotMode || !fleet || typeof fetch !== "function") {
+          return;
+        }
+        pendingWebCliTeamFleet = cloneValue(fleet);
+        if (webCliTeamFleetSyncTimer) {
+          clearTimeout(webCliTeamFleetSyncTimer);
+        }
+        webCliTeamFleetSyncTimer = setTimeout(() => {
+          webCliTeamFleetSyncTimer = null;
+          void syncWebCliTeamFleetNow();
+        }, WEB_CLI_TEAM_FLEET_SYNC_DEBOUNCE_MS);
+      }
+
+      async function syncWebCliTeamFleetNow() {
+        const fleet = pendingWebCliTeamFleet;
+        pendingWebCliTeamFleet = null;
+        if (!fleet) {
+          return;
+        }
+        const hasSharedData = fleetHasSharedData(fleet);
+        const payloadFleet = hasSharedData
+          ? fleet
+          : { generatedAt: fleet.generatedAt || new Date().toISOString(), projects: [] };
+        try {
+          await fetch("/api/web-cli/team-fleet", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-agents-office-web-cli-cache": "1"
+            },
+            body: JSON.stringify({
+              fleet: payloadFleet,
+              hasSharedData
+            })
+          });
+        } catch {}
       }
 
       function activeSharedPeerCount() {
@@ -2577,6 +2640,7 @@ export function startClientApp(): void {
         queueSnapshotEvents(previousNotificationFleet, nextNotificationFleet);
         queueAgentNotifications(previousNotificationFleet, nextNotificationFleet);
         state.fleet = fleet;
+        scheduleWebCliTeamFleetSync(fleet);
         lastFleetSemanticToken = nextFleetSemanticToken;
         if (state.selected !== "all") {
           const exists = state.fleet.projects.some((project) => project.projectRoot === state.selected);
@@ -4153,6 +4217,22 @@ export function startClientApp(): void {
         return roster[stableHash(`${agent.appearance.id}:${agentRole(agent)}:${agent.id}`) % roster.length];
       }
 
+      function avatarVisualScaleForAgent(agent, baseScale = 1) {
+        const normalizedBaseScale = Number.isFinite(baseScale) ? Number(baseScale) : 1;
+        return normalizedBaseScale * (agent && agent.parentThreadId ? 0.75 : 1);
+      }
+
+      function avatarVisualSizeForAgent(agent, baseScale = 1) {
+        const avatar = avatarForAgent(agent);
+        const scale = avatarVisualScaleForAgent(agent, baseScale);
+        return {
+          avatar,
+          scale,
+          width: Math.round(avatar.w * scale),
+          height: Math.round(avatar.h * scale)
+        };
+      }
+
       function escapeHtml(value) {
         return String(value)
           .replaceAll("&", "&amp;")
@@ -4319,9 +4399,12 @@ export function startClientApp(): void {
           if (agent.statusText === "notLoaded") {
             if (agent.state === "done") {
               const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
-              return agent.isCurrent === true
-                && Number.isFinite(updatedAt)
-                && Date.now() - updatedAt <= Math.max(workstationDoneGraceMs(agent), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS);
+              return agent.isOngoing === true
+                || (
+                  agent.isCurrent === true
+                  && Number.isFinite(updatedAt)
+                  && Date.now() - updatedAt <= Math.max(workstationDoneGraceMs(agent), QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS)
+                );
             }
             return agent.isOngoing === true
               || agent.isCurrent === true
@@ -4365,6 +4448,9 @@ export function startClientApp(): void {
 
       function isFinishedLeadForRec(agent) {
         return isRecentLeadCandidate(agent)
+          && agent.isCurrent !== true
+          && agent.isOngoing !== true
+          && !isRuntimeActiveLocalAgent(agent)
           && !shouldSeatAtWorkstation(agent)
           && (agent.state === "idle" || agent.state === "done");
       }
@@ -4596,6 +4682,24 @@ export function startClientApp(): void {
         }
         if (Object.prototype.hasOwnProperty.call(eventIconUrls, method)) {
           return eventIconUrls[method];
+        }
+        if (method === "item/fileChange/patchUpdated") {
+          return eventIconUrls["item/fileChange/outputDelta"] || null;
+        }
+        if (method === "item/commandExecution/terminalInteraction") {
+          return eventIconUrls["item/commandExecution/outputDelta"] || null;
+        }
+        if (
+          method === "item/mcpToolCall/progress"
+          || method === "mcpServer/startupStatus/updated"
+          || method === "mcpServer/oauthLogin/completed"
+          || method === "hook/started"
+          || method === "hook/completed"
+        ) {
+          return eventIconUrls["item/tool/call"] || null;
+        }
+        if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
+          return eventIconUrls["item/commandExecution/requestApproval"] || null;
         }
         if (method === "turn/interrupted" || method === "turn/failed") {
           return eventIconUrls["turn/completed"] || null;
@@ -5785,9 +5889,8 @@ export function startClientApp(): void {
         const seatIndex = index % 4;
         const sofa = layout.sofas[Math.floor(seatIndex / 2)];
         const seatWithinSofa = seatIndex % 2;
-        const avatar = avatarForAgent(agent);
-        const avatarScale = compact ? 1.25 : 1.5;
-        const avatarHeight = Math.round(avatar.h * avatarScale);
+        const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5);
+        const avatarHeight = avatarSize.height;
         const sofaWidth = Number(sofa?.sprite?.w) || layout.sofaWidth;
         const seatOffsetRatio = seatWithinSofa === 0 ? 0.18 : 0.62;
         const x = sofa.x + Math.round(sofaWidth * seatOffsetRatio);
@@ -5829,10 +5932,10 @@ export function startClientApp(): void {
         const SEATED_AVATAR_DEPTH_BIAS = 760;
         const WORKSTATION_FRONT_DEPTH_BIAS = 620;
         const state = agent?.state || "idle";
-        const avatar = agent ? avatarForAgent(agent) : null;
-        const avatarScale = compact ? 1.25 : 1.5;
-        const avatarWidth = avatar ? avatar.w * avatarScale : 0;
-        const avatarHeight = avatar ? avatar.h * avatarScale : 0;
+        const avatarSize = agent ? avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5) : null;
+        const avatar = avatarSize ? avatarSize.avatar : null;
+        const avatarWidth = avatarSize ? avatarSize.width : 0;
+        const avatarHeight = avatarSize ? avatarSize.height : 0;
         const mirrored = options.mirrored === true;
         const chair = agent ? chairSpriteForAgent(agent) : pixelOffice.chairs[0];
         const deskSprite = pixelOffice.props.cubiclePanelLeft;
@@ -6168,15 +6271,7 @@ export function startClientApp(): void {
         return sortAgentsStably(
           `${snapshot.projectRoot}::${compact ? "compact-resting" : "resting"}`,
           snapshot.agents
-            .filter((agent) => {
-              if (agent.source === "cloud") {
-                return false;
-              }
-              if (shouldSeatAtWorkstation(agent)) {
-                return false;
-              }
-              return agent.state === "idle" || agent.state === "done";
-            })
+            .filter((agent) => isFinishedLeadForRec(agent))
         );
       }
 
@@ -6735,6 +6830,7 @@ export function startClientApp(): void {
               const avatarY = roomY + slot.y + stagedOffset.y;
               const anchorX = avatarX + Math.round(tile * 0.4);
               const anchorY = avatarY + Math.round(tile * 0.6);
+              const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1 : 1.08);
               model.recAgents.push({
                 id: agent.id,
                 key: agentKey(snapshot.projectRoot, agent),
@@ -6751,11 +6847,11 @@ export function startClientApp(): void {
                 turnSignal: recentTurnSignalForAgent(snapshot, agent),
                 activityCue: recentActivityCueForAgent(snapshot, agent),
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
-                sprite: avatarForAgent(agent).url,
+                sprite: avatarSize.avatar.url,
                 x: avatarX,
                 y: avatarY,
-                width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
-                height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                width: avatarSize.width,
+                height: avatarSize.height,
                 depthBaseY: room.floorTop,
                 bubble: "...",
                 flip: slot.flip
@@ -6770,8 +6866,8 @@ export function startClientApp(): void {
                 y: anchorY,
                 left: avatarX,
                 top: avatarY,
-                width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
-                height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                width: avatarSize.width,
+                height: avatarSize.height,
                 threadId: agent.threadId || "",
                 replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                 focusKey: focusAgentKey(snapshot, agent),
@@ -6787,6 +6883,7 @@ export function startClientApp(): void {
               const avatarY = roomY + slot.y + stagedOffset.y;
               const anchorX = avatarX + Math.round(tile * 0.4);
               const anchorY = avatarY + Math.round(tile * 0.6);
+              const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1 : 1.08);
               model.recAgents.push({
                 id: agent.id,
                 key: agentKey(snapshot.projectRoot, agent),
@@ -6803,11 +6900,11 @@ export function startClientApp(): void {
                 turnSignal: recentTurnSignalForAgent(snapshot, agent),
                 activityCue: recentActivityCueForAgent(snapshot, agent),
                 statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
-                sprite: avatarForAgent(agent).url,
+                sprite: avatarSize.avatar.url,
                 x: avatarX,
                 y: avatarY,
-                width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
-                height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                width: avatarSize.width,
+                height: avatarSize.height,
                 depthBaseY: room.floorTop,
                 bubble: null,
                 flip: slot.flip
@@ -6822,8 +6919,8 @@ export function startClientApp(): void {
                 y: anchorY,
                 left: avatarX,
                 top: avatarY,
-                width: Math.round(avatarForAgent(agent).w * (compact ? 1 : 1.08)),
-                height: Math.round(avatarForAgent(agent).h * (compact ? 1 : 1.08)),
+                width: avatarSize.width,
+                height: avatarSize.height,
                 threadId: agent.threadId || "",
                 replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
                 focusKey: focusAgentKey(snapshot, agent),

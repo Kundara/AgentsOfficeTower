@@ -88,10 +88,19 @@ export async function sendAbsoluteFileAsset(
   }
 }
 
-export async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+export async function readJsonBody(
+  request: IncomingMessage,
+  options: { maxBytes?: number } = {}
+): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of request) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    totalBytes += buffer.byteLength;
+    if (typeof options.maxBytes === "number" && totalBytes > options.maxBytes) {
+      throw new Error("Request body too large");
+    }
+    chunks.push(buffer);
   }
 
   if (chunks.length === 0) {

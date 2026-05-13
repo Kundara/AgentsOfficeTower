@@ -78,6 +78,15 @@ Terminal watch:
 node packages/cli/dist/index.js watch /abs/project/path
 ```
 
+Read the running local web server's current snapshot:
+
+```bash
+node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=team type=events limit=5
+node packages/cli/dist/index.js web query CodexAgentsOffice last scope=local type=agents --json
+```
+
+`web query` is read-only and talks to the local web server over loopback. `scope=local` reads the server's live fleet snapshot. `scope=team` reads the coordinated shared-room view cached by an open browser page when PartyKit sharing is active, and otherwise falls back to local data with an explicit cache note.
+
 Demo preview:
 
 ```bash
@@ -89,7 +98,10 @@ Build and typecheck:
 ```bash
 npm run build
 npm run typecheck
+npm run check:codex-protocol
 ```
+
+`check:codex-protocol` regenerates the installed Codex app-server TypeScript bindings into a temporary directory and fails if Codex adds or removes notification/request methods that Agents Office has not reviewed yet.
 
 ## Optional Integrations
 
@@ -167,6 +179,7 @@ After building, reload VS Code or press `F5` in extension development. The activ
 
 ## Repo Layout
 
+- `Skills`: repo-packaged Codex skills for operating the tower CLI and coordinating local/team work from tower data
 - `packages/core`: shared model, discovery, adapters, snapshot assembly, and workload policies
 - `packages/web`: HTTP server and bundled browser client
 - `packages/cli`: `web`, `snapshot`, `watch`, and demo entrypoints

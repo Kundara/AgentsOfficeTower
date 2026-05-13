@@ -117,11 +117,14 @@ Recent typed activity cue handling:
 
 - `turn/plan/updated` and `item/plan/delta` -> brief animated `PLAN` cue near the actor
 - `item/commandExecution/outputDelta` and typed command-item starts -> brief animated `RUN` cue near the actor/workstation
-- `turn/diff/updated`, `item/fileChange/outputDelta`, and typed file-change item starts -> brief animated `EDIT` cue near the actor/workstation
-- `item/tool/call` and typed tool-item starts -> brief animated `TOOL` cue near the actor
+- `item/commandExecution/terminalInteraction` -> command activity/history and the same `RUN` family cue
+- `turn/diff/updated`, `item/fileChange/outputDelta`, `item/fileChange/patchUpdated`, and typed file-change item starts -> brief animated `EDIT` cue near the actor/workstation
+- `item/tool/call`, `item/mcpToolCall/progress`, Codex hook-run notifications, and typed tool-item starts -> brief animated `TOOL` cue near the actor
 - `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` -> brief animated `WAIT` cue near the actor while the durable approval queue entry is active
+- `item/autoApprovalReview/*` -> non-actionable approval-review activity; it should not create a durable `Needs You` entry unless app-server also sends an approval request
 - `item/tool/requestUserInput` -> brief animated `ASK` cue near the actor while the durable input queue entry is active
 - `serverRequest/resolved` for approval/input requests -> brief animated `OK` cue near the actor to acknowledge queue clearance
+- warning, config, deprecation, MCP startup/login, rate-limit, model reroute, and Windows sandbox notifications -> status/history/notes surfaces; they should not by themselves move a session into active desk work
 - these cues should stay short-lived, scene-native, and motion-first; they are not a replacement for the durable toast or queue surfaces
 - each cue mode should also carry a distinct icon/motion treatment inside the chip so the scene does not depend only on the text label to communicate the activity type
 - workstation-seated activity should also raise a short non-text visual treatment on or around the workstation itself so item/request activity does not collapse back to text-only chips
@@ -175,10 +178,10 @@ Current browser settings surfaces are:
 - If `thread/list` reports a fresher desktop-backed Codex thread than `thread/read`, that fresher timestamp should drive current-workload and seating decisions.
 - Fresh non-final local Codex work events such as command, file, tool, plan, or turn activity should refresh desk-currentness even when the observer temporarily sees the thread as `readOnly` or `idle`.
 - Fresh unhydrated desktop `notLoaded` rows with no readable turns should reserve a desk for about 8 seconds as just-sent prompts, but stale `notLoaded` fallback rows must only use the 3-second finished cooldown and must not keep finished threads desk-active for minutes.
-- `thread/closed`, non-final `turn/completed`, and non-final `turn/interrupted` events must not release a workstation by themselves. They are observer/update boundaries; workstation release begins only after a final answer, hard failure/archive, or confirmed idle unload.
-- A local thread that is still truly ongoing may keep its workstation through short-lived freshness/current signal dips between polls, and `notLoaded` locals now get a short 3-second confirmation cooldown before the monitor accepts that unload as real.
+- `thread/closed`, non-final `turn/completed`, non-final `turn/interrupted`, and observer `notLoaded` unloads must not release an already observed ongoing workstation by themselves. They are observer/update boundaries; workstation release begins only after a final answer or hard failure/archive.
+- A local thread that is still truly ongoing must keep its workstation through freshness/current signal dips between polls, including stale `notLoaded` rereads without a final answer.
 - A fresh read-only `notLoaded` Codex thread without a final answer should stay desk-seated through quiet text gaps rather than walking to the rec area between commentary updates.
-- Quiet local desk-live work now gets a longer about-3-minute stay-on-desk window after its last update when it has recent non-final activity, is still subscribed, or is sitting in a transient `notLoaded` state, so Codex does not walk to the rec area between slow reply chunks.
+- Quiet local desk-live work now gets a longer about-3-minute stay-on-desk fallback after its last update when it has recent non-final activity, is still subscribed, or is sitting in a transient `notLoaded` state; once the live monitor has observed the thread as ongoing, `isOngoing` is stronger than that fallback window and keeps the desk until final answer or hard terminal state.
 - Workstation release should be conservative. Ordinary poll jitter, UI rerenders, debug toggles, or temporary freshness gaps must not pull a still-working agent off a desk.
 - A workstation should only be released when the thread has actually settled into a resting/finished state according to the browser placement rules, with the explicit post-stop cooldown described below.
 - The rec area should keep at most the 4 most recent lead sessions visible;
@@ -187,6 +190,7 @@ Current browser settings surfaces are:
 - Finished subagents should despawn instead of taking rec-area slots.
 - Finished subagents should keep a visibly readable post-finish desk cooldown before exiting, and that cooldown should be longer than the top-level lead cooldown so child completion is easier to observe in-scene.
 - Finished subagents should then walk out through the room door instead of blinking away.
+- Visible subagent avatars should render at 75% of regular agent size while keeping normal workstation, hover, and depth behavior.
 - Empty rooms should read as quiet space, not as errors.
 
 ### Scene layout and tiles
@@ -300,6 +304,9 @@ Worktree identity rules:
 - Remote-only shared projects should cool down for 1 hour before disappearing after room updates stop.
 - Screenshot mode should disable shared-room sync.
 - `/api/multiplayer` should expose the current server multiplayer transport status even when the transport is currently disabled.
+- The CLI should be able to read the running local web server's shared model with `web query <repo> <recent|last>`, scoped to `local` or `team`, without gaining any write, reply, file-read, or arbitrary-command capability.
+- `scope=team` should use only the coordinated multiplayer fleet already rendered by an open browser client; if no shared-room cache exists, it should report local data rather than attempting to connect directly to the shared-room transport.
+- Web CLI APIs should be loopback-only, bounded, projected to recent agent/event data, and should not expose raw shared-room credentials or mutable browser action surfaces.
 
 ### Boss / lead behavior
 
@@ -395,9 +402,9 @@ Current-workload rules:
 - fresh read-only `notLoaded` desktop threads without a final answer stay current through quiet text gaps, with `thread/list` freshness overriding stale `thread/read` timestamps for that classification
 - recent non-final local work events can keep desktop-backed threads current through temporary `readOnly` or `idle` observer gaps
 - fresh unhydrated `notLoaded` timestamps with no readable turns get an about-8-second planning-current window after a user prompt; older fallback rows cool out instead of staying desk-seated
-- observer-owned unload/runtime-idle transitions do not count as an immediate stop by themselves; `thread/status/changed -> notLoaded` now waits about 3 seconds and a reread confirmation before the monitor drops the thread out of ongoing work
+- observer-owned unload/runtime-idle transitions do not count as a stop by themselves; `thread/status/changed -> notLoaded` may trigger a reread, but an already observed ongoing thread remains ongoing unless that reread finds a final answer
 - non-final turn completion/interruption does not count as session completion; only final-answer completion or hard terminal state should start the desk cooldown
-- recent non-final, subscribed, or transiently `notLoaded` local desk-live states can stay current for about 3 minutes between updates before they settle into rest
+- recent non-final, subscribed, or transiently `notLoaded` local desk-live states can stay current for about 3 minutes as a fallback between updates, while explicit live-monitor `isOngoing` state remains current without that age cap
 - once a local top-level thread actually stops, it should keep its workstation for about 3 seconds so the last reply can still be read before cooling into rec-area idle visibility
 - stale local `notLoaded` threads that are no longer ongoing must not keep a workstation just because freshness/currentness still marks them recent
 - completed process-only items such as `plan`, `reasoning`, and `contextCompaction` should settle to `done` while recent, then age to `idle`; they must not leave a finished thread stuck in synthetic `thinking`

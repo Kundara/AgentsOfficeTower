@@ -24,6 +24,13 @@ import type { CloudTask, DiscoveredProject } from "@codex-agents-office/core";
 import { buildFleetResponse } from "./server-metadata";
 import { buildProjectDescriptors } from "./server-options";
 import type { FleetResponse, IntegrationSettingsResponse, MultiplayerStatus, ProjectDescriptor } from "./server-types";
+import {
+  buildWebCliQueryResponse,
+  hasSharedFleetData,
+  type WebCliQueryRequest,
+  type WebCliQueryResult,
+  type WebCliTeamFleetCache
+} from "./web-cli-query";
 
 export const DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export function filterFreshDiscoveredProjects(
@@ -72,6 +79,7 @@ export class FleetLiveService {
   private sharedCloudErrorMessage: string | null = null;
   private cloudTimer: NodeJS.Timeout | null = null;
   private cloudBackoffUntil = 0;
+  private coordinatedTeamFleet: WebCliTeamFleetCache | null = null;
 
   constructor(
     private readonly seedProjects: ProjectDescriptor[],
@@ -109,6 +117,23 @@ export class FleetLiveService {
       await this.publish(true);
     }
     return this.fleet ?? buildFleetResponse(this.projects, new Map());
+  }
+
+  setCoordinatedTeamFleet(fleet: FleetResponse | null, hasSharedData?: boolean): void {
+    if (!fleet || hasSharedData === false || !hasSharedFleetData(fleet)) {
+      this.coordinatedTeamFleet = null;
+      return;
+    }
+
+    this.coordinatedTeamFleet = {
+      fleet,
+      receivedAt: new Date().toISOString(),
+      hasSharedData: true
+    };
+  }
+
+  async queryWebCli(request: WebCliQueryRequest): Promise<WebCliQueryResult> {
+    return buildWebCliQueryResponse(request, await this.getFleet(), this.coordinatedTeamFleet);
   }
 
   getMultiplayerStatus(): MultiplayerStatus {

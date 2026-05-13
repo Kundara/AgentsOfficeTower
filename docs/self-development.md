@@ -39,7 +39,7 @@ A good iteration improves at least one of these:
 - OpenClaw support is currently workspace-path exact-match only, so broader OpenClaw workspaces do not yet project into per-repo office floors.
 - Cursor local support is inferred from workspace storage and logs rather than coming from an official local session API, so it remains weaker and less explicit than Codex app-server visibility.
 - PixelOffice workstation composition still needs refinement and stricter prefab rules.
-- Most Codex event types now reach the snapshot as explicit events, but many of them still share the same notification/motion treatment.
+- Most Codex event types now reach the snapshot as explicit events or diagnostic notes, and `npm run check:codex-protocol` catches app-server method drift, but many event categories still share the same notification/motion treatment.
 - Room empty states are still visually heavier than ideal.
 - Live movement is still simpler than the intended office-life simulation.
 - Map and terminal browser views still share some presentation assumptions that should diverge further.
@@ -50,6 +50,7 @@ A good iteration improves at least one of these:
 
 - `npm run build`
 - `npm run typecheck`
+- `npm run check:codex-protocol` when validating against an installed Codex runtime
 - browser render for default map mode
 - browser render for `/scene-effects-audit`
 - browser render for terminal mode
@@ -78,8 +79,8 @@ A good iteration improves at least one of these:
 - verify a desktop-backed thread stays current when `thread/list` reports fresh activity but `thread/read` returns a stale transcript timestamp
 - verify a restarted fleet server keeps the active desktop thread on-desk from fresh non-final command/file/tool activity even if the observer is temporarily `readOnly` and app-server status is `idle`
 - verify a just-sent prompt on a desktop `notLoaded` thread with no readable turns reserves a desk for about 8 seconds, while the same stale fallback no longer reads active several minutes later
-- verify `thread/closed`, non-final `turn/completed`, and non-final `turn/interrupted` notifications do not move an active session back to the rec area between assistant updates
-- verify a fresh read-only `notLoaded` Codex thread without a final answer stays workstation-seated through quiet text gaps
+- verify `thread/closed`, non-final `turn/completed`, non-final `turn/interrupted`, and observer `notLoaded` rereads without a final answer do not move an active session back to the rec area between assistant updates
+- verify monitor-tracked `isOngoing` Codex threads stay workstation-seated through quiet text gaps even when their latest read-only `notLoaded` payload is stale
 - verify a stopped top-level Codex lead keeps its workstation for about 3 seconds, then cools into rec-room visibility
 - verify delayed first hydration from the Codex app-server does not replay stale replies as fresh toasts or trigger late doorway-entry motion for historical Codex agents
 - verify rec-strip furniture starts on the first floor-grid row and does not exceed 2 tiles of depth from the top band
@@ -88,6 +89,9 @@ A good iteration improves at least one of these:
 - verify approval, input-wait, file-change, command-run, and turn lifecycle states have clear visible notification paths
 - verify recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events raise distinct short above-head badges in the map scene
 - verify recent typed plan, command, file/diff, and tool-call events raise short animated `PLAN`, `RUN`, `EDIT`, and `TOOL` cues in the map scene
+- verify patch-update, MCP-progress, terminal-interaction, and hook-run notifications land in the same event/history paths as their corresponding file, tool, command, and hook activity
+- verify global app-server warnings, MCP startup/login failures, rate-limit notices, and Windows sandbox warnings appear as notes/status rather than silently disappearing
+- verify unsupported `item/tool/call` dynamic-tool requests receive an explicit unsuccessful response instead of leaving the Codex turn pending
 - verify typed approval waits, input waits, and resolved request clears raise short animated `WAIT`, `ASK`, and `OK` cues in the map scene
 - verify activity/request cue chips keep mode-specific iconography and icon-side motion instead of collapsing back to plain text-only pills
 - verify recent typed workstation activity also raises a short mode-specific non-text desk effect instead of relying only on the floating cue chip
