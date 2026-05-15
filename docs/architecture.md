@@ -461,7 +461,8 @@ Hermes support follows the local runtime surfaces exposed by `nousresearch/herme
 - it uses live process cwd/env hints such as `HERMES_CWD`, `TERMINAL_CWD`, and `HERMES_HOME` when a Hermes CLI or TUI process is still running
 - it treats a Hermes session id as the stable agent and lets that agent move floors based on the latest project-bearing hook or DB activity
 - hook-only streams such as `default`, `process-<pid>`, and UUID tool/task files are activity sidecars, not agents; they are folded into the nearest durable SQLite session by explicit ids, platform/cwd hints, and recent timing
-- Hermes command, process-management, planning, file-change, and MCP/tool hook events update `detail`, `activityEvent`, toasts, and session history; they do not replace `latestMessage`, which stays on the latest useful prompt or assistant reply
+- Hermes command, process-management, planning, file-change, and MCP/tool hook events update `detail`, `activityEvent`, toasts, and session history; they do not replace `latestMessage`, which stays on the latest useful Hermes assistant/subagent text
+- Hermes hook `user_message` values can still seed session labels and user-message history, but they must not populate the agent `latestMessage` field because the map renders that field as agent speech
 - Hermes tool classification follows Hermes' registered/displayed tool vocabulary: `todo` maps to planning, `process`/`terminal`/`execute_code` map to command activity, `read_file`/`search_files`/`skill_view` map to scanning tool activity, and only Hermes' mutating file tools (`write_file` and `patch`) map to file edits
 - Hermes model/API request hooks map to reasoning/thinking activity rather than generic dynamic-tool activity, so model status does not appear as a fake tool action
 - generic Hermes maintenance prompts, such as skill-library review prompts, are ignored as display messages so they do not overwrite the last real conversation text

@@ -101,6 +101,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed Hermes tool execution so typed tool, planning, command, and file-edit events keep their normal toast/history treatment without also raising mock-style in-scene `TOOL`, `PLAN`, `RUN`, or `EDIT` cue labels.
 - Fixed Hermes `process(...)` hooks so background-process polling/waits render as command activity with readable process-action text, and model API hooks render as reasoning activity instead of generic tool calls.
 - Fixed Hermes tool classification to follow Hermes' own display and mutation semantics: `todo` maps to planning, `read_file`/`search_files`/`skill_view` map to scanning/tool activity, and only `write_file`/`patch` map to file edits.
+- Fixed Hermes user prompts so they can label and drive the active session without being copied into the agent `latestMessage` field and rendered as Hermes speech.
 - Fixed Hermes hook reads on Windows by converting canonical `/mnt/<drive>/...` identities back to host filesystem paths for local file access, and by reading the legacy `~/.codex/codex-agents-office/hermes-hooks` directory as a compatibility fallback.
 - Fixed fleet project discovery so a slow source such as the Codex app-server cannot block faster adapters from contributing Hermes-discovered workspace floors.
 - Fixed Codex app-server stdout parsing so non-JSON process noise is ignored instead of crashing the web listener.

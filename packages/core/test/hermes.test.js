@@ -844,7 +844,7 @@ test("Hermes process hooks map to command activity instead of generic tool text"
   assert.equal(summary.activityEvent.title, "process wait proc_abc123");
 });
 
-test("Hermes command hooks keep latestMessage on conversation text", () => {
+test("Hermes command hooks keep user prompts out of agent latestMessage", () => {
   const now = Date.now();
   const summary = summarizeHermesHookSessionForTest({
     projectRoot: "/tmp/project",
@@ -872,7 +872,7 @@ test("Hermes command hooks keep latestMessage on conversation text", () => {
 
   assert.equal(summary.state, "running");
   assert.equal(summary.detail, "sleep 75");
-  assert.equal(summary.latestMessage, "watch them all now");
+  assert.equal(summary.latestMessage, null);
   assert.equal(summary.activityEvent.type, "commandExecution");
 });
 
@@ -912,7 +912,7 @@ test("Hermes generic maintenance prompts do not replace the last real message", 
   assert.equal(summary.latestMessage, "Watched the Cinema reward flow and updated the playbook.");
 });
 
-test("Hermes long hook streams keep earlier conversation text for active commands", async () => {
+test("Hermes long hook streams do not turn earlier user prompts into agent speech", async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-long-stream-"));
   const previousCodexHome = process.env.CODEX_HOME;
   const previousHookDir = process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR;
@@ -963,7 +963,7 @@ test("Hermes long hook streams keep earlier conversation text for active command
 
     assert.ok(agent);
     assert.equal(agent.detail, "sleep 75");
-    assert.equal(agent.latestMessage, "the video production boost is always failing, click play after entering");
+    assert.equal(agent.latestMessage, null);
     assert.equal(agent.activityEvent?.type, "commandExecution");
   } finally {
     if (previousCodexHome === undefined) {

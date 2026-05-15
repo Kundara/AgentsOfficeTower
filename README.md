@@ -93,7 +93,7 @@ They are designed for bounded visibility, not remote control. Skills can query t
   node packages/cli/dist/index.js agents link hermes
   ```
 
-  The command writes `~/.hermes/plugins/codex-agents-office`, enables it in `~/.hermes/config.yaml`, and records bounded Hermes lifecycle hooks into machine-local Agents Office storage. Normal workstation avatars still come from durable Hermes session ids; plugin streams such as `default`, `process-<pid>`, or tool-task UUIDs are activity sidecars. Hermes command, process, planning, file-edit, and MCP/tool hooks drive typed toasts, session history, and current action detail while the visible last message stays on the latest real prompt or assistant reply; read/search/skill-view tools stay scanning/tool activity instead of file edits.
+  The command writes `~/.hermes/plugins/codex-agents-office`, enables it in `~/.hermes/config.yaml`, and records bounded Hermes lifecycle hooks into machine-local Agents Office storage. Normal workstation avatars still come from durable Hermes session ids; plugin streams such as `default`, `process-<pid>`, or tool-task UUIDs are activity sidecars. Hermes command, process, planning, file-edit, and MCP/tool hooks drive typed toasts, session history, and current action detail while the visible last message stays on Hermes assistant/subagent text rather than user prompts; read/search/skill-view tools stay scanning/tool activity instead of file edits.
 
 - **Cursor**: this repo includes `.cursor/hooks.json` and `.cursor/hooks/capture-cursor-hook.mjs` for local hook sidecars. Cursor cloud visibility can use `CURSOR_API_KEY` or the browser settings flow.
 

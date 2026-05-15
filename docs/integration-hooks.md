@@ -768,7 +768,8 @@ How we use it:
 - keep Hermes SQLite session ids as the only normal workstation agents; hook-only ids such as `default`, `process-<pid>`, and UUID task/tool streams are folded into the nearest durable Hermes session by direct session id, payload session id, platform, cwd, and time window instead of creating separate avatars
 - treat fresh `ended_at IS NULL` Hermes gateway sessions as current open work, even after the latest assistant reply, so the still-open main session stays desk-visible instead of only contributing activity history
 - treat Hermes compression-continuation children as the lead session, matching Hermes' own latest-descendant/session-list behavior, instead of rendering them as subagents under the compressed parent
-- keep Hermes `latestMessage` tied to the latest useful user or assistant conversation text; terminal commands, process-management calls, file changes, MCP calls, and dynamic tool calls update `detail`, typed events, and toasts instead of becoming the visible last message
+- keep Hermes `latestMessage` tied to the latest useful assistant/subagent conversation text; terminal commands, process-management calls, file changes, MCP calls, dynamic tool calls, and user prompts update `detail`, labels, typed events, and toasts/history instead of becoming the visible agent-speech message
+- do not copy Hermes hook `user_message` text into `latestMessage`; prompts can shape labels and history, but `latestMessage` is rendered as Hermes speech in hover cards and the room scene
 - map Hermes `process(...)` hooks such as background `wait`, `poll`, and `log` to the command/process-management family, while model API request hooks map to reasoning/thinking activity rather than generic dynamic-tool activity
 - decode Hermes tool hooks through Hermes' own registry/display semantics: `todo` is planning, `read_file`/`search_files`/`skill_view` are scanning tool activity, and only `write_file`/`patch` are file-edit activity
 - ignore generic Hermes maintenance prompts, including skill-library review prompts, when choosing display message text so they do not replace the prior real conversation message
@@ -797,7 +798,7 @@ Operational validation:
 - `GET /api/server-meta` may include a Hermes-discovered floor only when it comes from a live process cwd or a fresh hook session's latest current project root
 - `GET /api/fleet` may include `source = hermes` agents on matching floors, or `sourceKind = hermes:roaming` agents attached to an existing floor when the hook session is outside known workspace roots
 - `GET /api/fleet` should show durable ids like `hermes:20260515_...` or `hermes:cron_...`; it should not show hook-only ids such as `hermes:default`, `hermes:process-<pid>`, or `hermes:<uuid>`, including in roaming agents
-- active Hermes command/process/planning/tool sessions should expose the command, process action, planning update, or tool in `detail` / `activityEvent`, while `latestMessage` remains either the prior real conversation text or `null`; a command string such as `sleep 75` should not appear as the agent's last message
+- active Hermes command/process/planning/tool sessions should expose the command, process action, planning update, or tool in `detail` / `activityEvent`, while `latestMessage` remains either prior Hermes assistant/subagent text or `null`; a command string such as `sleep 75` should not appear as the agent's last message
 - the hook output directory should contain `codex-agents-office.status.json` with `status_event_name = registered` and the current gateway pid after Hermes reloads the plugin
 - if a Hermes validation run starts producing many unexpected workspace floors, stop the web listener immediately and inspect project discovery before restarting it; do not reintroduce DB-history or all-path hook sweeps as discovery inputs
 
@@ -808,7 +809,7 @@ Operational validation:
 | latest user message in a fresh open session | `planning` | inferred active Hermes prompt |
 | plugin `pre_llm_call` / `pre_gateway_dispatch` | `planning` | typed prompt/session activity |
 | plugin `pre_tool_call` / `post_tool_call` / `transform_tool_result` / `transform_terminal_output` | `running`, `editing`, `scanning`, `delegating`, or `blocked` | typed tool activity by tool name, args, output, and result |
-| command, file, MCP, or dynamic tool hook while earlier conversation text exists | current tool-derived state | current action in `detail` / `activityEvent`; prior useful conversation text remains `latestMessage` |
+| command, file, MCP, or dynamic tool hook while earlier assistant/subagent text exists | current tool-derived state | current action in `detail` / `activityEvent`; prior useful Hermes assistant/subagent text remains `latestMessage` |
 | hook-only `default`, `process-<pid>`, or UUID task/tool streams | parent session state update | folded into the matching durable Hermes session; never a standalone desk agent |
 | plugin `subagent_stop` | `delegating` or `blocked` | typed child-agent completion activity |
 | plugin `post_llm_call` / `transform_llm_output` | `done` with recent speech | typed reply activity from Hermes |

@@ -1506,10 +1506,6 @@ function hermesHookMeaningfulText(record: HermesHookRecord): string | null {
   if (assistantText) {
     return assistantText;
   }
-  const userText = hermesHookText(record, ["user_message"]);
-  if (userText) {
-    return userText;
-  }
   const childSummary = hermesHookText(record, ["child_summary"]);
   if (childSummary) {
     return childSummary;
@@ -1541,7 +1537,6 @@ function hermesHookDisplayUserText(record: HermesHookRecord): string | null {
 
 function hermesHookConversationText(record: HermesHookRecord): string | null {
   return hermesHookResponseText(record)
-    ?? hermesHookDisplayUserText(record)
     ?? hermesHookText(record, ["child_summary"]);
 }
 

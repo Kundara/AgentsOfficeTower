@@ -60,7 +60,7 @@ A good iteration improves at least one of these:
 - verify Hermes workstation agents use durable SQLite session ids and do not expose hook-only ids such as `hermes:default`, `hermes:process-<pid>`, or `hermes:<uuid>`
 - verify Hermes fleet reads stay bounded by checking `/api/fleet` response size and web-process memory after repeated refreshes against live hook files
 - verify out-of-workspace Hermes sessions appear only as floating `hermes:roaming` agents on an existing tower floor
-- verify active Hermes command/tool sessions keep the command or tool in `detail` / `activityEvent` while `latestMessage` remains the latest real prompt/reply, not the command text
+- verify active Hermes command/tool sessions keep the command or tool in `detail` / `activityEvent` while `latestMessage` remains Hermes assistant/subagent text only, not the user prompt or command text
 - verify long Hermes hook streams still retain enough recent context to recover earlier conversation text after many tool calls
 - verify generic Hermes maintenance prompts do not replace the prior useful message in hover cards, session cards, or `web query` output
 - when validating Hermes fleet behavior, inspect `/api/server-meta` and `/api/fleet` with short timeouts and stop the listener immediately if unexpected workspace floors spike
