@@ -117,6 +117,12 @@ function claudeEventKindFromActivityEvent(event: AgentActivityEvent | null): Das
   if (!event) {
     return "other";
   }
+  if (event.type === "collabAgentToolCall" || event.type === "collabToolCall") {
+    return "subagent";
+  }
+  if (event.type === "mcpToolCall" || event.type === "dynamicToolCall") {
+    return "tool";
+  }
   if (event.type === "fileChange") {
     return "fileChange";
   }
@@ -127,6 +133,19 @@ function claudeEventKindFromActivityEvent(event: AgentActivityEvent | null): Das
     return "message";
   }
   return "other";
+}
+
+function claudeCollabActivityEvent(input: {
+  detail: string;
+  path: string | null;
+}): AgentActivityEvent {
+  return {
+    type: "collabAgentToolCall",
+    action: "updated",
+    path: input.path,
+    title: shorten(input.detail, 88),
+    isImage: false
+  };
 }
 
 function titleCaseIdentifier(value: string): string {
@@ -237,6 +256,8 @@ function claudeEventFromSummary(input: {
     method:
       event?.type === "fileChange" ? "claude/fileChange"
       : event?.type === "commandExecution" ? "claude/commandExecution"
+      : event?.type === "collabAgentToolCall" || event?.type === "collabToolCall" ? "claude/collabAgentToolCall"
+      : event?.type === "mcpToolCall" || event?.type === "dynamicToolCall" ? "claude/toolCall"
       : event?.type === "userMessage" ? "claude/userMessage"
       : event?.type === "agentMessage" ? "claude/agentMessage"
       : input.summary.needsUser?.kind === "approval" ? "claude/permissionRequest"
@@ -810,14 +831,24 @@ function claudeToolSummary(input: {
   }
 
   if (/(task|delegate|agent)/i.test(toolName)) {
+    const description = stringValue(input.toolInput, "description", "name", "team_name");
+    const subagentType = stringValue(input.toolInput, "subagent_type");
+    const detail =
+      input.failed ? "Delegation failed"
+      : description ? `Delegating ${description}`
+      : subagentType ? `Delegating to ${subagentType}`
+      : "Delegating work";
     return {
       label: labelFromModel(input.model, input.sessionId),
       sourceKind: sourceKindFromModel(input.model),
       state: input.failed ? "blocked" : "delegating",
-      detail: input.failed ? "Delegation failed" : "Delegating work",
+      detail: shorten(detail, 88),
       updatedAt: input.updatedAt,
       paths: [input.fallbackCwd],
-      activityEvent: null,
+      activityEvent: claudeCollabActivityEvent({
+        detail,
+        path: input.fallbackCwd
+      }),
       gitBranch: input.gitBranch,
       confidence: "typed",
       needsUser: null,
@@ -1078,7 +1109,10 @@ export function summariseClaudeHookRecord(input: {
       detail,
       updatedAt,
       paths: [cwd],
-      activityEvent: null,
+      activityEvent: claudeCollabActivityEvent({
+        detail,
+        path: cwd
+      }),
       gitBranch: input.gitBranch,
       confidence: "typed",
       needsUser: null,
@@ -1098,7 +1132,10 @@ export function summariseClaudeHookRecord(input: {
       detail,
       updatedAt,
       paths: [cwd],
-      activityEvent: null,
+      activityEvent: claudeCollabActivityEvent({
+        detail,
+        path: cwd
+      }),
       gitBranch: input.gitBranch,
       confidence: "typed",
       needsUser: null,
@@ -1208,7 +1245,10 @@ export function summariseClaudeHookRecord(input: {
       detail: shorten(detail, 88),
       updatedAt,
       paths: [cwd],
-      activityEvent: null,
+      activityEvent: claudeCollabActivityEvent({
+        detail,
+        path: cwd
+      }),
       gitBranch: input.gitBranch,
       confidence: "typed",
       needsUser: null,

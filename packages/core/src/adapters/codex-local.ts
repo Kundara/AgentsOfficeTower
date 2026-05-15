@@ -1,6 +1,9 @@
 import { withAppServerClient } from "../app-server";
 import { ensureAgentAppearance } from "../appearance";
-import { selectProjectThreadsWithParents } from "../local-thread-selection";
+import {
+  listCodexProjectThreadCandidates,
+  readCodexThreadWithTimeout
+} from "../codex-thread-query";
 import {
   applyRecentActivityEvent,
   inferThreadAgentRole,
@@ -25,16 +28,23 @@ async function buildLocalAgents(
 ): Promise<CodexThread[]> {
   try {
     return await withAppServerClient(async (client) => {
-      const allThreads = await client.listThreads({
-        cwd: projectRoot,
-        limit: Math.max(localLimit * 4, 40)
+      const query = await listCodexProjectThreadCandidates({
+        client,
+        projectRoot,
+        localLimit
       });
-      const threads = selectProjectThreadsWithParents(projectRoot, allThreads, localLimit);
+      if (query.usedUnscopedFallback) {
+        notes.push("Local Codex cwd filter returned no project threads; used unscoped Windows path fallback.");
+      }
+      const threads = query.trackedThreads;
       if (!readThreads) {
         return threads;
       }
       return Promise.all(threads.map(async (thread) =>
-        mergeListedThreadMetadata(await client.readThread(thread.id), thread)
+        mergeListedThreadMetadata(
+          await readCodexThreadWithTimeout(client, thread.id).catch(() => thread),
+          thread
+        )
       ));
     });
   } catch (error) {
@@ -77,6 +87,7 @@ function recentWorkloadEventTimeMs(events: DashboardEvent[], latestMessagePhase:
       return latest;
     }
     const isWorkloadEvent = hasNonFinalMessage
+      || event.kind === "subagent"
       || event.phase === "started"
       || event.phase === "updated"
       || event.phase === "waiting"

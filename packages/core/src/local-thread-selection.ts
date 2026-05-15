@@ -7,7 +7,7 @@ function subAgentSourceForThread(thread: CodexThread): unknown {
   }
 
   const source = thread.source as Record<string, unknown>;
-  return source.subAgent ?? source.subagent ?? null;
+  return source.subAgent ?? source.subagent ?? source.sub_agent ?? null;
 }
 
 function parentThreadIdForThread(thread: CodexThread): string | null {
@@ -15,11 +15,18 @@ function parentThreadIdForThread(thread: CodexThread): string | null {
   const threadSpawn =
     typeof subAgentSource === "object" && subAgentSource
       ? (subAgentSource as Record<string, unknown>).thread_spawn
+        ?? (subAgentSource as Record<string, unknown>).threadSpawn
       : null;
 
   return typeof threadSpawn === "object" && threadSpawn
-    && typeof (threadSpawn as Record<string, unknown>).parent_thread_id === "string"
-    ? ((threadSpawn as Record<string, unknown>).parent_thread_id as string)
+    && (
+      typeof (threadSpawn as Record<string, unknown>).parent_thread_id === "string"
+      || typeof (threadSpawn as Record<string, unknown>).parentThreadId === "string"
+    )
+    ? (
+      ((threadSpawn as Record<string, unknown>).parent_thread_id
+        ?? (threadSpawn as Record<string, unknown>).parentThreadId) as string
+    )
     : null;
 }
 

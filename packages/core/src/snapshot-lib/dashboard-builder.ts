@@ -1,7 +1,10 @@
 import { basename } from "node:path";
 
 import { withAppServerClient } from "../app-server";
-import { selectProjectThreadsWithParents } from "../local-thread-selection";
+import {
+  listCodexProjectThreadCandidates,
+  readCodexThreadWithTimeout
+} from "../codex-thread-query";
 import { assembleProjectSnapshot } from "../services/snapshot-assembler";
 import type { AdapterSnapshot, ProjectSource } from "../adapters";
 import type {
@@ -33,16 +36,23 @@ async function buildLocalAgents(
 ): Promise<CodexThread[]> {
   try {
     return await withAppServerClient(async (client) => {
-      const allThreads = await client.listThreads({
-        cwd: projectRoot,
-        limit: Math.max(localLimit * 4, 40)
+      const query = await listCodexProjectThreadCandidates({
+        client,
+        projectRoot,
+        localLimit
       });
-      const threads = selectProjectThreadsWithParents(projectRoot, allThreads, localLimit);
+      if (query.usedUnscopedFallback) {
+        notes.push("Local Codex cwd filter returned no project threads; used unscoped Windows path fallback.");
+      }
+      const threads = query.trackedThreads;
       if (!readThreads) {
         return threads;
       }
       return Promise.all(threads.map(async (thread) =>
-        mergeListedThreadMetadata(await client.readThread(thread.id), thread)
+        mergeListedThreadMetadata(
+          await readCodexThreadWithTimeout(client, thread.id).catch(() => thread),
+          thread
+        )
       ));
     });
   } catch (error) {
@@ -79,6 +89,7 @@ export async function buildDashboardSnapshotFromState(input: {
     { claudeAdapter },
     { cursorCloudAdapter },
     { cursorLocalAdapter },
+    { hermesAdapter },
     { openClawAdapter },
     { presenceAdapter }
   ] = await Promise.all([
@@ -87,6 +98,7 @@ export async function buildDashboardSnapshotFromState(input: {
     import("../adapters/claude"),
     import("../adapters/cursor-cloud"),
     import("../adapters/cursor-local"),
+    import("../adapters/hermes"),
     import("../adapters/openclaw"),
     import("../adapters/presence")
   ]);
@@ -112,6 +124,7 @@ export async function buildDashboardSnapshotFromState(input: {
     claudeAdapter.createSource(staticSourceContexts),
     cursorLocalAdapter.createSource(staticSourceContexts),
     cursorCloudAdapter.createSource(staticSourceContexts),
+    hermesAdapter.createSource(staticSourceContexts),
     openClawAdapter.createSource(staticSourceContexts),
     presenceAdapter.createSource(staticSourceContexts)
   ].filter((source): source is ProjectSource => source !== null);

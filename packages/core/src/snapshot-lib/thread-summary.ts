@@ -21,6 +21,9 @@ function isFreshActivityEvent(event: DashboardEvent, threadUpdatedAtMs: number, 
 }
 
 function recentActivityEventPriority(event: DashboardEvent): number {
+  if (event.kind === "subagent") {
+    return 48;
+  }
   if (event.kind === "message") {
     if (event.method === "item/completed" && event.itemType === "agentMessage") {
       return 40;
@@ -65,7 +68,7 @@ function sourceRecord(thread: CodexThread): Record<string, unknown> | null {
 
 function subAgentSourceForThread(thread: CodexThread): unknown {
   const source = sourceRecord(thread);
-  return source ? source.subAgent ?? source.subagent ?? null : null;
+  return source ? source.subAgent ?? source.subagent ?? source.sub_agent ?? null : null;
 }
 
 function threadSpawnSourceForThread(thread: CodexThread): Record<string, unknown> | null {
@@ -73,6 +76,7 @@ function threadSpawnSourceForThread(thread: CodexThread): Record<string, unknown
   const threadSpawn =
     typeof subAgentSource === "object" && subAgentSource
       ? (subAgentSource as Record<string, unknown>).thread_spawn
+        ?? (subAgentSource as Record<string, unknown>).threadSpawn
       : null;
   return typeof threadSpawn === "object" && threadSpawn
     ? threadSpawn as Record<string, unknown>
@@ -85,17 +89,30 @@ function sourceStringValue(record: Record<string, unknown> | null, key: string):
 }
 
 function sourceAgentNickname(thread: CodexThread): string | null {
-  return sourceStringValue(threadSpawnSourceForThread(thread), "agent_nickname");
+  const threadSpawn = threadSpawnSourceForThread(thread);
+  return sourceStringValue(threadSpawn, "agent_nickname") ?? sourceStringValue(threadSpawn, "agentNickname");
 }
 
 function sourceAgentRole(thread: CodexThread): string | null {
-  return sourceStringValue(threadSpawnSourceForThread(thread), "agent_role");
+  const threadSpawn = threadSpawnSourceForThread(thread);
+  return sourceStringValue(threadSpawn, "agent_role")
+    ?? sourceStringValue(threadSpawn, "agentRole")
+    ?? sourceStringValue(threadSpawn, "agent_type")
+    ?? sourceStringValue(threadSpawn, "agentType");
+}
+
+function sourceAgentPath(thread: CodexThread): string | null {
+  const threadSpawn = threadSpawnSourceForThread(thread);
+  return sourceStringValue(threadSpawn, "agent_path") ?? sourceStringValue(threadSpawn, "agentPath");
 }
 
 export function pickThreadLabel(thread: CodexThread): string {
   const agentNickname = thread.agentNickname ?? sourceAgentNickname(thread);
+  const agentPath = sourceAgentPath(thread);
+  const agentPathName = agentPath?.split("/").filter(Boolean).at(-1) ?? null;
   return (
     agentNickname ??
+    agentPathName ??
     thread.name ??
     shortenText(thread.preview || thread.id, 42)
   );
@@ -126,6 +143,56 @@ function extractNumberValue(value: unknown, ...keys: string[]): number | undefin
   }
 
   return undefined;
+}
+
+function extractReceiverThreadIds(item: ThreadItem): string[] {
+  const receiverThreadIds = item.receiverThreadIds ?? item.receiver_thread_ids;
+  if (Array.isArray(receiverThreadIds)) {
+    return receiverThreadIds.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+  }
+  const receiverThreadId = item.receiverThreadId ?? item.receiver_thread_id;
+  return typeof receiverThreadId === "string" && receiverThreadId.length > 0 ? [receiverThreadId] : [];
+}
+
+function normalizeCollabToolName(tool: string): string {
+  const normalized = tool.replace(/[_\s-]+/g, "").toLowerCase();
+  if (normalized === "spawnagent" || normalized === "spawnagents") {
+    return "spawn";
+  }
+  if (normalized === "waitagent" || normalized === "wait") {
+    return "wait";
+  }
+  if (normalized === "sendinput" || normalized === "sendmessage" || normalized === "followuptask") {
+    return "send";
+  }
+  if (normalized === "closeagent") {
+    return "close";
+  }
+  if (normalized === "resumeagent") {
+    return "resume";
+  }
+  return normalized;
+}
+
+function collabToolDetail(item: ThreadItem): string {
+  const rawTool = typeof item.tool === "string" ? item.tool : "subagent";
+  const receiverCount = extractReceiverThreadIds(item).length;
+  switch (normalizeCollabToolName(rawTool)) {
+    case "spawn":
+      return receiverCount > 0
+        ? `Spawning ${receiverCount} subagent${receiverCount === 1 ? "" : "s"}`
+        : "Spawning subagent";
+    case "wait":
+      return receiverCount > 1 ? `Waiting on ${receiverCount} subagents` : "Waiting on subagents";
+    case "send":
+      return receiverCount > 1 ? `Messaging ${receiverCount} subagents` : "Messaging subagent";
+    case "close":
+      return receiverCount > 1 ? `Closing ${receiverCount} subagents` : "Closing subagent";
+    case "resume":
+      return receiverCount > 1 ? `Resuming ${receiverCount} subagents` : "Resuming subagent";
+    default:
+      return rawTool;
+  }
 }
 
 function summarizeFileChange(item: ThreadItem): {
@@ -362,6 +429,8 @@ export function parseThreadSourceMeta(thread: CodexThread): {
       parentThreadId:
         typeof threadSpawn.parent_thread_id === "string"
           ? threadSpawn.parent_thread_id
+          : typeof threadSpawn.parentThreadId === "string"
+            ? threadSpawn.parentThreadId
           : null,
       depth:
         typeof threadSpawn.depth === "number"
@@ -700,20 +769,8 @@ export function summariseThread(thread: CodexThread): {
     }
     case "collabToolCall":
     case "collabAgentToolCall": {
-      const tool = typeof item.tool === "string" ? item.tool : "subagent";
+      const detail = collabToolDetail(item);
       const status = typeof item.status === "string" ? item.status : "inProgress";
-      const receiverCount =
-        Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds.length
-        : typeof item.receiverThreadId === "string" ? 1
-        : 0;
-      const detail =
-        tool === "spawn_agent" || tool === "spawn_agents"
-          ? receiverCount > 0
-            ? `Spawning ${receiverCount} subagent${receiverCount === 1 ? "" : "s"}`
-            : "Spawning subagent"
-          : tool === "wait_agent" || tool === "wait"
-            ? "Waiting on subagents"
-            : tool;
       return {
         state:
           status === "failed" || status === "declined" ? "blocked"
@@ -838,6 +895,14 @@ export function buildActivityEventFromDashboardEvent(event: DashboardEvent): Age
         title: event.command ?? event.detail ?? event.title,
         isImage: false
       };
+    case "subagent":
+      return {
+        type: "collabAgentToolCall",
+        action: "updated",
+        path: event.path,
+        title: event.detail || event.title,
+        isImage: false
+      };
     case "message":
       return {
         type: "agentMessage",
@@ -866,13 +931,18 @@ export function applyRecentActivityEvent(
       if (event.threadId !== thread.id) {
         return false;
       }
-      if (!["fileChange", "command", "message"].includes(event.kind)) {
+      if (!["fileChange", "command", "subagent", "message"].includes(event.kind)) {
         return false;
       }
       return isFreshActivityEvent(event, updatedAtMs);
     })
     .sort(compareRecentActivityEvents)
-    .find((event) => event.kind === "fileChange" || event.kind === "command" || event.kind === "message");
+    .find((event) =>
+      event.kind === "fileChange"
+      || event.kind === "command"
+      || event.kind === "subagent"
+      || event.kind === "message"
+    );
 
   if (!preferredEvent) {
     return summary;
@@ -901,6 +971,14 @@ export function applyRecentActivityEvent(
   }
   if (preferredEvent.kind === "command" && (summary.state === "done" || summary.state === "idle")) {
     return summary;
+  }
+  if (preferredEvent.kind === "subagent") {
+    return {
+      state: preferredEvent.phase === "failed" ? "blocked" : "delegating",
+      detail: preferredEvent.detail || preferredEvent.title,
+      paths: nextPaths,
+      activityEvent
+    };
   }
   const commandText = preferredEvent.command ?? preferredEvent.detail ?? preferredEvent.title;
   const nextState =

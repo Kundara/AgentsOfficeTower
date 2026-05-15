@@ -7,6 +7,7 @@ import { platform } from "node:process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const CODEX_OPTIONAL_RESOLUTION_TIMEOUT_MS = 3000;
 
 export interface CodexCommandCandidate {
   command: string;
@@ -151,7 +152,10 @@ async function resolveWindowsWslCodexCommand(): Promise<string[] | null> {
   ];
   for (const candidate of candidates) {
     try {
-      await execFileAsync(candidate, ["--exec", "sh", "-lc", "command -v codex >/dev/null 2>&1"]);
+      await execFileAsync(candidate, ["--exec", "sh", "-lc", "command -v codex >/dev/null 2>&1"], {
+        timeout: CODEX_OPTIONAL_RESOLUTION_TIMEOUT_MS,
+        windowsHide: true
+      });
       return ["--exec", "codex"];
     } catch {
       // Try next candidate.
@@ -176,7 +180,10 @@ async function resolveWindowsAppCodexPath(): Promise<string | null> {
     "[Console]::Out.WriteLine($exe)"
   ].join("; ");
 
-  const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script]);
+  const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
+    timeout: CODEX_OPTIONAL_RESOLUTION_TIMEOUT_MS,
+    windowsHide: true
+  });
   const windowsPath = stdout.trim();
   if (!windowsPath) {
     return null;

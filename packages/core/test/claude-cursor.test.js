@@ -222,10 +222,37 @@ test("newer Claude SDK hook events are summarized as typed workload states", () 
 
   assert.equal(taskCreated.state, "delegating");
   assert.equal(taskCreated.isOngoing, true);
+  assert.equal(taskCreated.activityEvent?.type, "collabAgentToolCall");
+  assert.equal(taskCreated.activityEvent?.path, "/workspaces/CodexAgentsOffice");
   assert.equal(permissionDenied.state, "blocked");
   assert.equal(permissionDenied.isOngoing, false);
   assert.equal(postToolBatch.state, "thinking");
   assert.equal(postToolBatch.isOngoing, true);
+});
+
+test("Claude delegation hooks normalize to shared subagent events", () => {
+  const now = Date.now();
+  const events = buildClaudeSessionEventsForTest({
+    sessionId: "session-123",
+    fallbackCwd: "/workspaces/CodexAgentsOffice",
+    records: [],
+    fallbackUpdatedAt: now,
+    hookRecords: [
+      {
+        hook_event_name: "SubagentStart",
+        timestamp: new Date(now - 1_000).toISOString(),
+        cwd: "/workspaces/CodexAgentsOffice",
+        agent_type: "explorer"
+      }
+    ]
+  });
+
+  assert.ok(events.some((event) =>
+    event.kind === "subagent"
+    && event.method === "claude/collabAgentToolCall"
+    && event.path === "/workspaces/CodexAgentsOffice"
+    && event.title === "Spawning explorer subagent"
+  ));
 });
 
 test("synthetic Claude model placeholders do not leak into agent labels", () => {

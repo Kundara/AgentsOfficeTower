@@ -173,7 +173,7 @@ export interface AgentActivityEvent {
   linesRemoved?: number;
 }
 
-export type AgentProvenanceSource = "codex" | "claude" | "cloud" | "cursor" | "presence" | "openclaw";
+export type AgentProvenanceSource = "codex" | "claude" | "cloud" | "cursor" | "presence" | "openclaw" | "hermes";
 export type AgentConfidence = "typed" | "inferred";
 
 export interface NeedsUserQuestionOption {
@@ -235,10 +235,44 @@ export interface DashboardEvent {
   networkApprovalContext?: Record<string, unknown> | null;
 }
 
+export interface AgentHotFileSummary {
+  path: string | null;
+  label: string;
+  action: AgentActivityEvent["action"];
+  count: number;
+  lastUpdatedAt: string;
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+export interface AgentRunningCommandSummary {
+  command: string;
+  cwd: string | null;
+  startedAt: string;
+  updatedAt: string;
+  elapsedMs: number;
+  isLongRunning: boolean;
+  outputEvents: number;
+}
+
+export interface AgentPhaseBlockerSummary {
+  kind: "approval" | "input" | "failure" | "longCommand";
+  title: string;
+  detail: string;
+  since: string;
+}
+
+export interface AgentActivitySummary {
+  hotFiles: AgentHotFileSummary[];
+  runningCommand: AgentRunningCommandSummary | null;
+  blockers: AgentPhaseBlockerSummary[];
+  updatedAt: string | null;
+}
+
 export interface DashboardAgent {
   id: string;
   label: string;
-  source: "local" | "cloud" | "cursor" | "presence" | "claude" | "openclaw";
+  source: "local" | "cloud" | "cursor" | "presence" | "claude" | "openclaw" | "hermes";
   sourceKind: string;
   parentThreadId: string | null;
   depth: number;
@@ -258,6 +292,7 @@ export interface DashboardAgent {
   stoppedAt: string | null;
   paths: string[];
   activityEvent: AgentActivityEvent | null;
+  activitySummary?: AgentActivitySummary;
   latestMessage: string | null;
   threadId: string | null;
   taskId: string | null;
@@ -279,6 +314,68 @@ export interface DashboardAgent {
     | null;
 }
 
+export interface HotChangeSummary {
+  path: string;
+  label: string;
+  fileType: "script" | "doc" | "media";
+  branch: string | null;
+  branches: string[];
+  users: string[];
+  heat: number;
+  score: number;
+  changeCount: number;
+  lastChangedAt: string;
+  linesAdded: number;
+  linesRemoved: number;
+  agents: string[];
+  provenance: AgentProvenanceSource;
+  confidence: AgentConfidence;
+}
+
+export interface HotToolSummary {
+  label: string;
+  heat: number;
+  score: number;
+  useCount: number;
+  lastUsedAt: string;
+  itemType: string | null;
+  agents: string[];
+  provenance: AgentProvenanceSource;
+  confidence: AgentConfidence;
+}
+
+export interface CommandProgressSummary {
+  percent: number;
+  label: string;
+  confidence: "high";
+  source: "explicit-percent" | "count";
+}
+
+export interface RunningCommandSummary {
+  id: string;
+  command: string;
+  cwd: string | null;
+  threadId: string | null;
+  agentLabel: string | null;
+  status: "running" | "quiet" | "completed" | "failed";
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  durationMs: number;
+  quietForMs: number;
+  lastOutput: string | null;
+  progress: CommandProgressSummary | null;
+  provenance: AgentProvenanceSource;
+  confidence: AgentConfidence;
+}
+
+export interface WorkspaceActivitySnapshot {
+  generatedAt: string;
+  hotChanges: HotChangeSummary[];
+  hotTools: HotToolSummary[];
+  runningCommands: RunningCommandSummary[];
+}
+
 export interface DashboardSnapshot {
   projectRoot: string;
   projectLabel: string;
@@ -288,6 +385,7 @@ export interface DashboardSnapshot {
   agents: DashboardAgent[];
   cloudTasks: CloudTask[];
   events: DashboardEvent[];
+  activity: WorkspaceActivitySnapshot;
   notes: string[];
 }
 

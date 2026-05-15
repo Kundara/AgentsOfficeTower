@@ -17,6 +17,8 @@ const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
 const MIN_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 100;
 const MAX_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 400;
 const CODEX_PROJECT_DISCOVERY_THREAD_MULTIPLIER = 20;
+const PROJECT_DISCOVERY_SOURCE_TIMEOUT_MS = 5000;
+const TRANSIENT_PROJECT_ROOTS = new Set(["/tmp", "/var/tmp", "/dev/shm"]);
 
 async function projectDiscoveryUpdatedAt(root: string, fallbackUpdatedAt: number): Promise<number> {
   const filesystemRoot = filesystemPathForProjectRoot(root);
@@ -117,6 +119,10 @@ export function canonicalizeProjectPath(input: string | null | undefined): strin
   }
 
   return trimTrailingSlash(rawWithoutExtendedPrefix.replace(/\\/g, "/"));
+}
+
+function isTransientProjectRoot(root: string): boolean {
+  return TRANSIENT_PROJECT_ROOTS.has(root.replace(/\\/g, "/").toLowerCase());
 }
 
 export function projectPathIdentityKey(input: string | null | undefined): string | null {
@@ -296,17 +302,28 @@ export async function discoverCodexProjects(limit = 20): Promise<DiscoveredProje
 export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]> {
   const merged = new Map<string, DiscoveredProject>();
   const { PROJECT_ADAPTERS } = await import("./adapters");
+
+  const withDiscoveryTimeout = (
+    promise: Promise<DiscoveredProject[]>
+  ): Promise<DiscoveredProject[]> =>
+    Promise.race([
+      promise,
+      new Promise<DiscoveredProject[]>((resolve) => {
+        setTimeout(() => resolve([]), PROJECT_DISCOVERY_SOURCE_TIMEOUT_MS).unref();
+      })
+    ]).catch(() => []);
+
   const discoveredProjectLists: DiscoveredProject[][] = await Promise.all([
-    discoverCodexConfiguredProjects(limit).catch(() => []),
-    discoverCodexProjects(limit).catch(() => []),
+    withDiscoveryTimeout(discoverCodexConfiguredProjects(limit)),
+    withDiscoveryTimeout(discoverCodexProjects(limit)),
     ...PROJECT_ADAPTERS
       .filter((adapter) => typeof adapter.discoverProjects === "function")
-      .map((adapter) => adapter.discoverProjects!(limit).catch(() => [] as DiscoveredProject[]))
+      .map((adapter) => withDiscoveryTimeout(adapter.discoverProjects!(limit)))
   ]);
 
   for (const project of discoveredProjectLists.flat()) {
     const identityKey = projectPathIdentityKey(project.root);
-    if (!identityKey) {
+    if (!identityKey || isTransientProjectRoot(project.root)) {
       continue;
     }
 

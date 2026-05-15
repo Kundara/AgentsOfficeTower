@@ -546,6 +546,71 @@ function summarizeTool(item: Record<string, unknown>, fallbackLabel = "MCP tool"
   };
 }
 
+function asReceiverThreadIds(item: Record<string, unknown>): string[] {
+  const receiverThreadIds = item.receiverThreadIds ?? item.receiver_thread_ids;
+  if (Array.isArray(receiverThreadIds)) {
+    return receiverThreadIds.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+  }
+  const receiverThreadId = asString(item.receiverThreadId ?? item.receiver_thread_id);
+  return receiverThreadId ? [receiverThreadId] : [];
+}
+
+function normalizeCollabToolName(tool: string): string {
+  const normalized = tool.replace(/[_\s-]+/g, "").toLowerCase();
+  if (normalized === "spawnagent" || normalized === "spawnagents") {
+    return "spawn";
+  }
+  if (normalized === "waitagent" || normalized === "wait") {
+    return "wait";
+  }
+  if (normalized === "sendinput" || normalized === "sendmessage" || normalized === "followuptask") {
+    return "send";
+  }
+  if (normalized === "closeagent") {
+    return "close";
+  }
+  if (normalized === "resumeagent") {
+    return "resume";
+  }
+  return normalized;
+}
+
+function summarizeCollabAgentTool(item: Record<string, unknown>): string {
+  const rawTool = asString(item.tool) ?? "subagent";
+  const receiverCount = asReceiverThreadIds(item).length;
+  switch (normalizeCollabToolName(rawTool)) {
+    case "spawn":
+      return receiverCount > 0
+        ? `Spawning ${receiverCount} subagent${receiverCount === 1 ? "" : "s"}`
+        : "Spawning subagent";
+    case "wait":
+      return receiverCount > 1 ? `Waiting on ${receiverCount} subagents` : "Waiting on subagents";
+    case "send":
+      return receiverCount > 1 ? `Messaging ${receiverCount} subagents` : "Messaging subagent";
+    case "close":
+      return receiverCount > 1 ? `Closing ${receiverCount} subagents` : "Closing subagent";
+    case "resume":
+      return receiverCount > 1 ? `Resuming ${receiverCount} subagents` : "Resuming subagent";
+    default:
+      return rawTool;
+  }
+}
+
+function collabReceiverIsNotFound(item: Record<string, unknown>, receiverThreadId: string): boolean {
+  const agentsStates = asRecord(item.agentsStates) ?? asRecord(item.agents_states);
+  const state = asRecord(agentsStates?.[receiverThreadId]);
+  return asString(state?.status) === "notFound";
+}
+
+export function extractCollabReceiverThreadIds(message: AppServerNotification | AppServerServerRequest): string[] {
+  const params = asRecord(message.params) ?? {};
+  const item = asRecord(params.item);
+  if (!item || asString(item.type) !== "collabAgentToolCall") {
+    return [];
+  }
+  return asReceiverThreadIds(item).filter((threadId) => !collabReceiverIsNotFound(item, threadId));
+}
+
 function summarizeDynamicTool(params: Record<string, unknown>): string {
   const namespace = asString(params.namespace);
   const tool = asString(params.tool) ?? asString(params.name) ?? "Tool";
@@ -773,13 +838,17 @@ function buildEventFromItem(
   }
 
   if (itemType === "collabToolCall" || itemType === "collabAgentToolCall") {
+    const detail = summarizeCollabAgentTool(item);
     return eventBase(context, method, params, {
       itemId,
       itemType,
       kind: "subagent",
       phase,
-      title: phase === "completed" ? "Subagent updated" : "Subagent started",
-      detail: shorten(asString(item.tool) ?? itemType)
+      title:
+        phase === "failed" ? "Subagent failed"
+        : phase === "completed" ? "Subagent updated"
+        : "Subagent started",
+      detail: shorten(detail)
     });
   }
 

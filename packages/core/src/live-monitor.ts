@@ -7,8 +7,12 @@ import {
   CodexAppServerClient,
   type ToolRequestUserInputResponse
 } from "./app-server";
+import {
+  listCodexProjectThreadCandidates,
+  readCodexThreadWithTimeout
+} from "./codex-thread-query";
 import { listCloudTasks } from "./cloud";
-import { canonicalizeProjectPath, filterThreadsForProject } from "./project-paths";
+import { canonicalizeProjectPath } from "./project-paths";
 import { getRoomsFilePath, resolveReadableRoomsFilePath } from "./room-config";
 import {
   buildDashboardSnapshotFromState,
@@ -17,7 +21,6 @@ import {
   parentThreadIdForThread,
   parseThreadSourceMeta
 } from "./snapshot";
-import { selectProjectThreadsWithParents } from "./local-thread-selection";
 import type {
   CloudTask,
   CodexThread,
@@ -34,6 +37,7 @@ import {
   buildNeedsUserStateFromServerRequest,
   buildThreadReadAgentMessageEvent,
   collectPaths,
+  extractCollabReceiverThreadIds,
   extractThreadId,
   hasEquivalentRecentMessageEvent,
   isFinalAgentMessageNotification,
@@ -54,6 +58,7 @@ export {
   buildAppServerDiagnosticNote,
   buildDashboardEventFromAppServerMessage,
   buildThreadReadAgentMessageEvent,
+  extractCollabReceiverThreadIds,
   hasEquivalentRecentMessageEvent,
   parseApplyPatchInput,
   buildRolloutHookEvent,
@@ -68,8 +73,8 @@ const SNAPSHOT_DEBOUNCE_MS = 60;
 const THREAD_READ_DEBOUNCE_MS = 80;
 const ACTIVE_SUBSCRIPTION_WINDOW_MS = 10 * 60 * 1000;
 const MAX_SUBSCRIBED_THREADS = 8;
-const MAX_RECENT_EVENTS = 64;
-const RECENT_EVENT_RETENTION_MS = 90 * 1000;
+const MAX_RECENT_EVENTS = 240;
+const RECENT_EVENT_RETENTION_MS = 45 * 60 * 1000;
 // Desktop-backed threads can take noticeably longer to resume than simple CLI
 // sessions, and a too-short timeout drops the live item stream we need for
 // `item/agentMessage/*` notifications.
@@ -444,14 +449,20 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
 
     try {
-      const allThreads = await this.client.listThreads({
-        cwd: this.projectRoot,
-        limit: Math.max(this.localLimit * 4, 40)
+      const query = await listCodexProjectThreadCandidates({
+        client: this.client,
+        projectRoot: this.projectRoot,
+        localLimit: this.localLimit
       });
-      const projectThreads = filterThreadsForProject(this.projectRoot, allThreads);
+      if (query.usedUnscopedFallback) {
+        this.addNote("Local Codex cwd filter returned no project threads; used unscoped Windows path fallback.");
+      } else {
+        this.clearMatchingNote("Local Codex cwd filter returned no project threads;");
+      }
+      const projectThreads = query.projectThreads;
       const projectThreadsById = new Map(projectThreads.map((thread) => [thread.id, thread]));
       const trackedThreads = new Map(
-        selectProjectThreadsWithParents(this.projectRoot, allThreads, this.localLimit)
+        query.trackedThreads
           .map((thread) => [thread.id, thread])
       );
       const loadedThreadIds = await this.client.listLoadedThreads().catch(() => []);
@@ -461,7 +472,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         }
         let loadedThread: CodexThread | null = null;
         try {
-          loadedThread = await this.client.readThread(threadId);
+          loadedThread = await readCodexThreadWithTimeout(this.client, threadId);
         } catch {
           loadedThread = null;
         }
@@ -488,7 +499,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         let parentThread = projectThreadsById.get(parentThreadId) ?? this.threads.get(parentThreadId) ?? null;
         if (!parentThread) {
           try {
-            parentThread = await this.client.readThread(parentThreadId);
+            parentThread = await readCodexThreadWithTimeout(this.client, parentThreadId);
           } catch {
             parentThread = null;
           }
@@ -850,6 +861,15 @@ export class ProjectLiveMonitor extends EventEmitter {
       }
     }
 
+    const collabReceiverThreadIds = extractCollabReceiverThreadIds(notification);
+    if (collabReceiverThreadIds.length > 0) {
+      for (const receiverThreadId of collabReceiverThreadIds) {
+        this.markThreadLive(receiverThreadId);
+        void this.refreshCollabReceiverThread(receiverThreadId, threadId);
+      }
+      this.scheduleThreadSubscriptions();
+    }
+
     if (notification.method === "serverRequest/resolved") {
       const params = asRecord(notification.params) ?? {};
       const requestId = asString(params.requestId);
@@ -867,6 +887,9 @@ export class ProjectLiveMonitor extends EventEmitter {
     } else {
       const event = buildDashboardEventFromAppServerMessage({ projectRoot: this.projectRoot }, notification);
       if (event) {
+        if (event.kind === "subagent" && event.threadId) {
+          this.markThreadLive(event.threadId);
+        }
         this.pushRecentEvent(event);
       }
     }
@@ -981,6 +1004,36 @@ export class ProjectLiveMonitor extends EventEmitter {
       const message = error instanceof Error ? error.message : String(error);
       this.addNote(`Thread refresh failed (${threadId.slice(0, 8)}): ${message}`);
       this.scheduleSnapshot();
+    }
+  }
+
+  private async refreshCollabReceiverThread(threadId: string, senderThreadId: string | null): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    try {
+      const thread = await this.client.readThread(threadId);
+      const parentThreadId = parentThreadIdForThread(thread);
+      const canonicalCwd = canonicalizeProjectPath(thread.cwd) ?? thread.cwd;
+      const belongsToProject =
+        canonicalCwd === this.projectRoot
+        || canonicalCwd.startsWith(`${this.projectRoot}/`)
+        || Boolean(parentThreadId && this.threads.has(parentThreadId))
+        || Boolean(parentThreadId && senderThreadId === parentThreadId);
+      if (!belongsToProject) {
+        return;
+      }
+
+      this.threads.set(threadId, thread);
+      if (isOngoingThread(thread)) {
+        this.markThreadLive(threadId);
+      }
+      this.ensureThreadWatcher(threadId, thread.path);
+      this.scheduleThreadSubscriptions();
+      this.scheduleSnapshot();
+    } catch {
+      this.scheduleThreadRefresh(threadId);
     }
   }
 

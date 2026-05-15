@@ -86,14 +86,41 @@ type ParsedAppServerMessage =
   | { kind: "serverRequest"; message: AppServerServerRequest }
   | { kind: "unknown" };
 
+const MAX_APP_SERVER_LINE_BYTES = 8 * 1024 * 1024;
+const APP_SERVER_INITIALIZE_TIMEOUT_MS = 15000;
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref?.();
+      promise.finally(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
+    })
+  ]);
+}
+
+function messageIdFromOversizedLine(line: string): number | null {
+  const prefix = line.slice(0, 256);
+  const match = prefix.match(/"id"\s*:\s*(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
 export function parseAppServerMessage(line: string): ParsedAppServerMessage {
-  const message = JSON.parse(line) as {
+  let message: {
     id?: number;
     method?: string;
     params?: Record<string, unknown>;
     result?: unknown;
     error?: { message?: string };
   };
+  try {
+    message = JSON.parse(line) as typeof message;
+  } catch {
+    return { kind: "unknown" };
+  }
 
   if (typeof message.id === "number" && typeof message.method === "string") {
     return {
@@ -173,18 +200,45 @@ export class CodexAppServerClient {
   static async create(): Promise<CodexAppServerClient> {
     const { child } = await spawnCodexProcess(["app-server"]);
     const client = new CodexAppServerClient(child);
-    await client.request("initialize", {
-      clientInfo: {
-        name: "codex_agents_office",
-        title: "Codex Agents Office",
-        version: "0.1.0"
-      },
-      capabilities: {
-        experimentalApi: true
-      }
-    });
+    try {
+      await withTimeout(client.request("initialize", {
+        clientInfo: {
+          name: "codex_agents_office",
+          title: "Codex Agents Office",
+          version: "0.1.0"
+        },
+        capabilities: {
+          experimentalApi: true
+        }
+      }), APP_SERVER_INITIALIZE_TIMEOUT_MS, "app-server initialize");
+    } catch (error) {
+      client.close();
+      throw error;
+    }
     client.notify("initialized");
     return client;
+  }
+
+  static async createWithCandidateLabel(): Promise<{ client: CodexAppServerClient; candidateLabel: string }> {
+    const { child, candidate } = await spawnCodexProcess(["app-server"]);
+    const client = new CodexAppServerClient(child);
+    try {
+      await withTimeout(client.request("initialize", {
+        clientInfo: {
+          name: "codex_agents_office",
+          title: "Codex Agents Office",
+          version: "0.1.0"
+        },
+        capabilities: {
+          experimentalApi: true
+        }
+      }), APP_SERVER_INITIALIZE_TIMEOUT_MS, "app-server initialize");
+    } catch (error) {
+      client.close();
+      throw error;
+    }
+    client.notify("initialized");
+    return { client, candidateLabel: candidate.label };
   }
 
   private onStdout(chunk: string): void {
@@ -198,6 +252,18 @@ export class CodexAppServerClient {
       const line = this.buffer.slice(0, newlineIndex).trim();
       this.buffer = this.buffer.slice(newlineIndex + 1);
       if (!line) {
+        continue;
+      }
+
+      if (line.length > MAX_APP_SERVER_LINE_BYTES) {
+        const requestId = messageIdFromOversizedLine(line);
+        if (requestId !== null) {
+          const pending = this.pending.get(requestId);
+          if (pending) {
+            this.pending.delete(requestId);
+            pending.reject(new Error(`app-server message exceeded ${MAX_APP_SERVER_LINE_BYTES} bytes`));
+          }
+        }
         continue;
       }
 

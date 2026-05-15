@@ -12,6 +12,7 @@ import {
   clearBossPresence,
   filterSnapshotToCurrentWorkload,
   flattenRooms,
+  installHermesAgentsOfficePlugin,
   readAsepriteHeader,
   resolveReadableRoomsFilePath,
   scaffoldRoomsFile,
@@ -29,13 +30,14 @@ Usage:
   codex-agents-office snapshot [projectRoot] [--history]
   codex-agents-office watch [projectRoot] [--history]
   codex-agents-office web [--port 4181] [--host 127.0.0.1] [projectRoot...]
-  codex-agents-office web query <repo> <recent|last> [scope=local|team] [limit=10] [type=agents|events|all] [--json]
+  codex-agents-office web query <repo> <gist|recent|last> [scope=local|team] [limit=10] [type=agents|events|all] [--json]
   codex-agents-office demo preview [--port 4181] [--host 127.0.0.1] [--duration 75] [--keep]
   codex-agents-office aseprite inspect [file]
   codex-agents-office presence boss [projectRoot]
   codex-agents-office presence clear [projectRoot]
   codex-agents-office rooms validate [fileOrProjectRoot]
   codex-agents-office rooms scaffold [projectRoot]
+  codex-agents-office agents link hermes [--hermes-home ~/.hermes] [--hook-dir <path>]
 
 Omit project roots for normal fleet-mode web deploys.
 Pass project roots only when you intentionally want a pinned single-project or multi-project view.
@@ -189,6 +191,36 @@ async function runPresence(args: string[]): Promise<void> {
   exit(1);
 }
 
+function stringFlag(args: string[], name: string): string | null {
+  const index = args.indexOf(name);
+  if (index < 0) {
+    return null;
+  }
+  const value = args[index + 1];
+  return value && !value.startsWith("--") ? value : null;
+}
+
+async function runAgents(args: string[]): Promise<void> {
+  const subcommand = args[0];
+  const target = args[1];
+  if (subcommand === "link" && target === "hermes") {
+    const result = await installHermesAgentsOfficePlugin({
+      hermesHome: stringFlag(args, "--hermes-home"),
+      hookDir: stringFlag(args, "--hook-dir")
+    });
+    console.log("Hermes Agents Office plugin linked.");
+    console.log(`Hermes home: ${result.hermesHome}`);
+    console.log(`Plugin: ${result.pluginDir}`);
+    console.log(`Hook output: ${result.hookDir}`);
+    console.log(`Config: ${result.configPath}`);
+    console.log("Restart or reload Hermes when you want it to load the plugin; this command does not launch Hermes.");
+    return;
+  }
+
+  usage();
+  exit(1);
+}
+
 async function runDemo(args: string[]): Promise<void> {
   const subcommand = args[0];
   if (subcommand === "preview") {
@@ -244,6 +276,11 @@ async function main(): Promise<void> {
 
   if (command === "presence") {
     await runPresence(args);
+    return;
+  }
+
+  if (command === "agents") {
+    await runAgents(args);
     return;
   }
 

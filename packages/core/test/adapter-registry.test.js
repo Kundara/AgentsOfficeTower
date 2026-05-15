@@ -11,6 +11,7 @@ test("project adapter registry exposes the built-in source set", () => {
     "codex-local",
     "cursor-cloud",
     "cursor-local",
+    "hermes",
     "openclaw",
     "presence"
   ]);
@@ -29,4 +30,3 @@ test("every built-in adapter can create a project source with the shared contrac
     assert.equal(typeof source.dispose, "function");
   }
 });
-

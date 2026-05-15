@@ -6,6 +6,7 @@ const {
   buildAppServerDiagnosticNote,
   buildDashboardEventFromAppServerMessage,
   buildRolloutHookEvent,
+  extractCollabReceiverThreadIds,
   buildThreadReadAgentMessageEvent,
   parseApplyPatchInput,
   ProjectLiveMonitor,
@@ -26,6 +27,9 @@ const {
   buildCodexLocalAdapterSnapshotFromState,
   selectProjectThreadsWithParents
 } = require("../dist/adapters/codex-local.js");
+const {
+  buildWorkspaceActivitySnapshot
+} = require("../dist/domain/workspace-activity.js");
 
 function sampleThread() {
   return {
@@ -77,6 +81,11 @@ test("parseAppServerMessage distinguishes response, notification, and server req
     parseAppServerMessage(JSON.stringify({ id: 7, method: "item/tool/requestUserInput", params: { threadId: "thr_1" } })),
     { kind: "serverRequest", message: { id: 7, method: "item/tool/requestUserInput", params: { threadId: "thr_1" } } }
   );
+
+  assert.deepEqual(
+    parseAppServerMessage("SUCCESS: The process with PID 123 has been terminated."),
+    { kind: "unknown" }
+  );
 });
 
 test("app-server cwd filters use Windows paths for Windows-backed WSL project roots", () => {
@@ -86,6 +95,179 @@ test("app-server cwd filters use Windows paths for Windows-backed WSL project ro
       ? "C:\\Users\\User\\AgentsOfficeTower"
       : "/mnt/c/Users/User/AgentsOfficeTower"
   );
+});
+
+test("workspace activity summarizes decayed hot changes and long-running commands", () => {
+  const now = Date.now();
+  const agent = {
+    id: "thr_123",
+    label: "Builder",
+    threadId: "thr_123",
+    git: { branch: "feature/hot-board" }
+  };
+  const baseEvent = {
+    source: "codex",
+    confidence: "typed",
+    threadId: "thr_123",
+    turnId: "turn_1",
+    itemType: undefined,
+    requestId: undefined,
+    action: "updated",
+    isImage: false,
+    reason: undefined,
+    command: undefined,
+    cwd: undefined,
+    grantRoot: undefined,
+    availableDecisions: undefined,
+    networkApprovalContext: null
+  };
+
+  const activity = buildWorkspaceActivitySnapshot({
+    now,
+    generatedAt: new Date(now).toISOString(),
+    agents: [agent],
+    events: [
+      {
+        ...baseEvent,
+        id: "file-1",
+        createdAt: new Date(now - 60 * 1000).toISOString(),
+        method: "item/fileChange/patchUpdated",
+        itemId: "file_item_1",
+        kind: "fileChange",
+        phase: "updated",
+        title: "Patch updated",
+        detail: "/tmp/CodexAgentsOffice/packages/core/src/types.ts",
+        path: "/tmp/CodexAgentsOffice/packages/core/src/types.ts",
+        action: "edited",
+        linesAdded: 12,
+        linesRemoved: 2
+      },
+      {
+        ...baseEvent,
+        id: "file-2",
+        createdAt: new Date(now - 4 * 60 * 1000).toISOString(),
+        method: "item/fileChange/patchUpdated",
+        itemId: "file_item_2",
+        kind: "fileChange",
+        phase: "updated",
+        title: "Patch updated",
+        detail: "/tmp/CodexAgentsOffice/packages/core/src/types.ts",
+        path: "/tmp/CodexAgentsOffice/packages/core/src/types.ts",
+        action: "edited",
+        linesAdded: 8,
+        linesRemoved: 0
+      },
+      {
+        ...baseEvent,
+        id: "command-start",
+        createdAt: new Date(now - 40 * 1000).toISOString(),
+        method: "item/started",
+        itemId: "cmd_item",
+        kind: "command",
+        phase: "started",
+        title: "Command started",
+        detail: "npm run build",
+        path: "/tmp/CodexAgentsOffice",
+        action: "ran",
+        command: "npm run build",
+        cwd: "/tmp/CodexAgentsOffice"
+      },
+      {
+        ...baseEvent,
+        id: "command-output",
+        createdAt: new Date(now - 2 * 1000).toISOString(),
+        method: "item/commandExecution/outputDelta",
+        itemId: "cmd_item",
+        kind: "command",
+        phase: "updated",
+        title: "Command output",
+        detail: "tests 7/10",
+        path: "/tmp/CodexAgentsOffice",
+        action: "ran"
+      },
+      {
+        ...baseEvent,
+        id: "tool-start",
+        createdAt: new Date(now - 20 * 1000).toISOString(),
+        method: "item/started",
+        itemId: "tool_item",
+        itemType: "mcpToolCall",
+        kind: "tool",
+        phase: "started",
+        title: "MCP tool started",
+        detail: "browser.open",
+        path: null
+      },
+      {
+        ...baseEvent,
+        id: "tool-complete",
+        createdAt: new Date(now - 10 * 1000).toISOString(),
+        method: "item/completed",
+        itemId: "tool_item",
+        itemType: "mcpToolCall",
+        kind: "tool",
+        phase: "completed",
+        title: "MCP tool completed",
+        detail: "browser.open",
+        path: null
+      }
+    ]
+  });
+
+  assert.equal(activity.hotChanges[0].path, "/tmp/CodexAgentsOffice/packages/core/src/types.ts");
+  assert.equal(activity.hotChanges[0].changeCount, 2);
+  assert.ok(activity.hotChanges[0].heat > 0);
+  assert.deepEqual(activity.hotChanges[0].agents, ["Builder"]);
+  assert.equal(activity.hotChanges[0].branch, "feature/hot-board");
+  assert.deepEqual(activity.hotChanges[0].branches, ["feature/hot-board"]);
+  assert.deepEqual(activity.hotChanges[0].users, []);
+  assert.equal(activity.hotTools[0].label, "browser.open");
+  assert.equal(activity.hotTools[0].itemType, "mcpToolCall");
+  assert.deepEqual(activity.hotTools[0].agents, ["Builder"]);
+  assert.equal(activity.runningCommands[0].command, "npm run build");
+  assert.equal(activity.runningCommands[0].status, "running");
+  assert.equal(activity.runningCommands[0].progress.percent, 70);
+  assert.equal(activity.runningCommands[0].agentLabel, "Builder");
+});
+
+test("workspace activity includes branch and multiplayer user attribution on hot changes", () => {
+  const now = Date.now();
+  const activity = buildWorkspaceActivitySnapshot({
+    now,
+    generatedAt: new Date(now).toISOString(),
+    projectBranch: "main",
+    agents: [
+      {
+        id: "shared-thread",
+        label: "Remote Builder",
+        threadId: "shared-thread",
+        git: { branch: "feature/shared-hot-file" },
+        network: { peerLabel: "Teammate" }
+      }
+    ],
+    events: [
+      {
+        id: "shared-file",
+        source: "codex",
+        confidence: "typed",
+        threadId: "shared-thread",
+        createdAt: new Date(now - 10 * 1000).toISOString(),
+        method: "item/fileChange/patchUpdated",
+        kind: "fileChange",
+        phase: "updated",
+        title: "Patch updated",
+        detail: "/tmp/CodexAgentsOffice/packages/web/src/client/runtime/navigation-source.ts",
+        path: "/tmp/CodexAgentsOffice/packages/web/src/client/runtime/navigation-source.ts",
+        action: "edited",
+        linesAdded: 10,
+        linesRemoved: 1
+      }
+    ]
+  });
+
+  assert.equal(activity.hotChanges[0].branch, "feature/shared-hot-file");
+  assert.deepEqual(activity.hotChanges[0].branches, ["feature/shared-hot-file"]);
+  assert.deepEqual(activity.hotChanges[0].users, ["Teammate"]);
 });
 
 test("thread/list requests current workload ordering explicitly", async () => {
@@ -2006,6 +2188,35 @@ test("subagent source metadata accepts current nickname and role fields", () => 
   assert.equal(inferThreadAgentRole(thread, "subAgent"), "worker");
 });
 
+test("subagent source metadata accepts v2 agent path and role alias fields", () => {
+  const thread = {
+    ...sampleThread(),
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 2,
+          agentPath: "/root/frontend_fix",
+          agentNickname: "Ada",
+          agentType: "worker"
+        }
+      }
+    },
+    agentNickname: null,
+    agentRole: null
+  };
+
+  assert.deepEqual(parseThreadSourceMeta(thread), {
+    sourceKind: "subAgent",
+    parentThreadId: "thr_parent",
+    depth: 2,
+    agentNickname: "Ada",
+    agentRole: "worker"
+  });
+  assert.equal(parentThreadIdForThread(thread), "thr_parent");
+  assert.equal(pickThreadLabel({ ...thread, source: { subAgent: { threadSpawn: { parentThreadId: "thr_parent", depth: 2, agentPath: "/root/frontend_fix" } } } }), "frontend_fix");
+});
+
 test("subagent source metadata tolerates lowercase schema key", () => {
   const thread = {
     ...sampleThread(),
@@ -2057,6 +2268,130 @@ test("collab agent tool calls summarize parent sessions as delegating", () => {
   const summary = summariseThread(thread);
   assert.equal(summary.state, "delegating");
   assert.equal(summary.detail, "Spawning 2 subagents");
+  assert.equal(summary.activityEvent?.type, "collabAgentToolCall");
+});
+
+test("multi-agent v2 collab tool calls summarize camelCase tools", () => {
+  const thread = {
+    ...sampleThread(),
+    turns: [
+      {
+        id: "turn_1",
+        status: "inProgress",
+        error: null,
+        items: [
+          {
+            type: "collabAgentToolCall",
+            id: "call_1",
+            tool: "spawnAgent",
+            status: "inProgress",
+            senderThreadId: "thr_parent",
+            receiverThreadIds: ["thr_child_a", "thr_child_b"],
+            prompt: "Check the latest app-server API.",
+            model: null,
+            reasoningEffort: null,
+            agentsStates: {}
+          }
+        ]
+      }
+    ]
+  };
+
+  const summary = summariseThread(thread);
+  assert.equal(summary.state, "delegating");
+  assert.equal(summary.detail, "Spawning 2 subagents");
+  assert.equal(summary.activityEvent?.type, "collabAgentToolCall");
+});
+
+test("multi-agent v2 collab notifications become subagent events", () => {
+  const event = buildDashboardEventFromAppServerMessage(
+    { projectRoot: "/tmp/CodexAgentsOffice" },
+    {
+      method: "item/completed",
+      params: {
+        threadId: "thr_parent",
+        turnId: "turn_1",
+        completedAtMs: 1,
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_1",
+          tool: "spawnAgent",
+          status: "completed",
+          senderThreadId: "thr_parent",
+          receiverThreadIds: ["thr_child"],
+          prompt: "Inspect the renderer.",
+          model: "gpt-5.2",
+          reasoningEffort: "medium",
+          agentsStates: {
+            thr_child: {
+              status: "running",
+              message: null
+            }
+          }
+        }
+      }
+    }
+  );
+
+  assert.equal(event.kind, "subagent");
+  assert.equal(event.phase, "completed");
+  assert.equal(event.itemType, "collabAgentToolCall");
+  assert.equal(event.detail, "Spawning 1 subagent");
+});
+
+test("multi-agent v2 receiver thread ids are extracted from collab notifications", () => {
+  assert.deepEqual(
+    extractCollabReceiverThreadIds({
+      method: "item/completed",
+      params: {
+        threadId: "thr_parent",
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          receiverThreadIds: ["thr_child", "thr_missing"],
+          agentsStates: {
+            thr_child: { status: "running", message: null },
+            thr_missing: { status: "notFound", message: null }
+          }
+        }
+      }
+    }),
+    ["thr_child"]
+  );
+});
+
+test("fresh multi-agent v2 events keep parent sessions delegating while reads catch up", () => {
+  const thread = {
+    ...sampleThread(),
+    updatedAt: Math.floor(Date.now() / 1000) - 10,
+    status: { type: "idle" },
+    turns: []
+  };
+  const summary = applyRecentActivityEvent(
+    thread,
+    summariseThread(thread),
+    [
+      {
+        id: "event_1",
+        source: "codex",
+        confidence: "typed",
+        threadId: "thr_123",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        turnId: "turn_1",
+        itemId: "call_1",
+        itemType: "collabAgentToolCall",
+        kind: "subagent",
+        phase: "completed",
+        title: "Subagent updated",
+        detail: "Spawning 1 subagent",
+        path: null
+      }
+    ]
+  );
+
+  assert.equal(summary.state, "delegating");
+  assert.equal(summary.detail, "Spawning 1 subagent");
   assert.equal(summary.activityEvent?.type, "collabAgentToolCall");
 });
 
@@ -2524,6 +2859,84 @@ test("codex local adapter follows lowercase subagent parent metadata", () => {
   );
 
   assert.deepEqual(selected.map((thread) => thread.id), ["thr_child", "thr_parent"]);
+});
+
+test("codex local adapter follows camelCase v2 thread-spawn parent metadata", () => {
+  const parentThread = {
+    ...sampleThread(),
+    id: "thr_parent",
+    cwd: "/mnt/f/SomeOtherWorkspace",
+    source: "cli",
+    turns: []
+  };
+  const childThread = {
+    ...sampleThread(),
+    id: "thr_child",
+    cwd: "/tmp/CodexAgentsOffice",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    turns: []
+  };
+
+  const selected = selectProjectThreadsWithParents(
+    "/tmp/CodexAgentsOffice",
+    [parentThread, childThread],
+    24
+  );
+
+  assert.deepEqual(selected.map((thread) => thread.id), ["thr_child", "thr_parent"]);
+});
+
+test("codex local adapter keeps recursive subagent ancestors for nested v2 trees", () => {
+  const grandparentThread = {
+    ...sampleThread(),
+    id: "thr_grandparent",
+    cwd: "/mnt/f/SomeOtherWorkspace",
+    source: "cli",
+    turns: []
+  };
+  const parentThread = {
+    ...sampleThread(),
+    id: "thr_parent",
+    cwd: "/mnt/f/SomeOtherWorkspace",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_grandparent",
+          depth: 1
+        }
+      }
+    },
+    turns: []
+  };
+  const childThread = {
+    ...sampleThread(),
+    id: "thr_child",
+    cwd: "/tmp/CodexAgentsOffice",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 2
+        }
+      }
+    },
+    turns: []
+  };
+
+  const selected = selectProjectThreadsWithParents(
+    "/tmp/CodexAgentsOffice",
+    [grandparentThread, parentThread, childThread],
+    24
+  );
+
+  assert.deepEqual(selected.map((thread) => thread.id), ["thr_child", "thr_parent", "thr_grandparent"]);
 });
 
 test("codex local adapter keeps active threads selected even when a newer idle thread would fill the limit", () => {

@@ -10,6 +10,7 @@ import {
   describeStoredMultiplayerSettings,
   discoverProjects,
   listCloudTasks,
+  loadRoamingHermesSnapshotData,
   projectPathIdentityKey,
   ProjectLiveMonitor,
   respondToClaudeHookInputRequest,
@@ -19,7 +20,7 @@ import {
   setStoredCursorApiKey,
   setStoredMultiplayerSettings
 } from "@codex-agents-office/core";
-import type { CloudTask, DiscoveredProject } from "@codex-agents-office/core";
+import type { CloudTask, DashboardSnapshot, DiscoveredProject } from "@codex-agents-office/core";
 
 import { buildFleetResponse } from "./server-metadata";
 import { buildProjectDescriptors } from "./server-options";
@@ -303,7 +304,7 @@ export class FleetLiveService {
 
   private async publish(forceProjectRefresh = false): Promise<void> {
     await this.ensureProjectSet(forceProjectRefresh);
-    const snapshotsByRoot = new Map();
+    const snapshotsByRoot = new Map<string, DashboardSnapshot>();
     for (const project of this.projects) {
       const snapshot = this.monitors.get(project.root)?.getSnapshot();
       if (snapshot) {
@@ -311,11 +312,50 @@ export class FleetLiveService {
       }
     }
 
+    await this.attachRoamingHermesAgents(snapshotsByRoot);
     this.fleet = buildFleetResponse(this.projects, snapshotsByRoot);
 
     for (const response of this.clients) {
       response.write(`event: fleet\ndata: ${JSON.stringify(this.fleet)}\n\n`);
     }
+  }
+
+  private async attachRoamingHermesAgents(snapshotsByRoot: Map<string, DashboardSnapshot>): Promise<void> {
+    const anchorProject = this.projects[0] ?? null;
+    if (!anchorProject) {
+      return;
+    }
+
+    const anchorSnapshot = snapshotsByRoot.get(anchorProject.root) ?? null;
+    if (!anchorSnapshot) {
+      return;
+    }
+
+    const roaming = await loadRoamingHermesSnapshotData({
+      anchorProjectRoot: anchorProject.root,
+      knownProjectRoots: this.projects.map((project) => project.root),
+      limit: 4
+    }).catch(() => null);
+    if (!roaming || (roaming.agents.length === 0 && roaming.events.length === 0 && roaming.notes.length === 0)) {
+      return;
+    }
+
+    const existingAgentIds = new Set(anchorSnapshot.agents.map((agent) => agent.id));
+    snapshotsByRoot.set(anchorProject.root, {
+      ...anchorSnapshot,
+      agents: [
+        ...anchorSnapshot.agents,
+        ...roaming.agents.filter((agent) => !existingAgentIds.has(agent.id))
+      ],
+      events: [
+        ...roaming.events,
+        ...anchorSnapshot.events
+      ],
+      notes: [
+        ...anchorSnapshot.notes,
+        ...roaming.notes.filter((note) => !anchorSnapshot.notes.includes(note))
+      ]
+    });
   }
 
   private async ensureProjectSet(force = false): Promise<void> {
