@@ -9,7 +9,9 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added a workspace `activity` snapshot summary and browser Ops Wall that surfaces decayed hottest file changes plus long-running command/process activity, including high-confidence progress only when command output exposes explicit percent or count patterns.
 - Added a read-only `codex-agents-office web query <repo> <recent|last>` CLI path backed by loopback-only web APIs, with bounded agent/event filters and `local` or coordinated `team` scope.
+- Added a lightweight `codex-agents-office web query <repo> gist` CLI state-sync path that returns hot changes plus active-agent last message and last file-change context before deeper reads.
 - Added a browser-to-server coordinated team-fleet cache so CLI `scope=team` reads the same shared-room data already merged for the browser, without giving the CLI PartyKit credentials or write/reply capabilities.
 - Added repo-packaged `Skills/agents-tower` and `Skills/agents-tower-coordination` Codex skills for running/querying the tower CLI and using local/team tower data to avoid duplicate agent work.
 - Added browser-side approval actions to the durable `Needs You` queue for local typed Codex approval waits, allowing `Accept`, `Always for session`, `Decline`, and `Cancel` decisions to flow back through the app-server observer connection.
@@ -17,6 +19,9 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added inline `Reply` composers to app-server-owned local typed Codex session cards, routing follow-up text through app-server so idle threads resume with `turn/start` and active turns accept nudges through `turn/steer`.
 - Added hook-backed Claude `Needs You` actions for typed `PermissionRequest` and schema-backed `Elicitation` waits, using a local response-file bridge plus synthetic queue-clearing sidecar markers so browser approvals and form answers can flow back into the Agent SDK hooks.
 - Added scene-click thread cards for local Codex agents, exposing recent typed thread history directly from the office map with reply controls only when the thread is owned by the same app-server connection.
+- Added read-only Hermes Agent visibility by reading Hermes `state.db`/profile stores and live Hermes process cwd/env hints, mapping matching project sessions into Agents Office without project-name hard matching.
+- Added `codex-agents-office agents link hermes`, which installs a small Hermes plugin hook bridge into `~/.hermes/plugins/codex-agents-office` so Hermes session activity can stream into Agents Office as typed sidecars without launching Hermes.
+- Added a subtle primary-room wall dashboard in the Pixi office scene, summarizing running commands and hot file changes from the live snapshot without adding a detached admin panel.
 - Added `npm run check:codex-protocol`, which regenerates the installed Codex app-server TypeScript bindings and fails when server notification/request methods drift beyond the reviewed allowlist.
 
 - Added a machine-local image-only hat selector in the browser `Settings` popup, with a first `no hat` option and immediate application across the local player's visible agents.
@@ -24,10 +29,19 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed the Hermes plugin bridge to register Hermes' current lifecycle, LLM/API, tool-transform, approval, and `subagent_stop` hooks with bounded string payloads, and map transform/tool/subagent sidecars into typed activity.
+- Changed the Hermes plugin bridge to write a non-session load/error status marker in the hook output directory, making gateway plugin registration verifiable without creating fake workload agents.
+- Changed the in-scene hot-stuff board to show only file-change heat, grouped into a title-free 3x3 script/doc/media grid with compact Shared/Focus-style item text, no per-row progress bars, faster decay, and animated leaderboard row movement.
+- Changed hot-stuff file heat scoring so each file-change event contributes much less heat, keeping small or single edits from immediately reading as high-heat board items.
+- Changed the in-scene hot-stuff board file labels to clip with a short edge fade instead of inserting ellipses.
+- Changed the in-scene hot-stuff board to use flexible item columns, brighter panel colors, behind-board shadows, and larger scene-overlay hover tooltips with Windows-normalized paths, tighter shadows, and a heat bar for file heat details.
+- Changed the in-scene hot-stuff board grid to use tighter item insets and gaps so file cells do not look over-margined.
+- Changed hot-stuff file heat entries to carry branch and multiplayer user attribution through snapshots, web CLI gist output, shared-room merges, and hover tooltips.
 - Changed Codex app-server reply payloads to match the current generated schema, including `text_elements: []` on text turn inputs, `{ decision }` approval responses, MCP elicitation responses, and permission-profile approval responses.
 - Changed Codex app-server event handling so newer patch-update, MCP-progress, terminal-interaction, hook-run, guardian auto-review, model, warning, rate-limit, MCP startup/login, and Windows sandbox notifications now become typed events or diagnostic notes instead of disappearing silently.
 - Changed Codex dynamic-tool server request handling so unsupported `item/tool/call` requests receive an explicit unsuccessful response from Agents Office rather than leaving the Codex turn pending.
 - Changed Claude Agent SDK integration to `@anthropic-ai/claude-agent-sdk` `^0.2.118` and added typed coverage for newer hook events including `PostToolBatch`, `UserPromptExpansion`, `PermissionDenied`, and `TaskCreated`.
+- Changed Claude delegation hooks and Agent/Task tool calls to normalize onto the shared `collabAgentToolCall` activity type used for delegated-agent work.
 - Changed Cursor cloud API requests to prefer the documented Bearer-token authorization path before falling back to the older Basic-auth compatibility path.
 - Changed per-project Agents Office state so room configs, appearance rosters, presence snapshots, Claude hook bridges, and Cursor hook sidecars now write into machine-local Agents Office user data keyed by project root instead of creating or mutating `.codex-agents/` inside the tracked project.
 - Changed the browser `Needs You` input cards to show required/optional question labels, per-request completion summaries, clearer missing-answer guidance, and explicit clear actions so multi-question prompts read more like structured forms than raw field dumps.
@@ -44,17 +58,53 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed scene event visibility so recent typed plan, command, file/diff, and tool-call events now raise short animated `PLAN`, `RUN`, `EDIT`, and `TOOL` cues near the actor in addition to their toast treatment.
 - Changed request lifecycle visibility so typed approval waits, input waits, and request resolution now raise short animated `WAIT`, `ASK`, and `OK` cues near the actor in addition to the durable queue and toast surfaces.
 - Changed activity/request cue rendering so those chips now include mode-specific icon adornments and icon-side motion instead of relying on color and text alone.
+- Changed thread-item toast icon overrides for MCP tool calls, dynamic tool calls, collab tool calls, file changes, and entered review mode.
+- Changed toast label icons to fit inside a smaller fixed-size slot and keep single file-change deltas inline with the filename.
 - Changed workstation activity rendering so recent typed command, edit, tool, approval, input, and resolve events now also raise short mode-specific desk-side Pixi effects instead of depending only on floating cue chips.
 - Changed request workstation effects so approval waits now reflect decision breadth/type and input waits now reflect question and required-answer load instead of reusing one generic approval/input pulse.
 - Added a `/scene-effects-audit` browser route that runs the normal client bundle against mocked typed approval/input fleet data so the new request-specific scene effects can be visually checked on demand.
 - Changed the scene audit fixture so mocked request threads now include typed message history, making the new click-open thread cards visually inspectable on the audit route as well.
+- Changed the in-scene Ops Wall into a smaller minimal hot-stuff board with a 3x2 file/tool grid, heat bars, a slim command-status list, and blank empty sections instead of "no changes" placeholders.
 - Changed shared-room fleet payloads so each peer now broadcasts its selected `hatId`, letting merged remote agents keep their own hat styling instead of collapsing to the viewer's local cosmetic choice.
-- Changed office avatar rendering so spawned subagents display at 75% of regular agent size while retaining the same workstation, depth, hat, and hover-hit behavior.
+- Changed office avatar rendering so spawned subagents display at 75% per nesting depth while retaining the same workstation, depth, hat, and hover-hit behavior, including nested multi-agent v2 descendant trees.
 - Changed avatar rendering so hats are now attached to the same Pixi motion/depth pipeline as the base avatar sprite, keeping hats aligned through seating, walking, fading, and workstation occlusion.
 - Changed Codex scene thread panels to read-only history only, removing browser Send fields and local resume/launch/copy controls from the in-scene agent chat.
+- Changed Hermes activity mapping so a Hermes session is treated as the stable agent and can move project floors based on the latest project-bearing hook or DB activity, preferring tool/payload paths over Hermes' own process cwd.
+- Changed Hermes hook handling so hook-only `default`, `process-<pid>`, and UUID tool/task streams are folded into durable Hermes SQLite sessions instead of appearing as separate workstation agents.
+- Changed Hermes hook visibility so durable hook-backed session ids can appear as typed read-only Hermes agents when SQLite state is unavailable, while `default`, `process-<pid>`, and UUID tool/task streams remain suppressed as standalone agents.
+- Changed stored Hermes DB session seating so one Hermes session appears only on its latest inferred project floor instead of every historical project path it touched.
+- Changed Hermes fleet handling so Hermes project discovery is limited to live process cwd roots and the latest current root of fresh hook sessions; hook-backed sessions outside known workspace floors appear as floating read-only agents on the existing tower view instead of creating history-derived floors.
+- Changed Hermes fleet reads to cap hook scans, SQLite session scans, hook line size, and session-level SQLite text exports so live polling cannot pull unbounded Hermes history into the web process.
+- Changed Hermes roaming visibility so hook-only `default`, `process-<pid>`, and UUID streams are never rendered as floating agents.
+- Changed fresh open Hermes `ended_at IS NULL` sessions to remain current waiting workstation agents after replies, and to contribute project discovery from their latest inferred root.
+- Changed Hermes SQLite reads to export only a bounded recent-message window from `state.db`/profile DBs and to stop falling back to legacy session-file data when SQLite is unavailable.
+- Changed Hermes compression-continuation sessions so the latest continuation stays a lead desk agent instead of appearing as a child under the compressed parent.
 
 ### Fixed
 
+- Fixed the Pixi workstation reveal blink so newly appearing desks toggle visibility at half the previous speed.
+- Fixed in-scene hot-stuff board labels so the clipped edge fade applies to overflowing text at the row end instead of cutting into the first characters.
+- Fixed hot-stuff heat refreshes so the one-second decay tick updates the existing tooltip overlay instead of invalidating and rebuilding the whole office scene.
+- Fixed hot-stuff hover tooltips so scene anchor syncs preserve the existing hot-row DOM node instead of recreating it and resetting CSS hover state.
+- Fixed scene hover flashing more broadly by reconciling agent, workstation, furniture, and hot-board overlay nodes through stable view-controller keys instead of recreating the overlay layer on scene sync.
+- Fixed active Hermes sessions so they are marked as current workload agents and seat at workstations instead of only feeding activity surfaces.
+- Fixed ended Hermes hook sessions so hover and history summaries preserve the last actual hook message instead of replacing it with generic lifecycle text.
+- Fixed Hermes scene clicks so read-only Hermes agents open the same thread history panel as other visible agents.
+- Fixed Hermes hook-only agent names so cron and response-backed sessions use concise task labels instead of raw session ids or full message bodies.
+- Fixed Hermes hover details so model/API activity reads as human state and duplicate tool-action rows are suppressed when they repeat the summary.
+- Fixed Hermes hook event normalization so terminal commands, file edits, and MCP tool calls use the same typed event shapes as Codex and Claude toasts instead of generic message text.
+- Fixed Hermes active command/tool hover summaries so `latestMessage` stays on the latest conversation text instead of being replaced by the current command or tool name.
+- Fixed Hermes command/tool-only hover fallbacks so sessions without a visible message show their work state plus a separate action row instead of treating the command as chat text, and generic maintenance prompts no longer replace the previous real message.
+- Fixed Hermes hook reads on Windows by converting canonical `/mnt/<drive>/...` identities back to host filesystem paths for local file access, and by reading the legacy `~/.codex/codex-agents-office/hermes-hooks` directory as a compatibility fallback.
+- Fixed fleet project discovery so a slow source such as the Codex app-server cannot block faster adapters from contributing Hermes-discovered workspace floors.
+- Fixed Codex app-server stdout parsing so non-JSON process noise is ignored instead of crashing the web listener.
+- Fixed native Windows Codex visibility by bounding optional WSL/AppX command probes and falling back from cwd-scoped `thread/list` to unscoped local path matching when Windows drive-path sessions are missed.
+- Fixed Hermes process fallback seating so inherited Hermes environment variables on short-lived child commands do not create duplicate `Hermes CLI` agents.
+- Fixed fleet autodiscovery so exact transient system roots such as `/tmp` are ignored even if a temporary `.git` directory or hook cwd makes them look project-like.
+- Fixed Hermes fleet autodiscovery so the Hermes gateway/runtime source checkout is ignored by the Hermes adapter instead of creating an empty `hermes-agent` floor.
+- Fixed server JSON body reads so loopback/team-cache updates and other POST routes have default request-size limits instead of allowing unbounded parse input.
+- Fixed browser floor rendering so scrolling no longer tears down offscreen office scenes; all project floors now keep their Pixi renderers instead of being capped to the nearest viewport hosts.
+- Fixed Codex multi-agents v2 visibility by recognizing camelCase `collabAgentToolCall` tools such as `spawnAgent`, refreshing receiver threads from spawn/send/wait notifications, and preserving v2 thread-spawn parent metadata while thread reads catch up.
 - Fixed Codex CLI and subagent discovery against current app-server builds by explicitly sorting `thread/list` by `updated_at`, preventing resumed or long-running CLI threads created earlier from falling out of the small current-workload page.
 - Fixed Codex subagent metadata parsing to tolerate the current generated schema shape, including `subAgent.thread_spawn.agent_nickname` / `agent_role`, and surfaced `collabAgentToolCall` parent activity as delegated work.
 - Fixed fleet autodiscovery on Windows so the browser keeps the launched seed workspace visible when another adapter discovers work first, recognizes `codex.exe` PATH candidates, normalizes Codex app-server `\mnt\c\...` roots onto `/mnt/c/...`, and sends Windows-native cwd filters back to the app-server so those projects can populate their agents.
@@ -86,6 +136,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Docs
 
+- Rewrote the README as a shorter product overview that highlights current strongest features, including Hermes visibility, CLI queries, packaged Codex skills, shared rooms, and multi-surface workload views.
 - Updated integration-hook and reference docs with the verified current Codex app-server request/response payloads, newer Claude hook-event coverage, and Cursor cloud Bearer-auth behavior.
 - Updated README, architecture notes, product spec, integration hooks, and self-development checks to document the broader Codex app-server event coverage, dynamic-tool unsupported response, and protocol drift check.
 - Updated AGENTS, README, product spec, architecture notes, integration hooks, and self-development guidance to describe the move from project-local `.codex-agents` writes to machine-local per-project Agents Office storage.
@@ -100,6 +151,8 @@ Entries stay under the active version until an explicit version bump is requeste
 - Updated the README, product spec, architecture notes, and self-development roadmap to document the new typed `WAIT`/`ASK`/`OK` request lifecycle cues and their acceptance checks.
 - Updated the README, product spec, architecture notes, and self-development roadmap to document the richer icon-and-motion treatment for typed activity/request cues.
 - Updated the README, product spec, architecture notes, and self-development roadmap to document the new workstation-side non-text activity effects and their acceptance checks.
+- Updated the README, product spec, architecture notes, and self-development checks to document the scene-native wall dashboard for running commands and hot file changes.
+- Updated the README, architecture notes, integration hooks, and self-development checks to document Hermes roaming-floor behavior and the immediate-stop validation guardrail for workspace-spam regressions.
 - Updated the README, product spec, architecture notes, and self-development roadmap to document the new structured request signatures inside workstation-side approval/input effects.
 - Updated the README, architecture notes, and self-development checks to document the new `/scene-effects-audit` visual verification route.
 - Updated AGENTS, README, architecture notes, integration hooks, product spec, and self-development checks to document read-only Codex desktop seating through quiet text gaps, `thread/list` freshness preservation, the 8-second unhydrated prompt reserve, and the 3-second top-level desk cooldown.

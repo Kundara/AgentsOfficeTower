@@ -1,6 +1,6 @@
 ---
 name: agents-tower
-description: Run, verify, and query the Agents Office Tower CLI and local web server. Use when Codex needs to start or restart the tower, inspect /api/server-meta or /api/fleet, run snapshot/watch, use web query for local or team data, debug stale listeners, or explain the CLI contract for CodexAgentsOffice.
+description: Run, verify, and query the Agents Office Tower CLI and local web server. Use when Codex needs to start or restart the tower, inspect /api/server-meta or /api/fleet, run snapshot/watch, use lightweight web query gist or deeper local/team queries, debug stale listeners, or explain the CLI contract for CodexAgentsOffice.
 ---
 
 # Agents Tower
@@ -39,10 +39,13 @@ curl http://127.0.0.1:4181/api/fleet
 Use `web query` for bounded read-only data from the running tower:
 
 ```bash
+node packages/cli/dist/index.js web query CodexAgentsOffice gist scope=local --json
 node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=local type=agents limit=5 --json
 node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=team type=events kind=command limit=10 --json
 node packages/cli/dist/index.js web query CodexAgentsOffice last scope=local type=agents --json
 ```
+
+Use `gist` first when you only need a light checkup. It returns top hot changes plus active agents with their last message and last file change. Use `recent` or `last` only when the gist shows overlap, blockers, or a reason to inspect more detail.
 
 Use `scope=team` only when the browser is joined to shared-room sync and has cached coordinated room data. If the response says `teamDataAvailable: false`, treat the result as local-only.
 

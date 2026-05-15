@@ -4,7 +4,7 @@
 
 This document answers two questions:
 
-1. What signals can Codex Agents Office read from Codex, Claude, OpenClaw, and Cursor today?
+1. What signals can Codex Agents Office read from Codex, Claude, Hermes, OpenClaw, and Cursor today?
 2. How does each signal get represented in this project?
 
 The goal is practical transparency. This is not a generic event catalog. It is the list of hooks this codebase can already ride, plus the places where we are still leaving signal on the table.
@@ -30,7 +30,7 @@ The important normalized agent fields are:
 - `activityEvent`
   optional event object used for visual notifications
 - `provenance`
-  whether the visible state comes from typed Codex data, typed OpenClaw gateway data, typed Cursor API data, inferred Claude data, cloud tasks, or synthetic presence
+  whether the visible state comes from typed Codex data, typed OpenClaw gateway data, typed Cursor API data, inferred Claude or Hermes data, cloud tasks, or synthetic presence
 - `confidence`
   whether the visible state is typed truth or inferred best effort
 - `resumeCommand`
@@ -427,11 +427,13 @@ What we read from Codex:
 - `thread.agentRole`
 - role hints from prompt text and user message text as a legacy fallback
 - `collabAgentToolCall` items for parent-thread delegation status, including the current `receiverThreadIds` / `agentsStates` shape when present
+- multi-agents v2 `collabAgentToolCall.tool` values such as `spawnAgent`, `sendInput`, `wait`, `closeAgent`, and `resumeAgent`, plus receiver thread IDs from live `item/started` and `item/completed` notifications
 
 How we use it:
 
 - identify spawned subagents
 - link them to parent threads
+- refresh newly referenced receiver threads promptly from v2 collab notifications instead of waiting for the next broad `thread/list` poll
 - attach role-based grouping to workstations
 - show parent/child linkage in the session panel
 
@@ -471,13 +473,14 @@ How we use it today:
 - notifications are filtered to the current project by known thread ids and discovered paths
 - matching notifications are converted into normalized `DashboardEvent` records
 - approval/input requests are also attached to the owning agent as typed `needsUser` state
-- those events are attached to the next `DashboardSnapshot`
+- those events are attached to the next `DashboardSnapshot` and also feed the derived `activity` summary used by the in-scene Ops Wall
 - matching threads are re-read so stable state and event detail stay aligned
 
 Why it matters:
 
 - the browser can react to real event boundaries instead of only snapshot diffs
 - command, file, approval, input, subagent, and turn lifecycle transitions now arrive as typed events
+- file-change transitions can also be summarized as decayed script/doc/media hot changes without scraping terminal transcripts as a primary source; command and tool transitions remain event/history cues rather than hot-stuff board rows
 - the durable "needs you" queue now comes from real request hooks and `serverRequest/resolved`
 
 Verified `tool/requestUserInput` contract:
@@ -619,7 +622,7 @@ Current Claude transcript inference rules:
 | assistant `tool_use` with `edit`, `write`, `multiedit` | `editing` | file-change style notification and room mapping from paths |
 | assistant `tool_use` with `bash`, `shell` | `running` or `validating` | command-style notification |
 | assistant `tool_use` with `read`, `grep`, `glob`, `search`, `ls`, `list` | `scanning` | active worker without explicit notification |
-| assistant `tool_use` with `task`, `delegate`, `agent` | `delegating` | delegation summary |
+| assistant `tool_use` with `task`, `delegate`, `agent` | `delegating` | shared `collabAgentToolCall` activity and subagent-style dashboard event |
 | latest user text newer than latest assistant text | `planning` | planning summary |
 | recent assistant text | `thinking` | message summary, optional recent update notification |
 | older assistant text | `done` then `idle` | finished or idle state |
@@ -649,9 +652,9 @@ When a project-scoped Claude hook sidecar exists, the loader can map these offic
 | `PermissionDenied` | `blocked` | typed permission-denied state |
 | `FileChanged` | `editing` | typed file-change activity from Claude hook input |
 | `Notification` | `thinking`, `waiting`, or `blocked` | typed Claude-side message or warning surface |
-| `TaskCreated` | `delegating` | typed delegated-task creation state |
-| `SubagentStart` | `delegating` | typed delegation summary |
-| `SubagentStop` | `done` | typed subagent-finished summary |
+| `TaskCreated` | `delegating` | typed delegated-task creation state with shared `collabAgentToolCall` activity |
+| `SubagentStart` | `delegating` | typed delegation summary with shared `collabAgentToolCall` activity |
+| `SubagentStop` | `done` | typed subagent-finished summary with shared `collabAgentToolCall` activity |
 | `Stop` / `TaskCompleted` | `done` | typed completion state |
 | `StopFailure` | `blocked` | typed turn-failure summary |
 | `TeammateIdle` | `waiting` | typed teammate-idle summary |
@@ -664,6 +667,7 @@ What we synthesize:
 - `userMessage`
 - `fileChange`
 - `commandExecution`
+- `collabAgentToolCall`
 - `agentMessage`
 
 How we use it:
@@ -736,6 +740,83 @@ How this project uses that surface:
 | `status = done` | `done` | recently completed OpenClaw session |
 | `status = failed` / `killed` / `timeout` | `blocked` | typed terminal failure or interrupted session |
 | no usable status | `idle` | inactive OpenClaw session |
+
+## Hermes Agent Sessions
+
+Hermes support is read-only and based on the durable local surfaces in `nousresearch/hermes-agent`.
+
+Primary code path:
+
+- `packages/core/src/hermes.ts`
+
+### Hermes project matching
+
+What we read:
+
+- typed hook sidecars written by the optional `codex-agents-office` Hermes plugin
+- `~/.hermes/state.db` or `HERMES_STATE_DB`
+- `~/.hermes/profiles/<name>/state.db`
+- live Linux process cwd and env hints from Hermes CLI/TUI processes
+
+How we use it:
+
+- read session rows, bounded session-level text fields, and a bounded recent-message window from Hermes SQLite `sessions` and `messages`; if SQLite is unavailable, Hermes visibility reports a diagnostic instead of falling back to stale legacy session files
+- install optional global Hermes plugin hooks with `codex-agents-office agents link hermes`; this writes `~/.hermes/plugins/codex-agents-office` and enables it in `~/.hermes/config.yaml` without launching Hermes
+- write `codex-agents-office.status.json` in the hook output directory when the plugin registers or hits a record/register error, so gateway load state can be verified without waiting for a Hermes tool call
+- treat `hermes:<session-id>` as the stable agent identity across project floors
+- keep Hermes SQLite session ids as the only normal workstation agents; hook-only ids such as `default`, `process-<pid>`, and UUID task/tool streams are folded into the nearest durable Hermes session by direct session id, payload session id, platform, cwd, and time window instead of creating separate avatars
+- treat fresh `ended_at IS NULL` Hermes gateway sessions as current open work, even after the latest assistant reply, so the still-open main session stays desk-visible instead of only contributing activity history
+- treat Hermes compression-continuation children as the lead session, matching Hermes' own latest-descendant/session-list behavior, instead of rendering them as subagents under the compressed parent
+- keep Hermes `latestMessage` tied to the latest useful user or assistant conversation text; terminal commands, file changes, MCP calls, and dynamic tool calls update `detail`, typed events, and toasts instead of becoming the visible last message
+- ignore generic Hermes maintenance prompts, including skill-library review prompts, when choosing display message text so they do not replace the prior real conversation message
+- prefer the latest project-bearing hook payload paths over Hermes process cwd when deciding which floor the session currently belongs on
+- use `system_prompt` working-directory text, live `HERMES_CWD` / `TERMINAL_CWD`, tool path arguments, and absolute paths in messages to associate work with a project
+- seat stored Hermes DB sessions on one current floor, chosen from the live process cwd when present or the latest project-bearing message path, instead of duplicating the same session across every historical project path
+- resolve discovered paths up to a git root when possible so nested file activity still seats on the repo floor
+- contribute fleet project discovery only from live Hermes process cwd roots and the latest current root of fresh hook sessions; Hermes database history and older hook path candidates are not broad-discovered into floors
+- ignore exact transient system roots such as `/tmp`, `/var/tmp`, and `/dev/shm` during project discovery, even if a temporary `.git` directory or hook cwd points there
+- ignore the Hermes gateway/runtime source checkout when it is discovered through Hermes' own adapter, so the running gateway does not create an empty `hermes-agent` floor
+- attach hook sessions whose latest activity is outside known workspace floors to the tower as `sourceKind = hermes:roaming` floating agents rather than creating new floors
+- map Hermes parent session ids into `parentThreadId` when present
+- keep browser actions read-only because Hermes does not expose an Agents Office-owned steering or approval channel here
+
+Installed plugin hooks:
+
+- session and gateway lifecycle: `on_session_start`, `pre_gateway_dispatch`, `on_session_end`, `on_session_finalize`, `on_session_reset`
+- LLM/API lifecycle: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `pre_api_request`, `post_api_request`
+- tools and delegation: `pre_tool_call`, `post_tool_call`, `transform_tool_result`, `transform_terminal_output`, `subagent_stop`
+- approval lifecycle: `pre_approval_request`, `post_approval_response`
+
+The plugin writes observation sidecars and returns `None`; transform hooks are registered only for visibility, not to rewrite Hermes data. String payloads are truncated before writing so terminal/tool/LLM output cannot make the sidecar stream unbounded. The reader also caps hook files to recent tails, skips oversized single JSONL lines, and limits hook scan/session scan counts during fleet refresh. The retained hook tail is intentionally large enough to keep the most recent useful conversation text even after many tool calls, because command/tool-only windows should not force the hover card to show a shell command as speech. The plugin maintains a non-session status marker named `codex-agents-office.status.json`; Agents Office ignores that file as workload input and uses only `*.jsonl` sidecars for session activity.
+
+Operational validation:
+
+- `GET /api/server-meta` may include a Hermes-discovered floor only when it comes from a live process cwd or a fresh hook session's latest current project root
+- `GET /api/fleet` may include `source = hermes` agents on matching floors, or `sourceKind = hermes:roaming` agents attached to an existing floor when the hook session is outside known workspace roots
+- `GET /api/fleet` should show durable ids like `hermes:20260515_...` or `hermes:cron_...`; it should not show hook-only ids such as `hermes:default`, `hermes:process-<pid>`, or `hermes:<uuid>`, including in roaming agents
+- active Hermes command/tool sessions should expose the command or tool in `detail` / `activityEvent`, while `latestMessage` remains either the prior real conversation text or `null`; a command string such as `sleep 75` should not appear as the agent's last message
+- the hook output directory should contain `codex-agents-office.status.json` with `status_event_name = registered` and the current gateway pid after Hermes reloads the plugin
+- if a Hermes validation run starts producing many unexpected workspace floors, stop the web listener immediately and inspect project discovery before restarting it; do not reintroduce DB-history or all-path hook sweeps as discovery inputs
+
+### Hermes state mapping
+
+| Hermes signal | State | Representation |
+| --- | --- | --- |
+| latest user message in a fresh open session | `planning` | inferred active Hermes prompt |
+| plugin `pre_llm_call` / `pre_gateway_dispatch` | `planning` | typed prompt/session activity |
+| plugin `pre_tool_call` / `post_tool_call` / `transform_tool_result` / `transform_terminal_output` | `running`, `editing`, `scanning`, `delegating`, or `blocked` | typed tool activity by tool name, args, output, and result |
+| command, file, MCP, or dynamic tool hook while earlier conversation text exists | current tool-derived state | current action in `detail` / `activityEvent`; prior useful conversation text remains `latestMessage` |
+| hook-only `default`, `process-<pid>`, or UUID task/tool streams | parent session state update | folded into the matching durable Hermes session; never a standalone desk agent |
+| plugin `subagent_stop` | `delegating` or `blocked` | typed child-agent completion activity |
+| plugin `post_llm_call` / `transform_llm_output` | `done` with recent speech | typed reply activity from Hermes |
+| plugin `pre_api_request` / `post_api_request` | `thinking` | typed provider/model request activity |
+| latest assistant message with a tool call | `running`, `editing`, `scanning`, or `delegating` | inferred tool activity by tool name and arguments |
+| latest tool result with failure metadata | `blocked` | inferred failed tool result |
+| final assistant reply in a fresh open `ended_at IS NULL` gateway session | `waiting` | current Hermes session waiting for the next user turn |
+| final assistant reply or ended session | `done` / `idle` | recent completion or inactive Hermes session |
+| live Hermes process without a matched session | `planning` | process-level workspace presence fallback |
+
+Hermes plugin-hook entries carry `provenance = hermes` and `confidence = typed`. SQLite/process fallback entries carry `confidence = inferred`.
 
 ## Cursor
 
@@ -837,6 +918,7 @@ The snapshot builder merges:
 - cloud tasks
 - optional synthetic presence entries
 - Claude sessions from transcript inference or optional hook sidecars
+- Hermes sessions matched by cwd, system-prompt working directory, tool paths, and git-root discovery
 - OpenClaw gateway sessions matched by configured workspace root
 - Cursor background agents matched by normalized repository URL
 
@@ -897,6 +979,7 @@ How it works:
 - `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
 - browser-side rendering starts from `client/index.ts`, executes the generated `app-runtime.ts` module, and then delegates behavior across the focused runtime section files
 - optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, a server-backed multiplayer device identity for self-peer suppression across local viewers, per-project share preferences, remote-only floor cooldown handling, and the debounced team-fleet cache post for `web query scope=team` live in `multiplayer-source.ts`
+- `web query <repo> gist` is the light CLI coordination read. It projects the same workspace `activity.hotChanges` used by the in-scene hot-stuff board plus active agents with last message and last file-change hints, so agents can do a short state sync before requesting broader `recent` or `last` data.
 
 - server-sent events from `/api/events`
 
@@ -998,6 +1081,7 @@ Status:
 
 - Claude is merged into the same snapshot model
 - Claude agents carry `provenance = claude` and `confidence = inferred`
+- Hermes agents carry `provenance = hermes` and `confidence = inferred`
 - Codex, cloud, and presence entries carry typed provenance
 
 Current representation:
@@ -1026,6 +1110,8 @@ Today the project already rides:
 - Claude tool-use and message inference
 - Claude provenance/confidence signaling
 - hook-backed Claude approval and elicitation responses from the browser queue
+- Hermes local `state.db` session discovery
+- Hermes cwd/env and system-prompt project matching
 
 Today the project does not yet fully ride:
 

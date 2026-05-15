@@ -30,6 +30,7 @@ It should show:
 - direct local session reply controls in session cards when the source is an app-server-owned typed Codex thread
 - observed desktop, VS Code, and CLI Codex threads must stay view-only for generic browser chat, and the scene thread panel must not expose Send, resume, launch, or copy controls
 - local Codex reply controls must steer active in-flight turns and must not call `turn/start` for an active thread just because the observer row has not loaded its turn list yet
+- a subtle in-scene Ops Wall between the primary room's left edge and door, showing decayed hot script, doc, and media file changes
 - subtle in-scene motion and placement cues rather than a detached dashboard
 - transient above-head turn badges for recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events
 
@@ -59,9 +60,10 @@ The VS Code panel should expose the same snapshot model as the browser and termi
 
 All renderers should consume the same normalized snapshot model.
 
-- A `DashboardSnapshot` represents one tracked workspace and includes `projectRoot`, `projectLabel`, `projectIdentity`, `generatedAt`, `rooms`, `agents`, `cloudTasks`, `events`, and `notes`.
+- A `DashboardSnapshot` represents one tracked workspace and includes `projectRoot`, `projectLabel`, `projectIdentity`, `generatedAt`, `rooms`, `agents`, `cloudTasks`, `events`, `activity`, and `notes`.
 - A `DashboardAgent` represents one visible session or agent and carries identity, currentness, room placement, state, detail text, latest useful message, resume/open affordances, provenance/confidence, and optional `needsUser`, `hatId`, or shared-room `network` metadata.
-- A `DashboardEvent` is the normalized event log used for browser notifications and event-native state surfaces such as approvals, input waits, command/file activity, subagent events, and typed messages.
+- A `DashboardEvent` is the normalized event log used for browser notifications and event-native state surfaces such as approvals, input waits, command/file activity, delegated-agent or subagent events, and typed messages.
+- `activity` is a derived workspace-level summary for the scene Ops Wall. It contains decayed `hotChanges` from typed file-change events, grouped as script, doc, or media changes for display; tool and command activity should stay out of the hot-stuff board data path.
 - `needsUser` is the durable per-agent approval/input state used by the browser `Needs You` queue and raised-hand desk marker.
 - `network` marks a remote shared-room agent and should preserve peer label and peer host metadata distinctly from local sessions.
 
@@ -105,6 +107,12 @@ Per-mode actor handling:
 - `blocked` should get a subtle shake treatment so failure blocks read differently from ordinary desk occupancy
 - `validating` should get a brighter pulsing workstation glow than ordinary busy desk work
 
+Delegated-work normalization:
+
+- Codex `collabToolCall` / `collabAgentToolCall` items and Claude Agent/Task/Subagent hook signals should converge on the shared `collabAgentToolCall` activity family where possible.
+- Shared delegated-work activity should produce `DashboardEvent.kind = "subagent"` so browser toasts, scene cues, session history, and future source adapters do not need separate per-provider event families for the same concept.
+- Claude still does not provide Codex-grade parent thread ids for this path, so provenance/confidence and source-specific detail text must remain visible in hover and session surfaces.
+
 Recent typed turn lifecycle handling:
 
 - `turn/started` -> short above-head `START` badge
@@ -120,6 +128,7 @@ Recent typed activity cue handling:
 - `item/commandExecution/terminalInteraction` -> command activity/history and the same `RUN` family cue
 - `turn/diff/updated`, `item/fileChange/outputDelta`, `item/fileChange/patchUpdated`, and typed file-change item starts -> brief animated `EDIT` cue near the actor/workstation
 - `item/tool/call`, `item/mcpToolCall/progress`, Codex hook-run notifications, and typed tool-item starts -> brief animated `TOOL` cue near the actor
+- `collabToolCall`, `collabAgentToolCall`, and source-normalized delegated-agent events -> subagent/delegation notification and motion path, distinct from generic tool calls when enough parent/child data exists
 - `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` -> brief animated `WAIT` cue near the actor while the durable approval queue entry is active
 - `item/autoApprovalReview/*` -> non-actionable approval-review activity; it should not create a durable `Needs You` entry unless app-server also sends an approval request
 - `item/tool/requestUserInput` -> brief animated `ASK` cue near the actor while the durable input queue entry is active
@@ -130,9 +139,19 @@ Recent typed activity cue handling:
 - workstation-seated activity should also raise a short non-text visual treatment on or around the workstation itself so item/request activity does not collapse back to text-only chips
 - structured request waits should expose at least some of their shape in-scene, such as approval decision breadth or input question/required load, instead of rendering every request as the same generic wait
 
+Workspace Ops Wall handling:
+
+- The primary room should reserve the wall span between the left edge and the door for a compact scene-native activity board when there is enough space.
+- The wall should show the hottest recent file/workspace changes with time decay, so repeated edits raise heat and quiet files cool naturally until they disappear.
+- Hotness should come from typed file-change events and line deltas where available; generated/transient display should stay item-name-first with longer paths in hover/details surfaces.
+- The scene wall should stay minimal: a title-free 3x3 file grid with script, doc, and media columns, using compact text treatment rather than separate progress or heat bars.
+- Leaderboard row changes should animate in-place so rank changes are visible without turning the wall into a separate dashboard.
+- Empty activity sections should stay visually clean instead of printing placeholder text such as "no changes".
+- The wall is a transparency cue, not a detached dashboard. It should stay compact, readable at scene scale, and subordinate to agent placement, hover cards, the session panel, and the durable `Needs You` queue.
+
 Normalized provenance/confidence rules are:
 
-- `provenance` identifies the source family such as `codex`, `claude`, `cloud`, `cursor`, `presence`, or `openclaw`
+- `provenance` identifies the source family such as `codex`, `claude`, `cloud`, `cursor`, `hermes`, `presence`, or `openclaw`
 - `confidence` distinguishes typed source truth from inferred best-effort state
 
 ## Source priority
@@ -144,7 +163,7 @@ Prefer official Codex surfaces first:
 - saved per-project `rooms.xml` in Agents Office user data
 - saved per-project `agents.json` in Agents Office user data
 
-Claude local logs and Cursor background agents are secondary inputs. They can enrich visibility, but they should not blur the distinction between typed Codex truth and inferred state.
+Claude local logs and Cursor background agents are secondary inputs. They can enrich visibility, but they should not blur the distinction between typed Codex truth and inferred state. When Claude hook sidecars are present, Claude may contribute typed file, command, input, approval, and delegated-agent events, but those events still carry Claude provenance.
 
 ## Browser behavior
 
@@ -190,7 +209,7 @@ Current browser settings surfaces are:
 - Finished subagents should despawn instead of taking rec-area slots.
 - Finished subagents should keep a visibly readable post-finish desk cooldown before exiting, and that cooldown should be longer than the top-level lead cooldown so child completion is easier to observe in-scene.
 - Finished subagents should then walk out through the room door instead of blinking away.
-- Visible subagent avatars should render at 75% of regular agent size while keeping normal workstation, hover, and depth behavior.
+- Visible subagent avatars should render at 75% of their parent depth's size while keeping normal workstation, hover, and depth behavior; nested multi-agent v2 descendants should keep shrinking by `0.75 ** depth`.
 - Empty rooms should read as quiet space, not as errors.
 
 ### Scene layout and tiles
@@ -276,6 +295,7 @@ Global text scale rules:
 - When worktrees are split into separate floors, a worktree floor title should use the worktree name with a distinct bright-blue worktree badge/icon treatment.
 - Fleet startup should include configured Codex workspaces from `~/.codex/config.toml` when available, not only workspaces that already emitted recent local thread activity.
 - Fleet mode should hide autodiscovered workspaces once their last session timestamp is more than 7 days old.
+- Hermes-discovered workspaces should come only from a live Hermes process cwd or the latest current root of a fresh hook session; durable DB history, broad hook path sweeps, and exact transient roots such as `/tmp` must not create floors.
 - The selected workspace changes browser focus only; it does not change the monitor set.
 - `/api/server-meta` must report the live bound fleet project set, not only startup seed projects.
 
@@ -286,6 +306,9 @@ Worktree identity rules:
 - Agent hover cards should expose the source worktree name with the same worktree icon so duplicate repo clones remain distinguishable even when the tower floor is merged.
 - Agent labels, hover titles, and session-card titles should normalize repo-local paths into readable relative labels and must not surface raw WSL mount paths like `/mnt/f/...` as the primary visible title.
 - Agent-facing labels in the scene and session list should normalize repo-local paths so raw `/mnt/...` WSL paths do not appear as the primary visible title.
+- Hermes command/tool activity should appear as current action state, activity cues, and toasts, not as chat speech. If a Hermes session is currently running a command after an earlier prompt or assistant reply, hover and session summaries should show that prior useful conversation text as `latestMessage` and expose the command separately as the action.
+- If a Hermes session has only command/tool activity and no visible prompt or assistant reply, hover should show a state summary such as `Running` plus the action row; it should not fabricate the command text as the last message.
+- Generic Hermes maintenance prompts such as skill-library review prompts should not overwrite the previous real message in hover cards or session panels.
 
 ### Shared-room behavior
 
@@ -304,7 +327,9 @@ Worktree identity rules:
 - Remote-only shared projects should cool down for 1 hour before disappearing after room updates stop.
 - Screenshot mode should disable shared-room sync.
 - `/api/multiplayer` should expose the current server multiplayer transport status even when the transport is currently disabled.
-- The CLI should be able to read the running local web server's shared model with `web query <repo> <recent|last>`, scoped to `local` or `team`, without gaining any write, reply, file-read, or arbitrary-command capability.
+- The CLI should be able to read the running local web server's shared model with `web query <repo> <gist|recent|last>`, scoped to `local` or `team`, without gaining any write, reply, file-read, or arbitrary-command capability.
+- `web query <repo> gist` is the dedicated light checkup path before deeper inspection. It should return a short state sync containing top hot file changes from `activity.hotChanges` plus active agents with state, last message, and last file change.
+- `recent` and `last` are deeper bounded projections for agents/events when the gist suggests overlap, blockers, or missing detail.
 - `scope=team` should use only the coordinated multiplayer fleet already rendered by an open browser client; if no shared-room cache exists, it should report local data rather than attempting to connect directly to the shared-room transport.
 - Web CLI APIs should be loopback-only, bounded, projected to recent agent/event data, and should not expose raw shared-room credentials or mutable browser action surfaces.
 
@@ -435,7 +460,7 @@ Current-workload rules:
 - Ordinary polling or view refresh must not look like movement. If a destination did not meaningfully change, the agent should keep its current placement.
 - A visible room change should render as two motions: an old-room exit toward that room's door and a new-room entry from the destination room's door. The renderer must not reinterpret old-room coordinates inside the destination room.
 - Avoid large task-title overlays inside the room scene.
-- Keep Codex-native typed state visually distinct from inferred Claude state when provenance matters.
+- Keep Codex-native typed state visually distinct from inferred Claude state when provenance matters, while allowing typed Claude hook activity to reuse common visual families such as file-change, command, and delegated-agent work.
 - Avoid avatar flash-in/flash-out effects for workstation occupancy.
 - Exits should disappear cleanly without a lingering blink.
 - PixelOffice art should be assembled intentionally from the asset sheet, not from a pasted example scene.

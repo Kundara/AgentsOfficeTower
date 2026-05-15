@@ -64,6 +64,7 @@ The live browser path now uses a hybrid approach:
 - when desktop-backed `thread/read` returns a stale transcript timestamp but `thread/list` has already advanced, the monitor preserves the fresher `thread/list` timestamp for current-workload classification
 - ongoing occupancy also follows `thread/read` turn state so a `notLoaded` thread with an in-progress turn, or a fresh interrupted turn without a final answer, still stays live on the floor
 - recent non-final desktop work events extend the local workload clock even when a restarted observer is still read-only or the app-server reports the top-level thread as idle, preventing active work from cooling into rec-room visibility between reply chunks
+- recent file-change events also feed a derived workspace `activity` block on each `DashboardSnapshot`; that block powers the in-scene Ops Wall with decayed hot script/doc/media file scores while tool and command activity stay out of the hot-stuff board
 - fresh unhydrated `notLoaded` desktop threads with no readable turns are treated as short-lived planning state for about 8 seconds after a user prompt; the completed read-only fallback is capped to the 3-second finished cooldown so a completed thread does not look active several minutes later
 - active `thread/list` rows are always retained in the tracked local-thread set even when they are older than the normal recent-thread cutoff, so a live desktop session is subscribed on startup before its next visible delta
 - active and recent threads are resumed on the observer connection so the app can receive live `turn/*`, `item/*`, approval, input, and `serverRequest/resolved` events
@@ -140,12 +141,13 @@ Sources:
   - all discovered workspaces stay live-monitored at once
   - reserved multiplayer status surface for a future secured sync transport
   - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; those shared-room credentials now restore from machine-local Agents Office user data on launch, each local floor exposes a persisted `Shared` toggle that controls whether that project is broadcast into the room without forcing a floor-shell rebuild, and same-machine browser plus VS Code viewers now share one stored multiplayer device identity so self-peers can be ignored cleanly
-  - read-only `web query` CLI access to the running local web server for bounded `recent` and `last` lookups by repo name, with `local` scope reading the live server fleet and `team` scope reading the latest coordinated shared-room browser cache when available
+  - read-only `web query` CLI access to the running local web server for a lightweight `gist` state sync plus bounded `recent` and `last` lookups by repo name, with `local` scope reading the live server fleet and `team` scope reading the latest coordinated shared-room browser cache when available
   - that same Settings popup now includes an image-only left/right hat picker whose selection applies immediately to all local agents and is preserved in machine-local app settings
   - remote shared-room activity now merges client-side onto matching local workspaces when possible, and otherwise stays visible as remote-only floors with a 1-hour cooldown before disappearing after updates stop
   - shared-room payloads now also carry the broadcaster's selected `hatId`, so remote peers stay visually distinct without inventing peer-specific palette logic
 - map and terminal-style views through `?view=map|terminal`
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
+- an in-scene Ops Wall sits on the primary room wall between the left edge and door, using a compact title-free 3x3 grid for script/doc/media file changes without adding a separate admin dashboard surface
 - local threads remain seated while the thread is still ongoing, even if they pause between visible events or the latest turn already looks done
 - session-oriented browser views now also treat local `isOngoing` threads as busy, so quiet in-progress Codex work stays consistent between the map, recent-session lists, and other current-workload summaries
 - transient `status.type = notLoaded` unloads now reread before release, and an already observed ongoing local thread only loses ongoing occupancy when that reread finds a final answer
@@ -154,7 +156,7 @@ Sources:
 - stale local `notLoaded` sessions no longer occupy desks just because they are still recent; workstation seating now requires true ongoing work or the explicit stop cooldown
 - after that grace window, only recent top-level lead sessions cool down into the rec area; finished subagents despawn instead of idling there
 - lead sessions with active subagents now move into a compact stacked left-side boss-office column, with each boss workstation rendered inside its own small office shell
-- spawned subagents render at 75% of regular agent avatar size while sharing the same workstation placement, depth sorting, hats, and hover anchors as ordinary desk agents
+- spawned subagents render at 75% of their parent depth's avatar size while sharing the same workstation placement, depth sorting, hats, and hover anchors as ordinary desk agents; a depth-2 subagent renders at `0.75 * 0.75` of a lead avatar, and deeper multi-agent v2 trees continue that scale by depth
 - session panel includes a durable cross-project "needs you" queue for approval/input waits
   these entries now come from typed request hooks, not from regexes over session detail
   - session cards expose provenance/confidence so Codex-native, Claude transcript, Claude hook-backed, and Cursor API-backed state stay distinguishable
@@ -176,6 +178,7 @@ Sources:
 - desk-pod origins and the workstation seat cells inside them are expected to stay tile-aligned, matching the same grid contract used by rec-strip furniture
 - global browser settings currently expose text scale plus a persisted worktree split toggle; text scale still applies to hover/toast/map text without changing room or prefab geometry
 - the retained browser map path now uses a persistent Pixi scene host plus HTML anchor overlays for toast positioning, so map updates can mutate scene entities without replacing the scene shell
+- the primary room wall includes a compact scene-native hot-stuff board between the left wall and doorway, built from decayed `activity.hotChanges`; the CLI `gist` command exposes that same hot-change summary alongside active-agent last-message and last-file-change hints for light state sync before deeper reads
 - routed avatar movement in the Pixi scene now uses a lightweight grid pathfinder against room occupancy instead of direct straight-line scene tweens
 - floor-depth sorting in the Pixi scene now uses explicit logical rows: moving agents sort from their current foot-tile row, while workstation shells and seated avatars sort from the workstation footprint row, so overlap follows the same "lower floor cell stays in front" rule during pass-bys
 - exit ghosts now persist across scene refreshes until their doorway walk and fade complete, and room changes split into a doorway exit in the old room plus a doorway entry in the destination room instead of retargeting one live sprite across rooms
@@ -200,7 +203,7 @@ The web package now separates transport, lifecycle, rendering, and client delive
 - `packages/core/src/services`
   Holds cross-cutting orchestration such as project discovery re-exports, refresh scheduling, snapshot assembly, and the live-monitor compatibility surface.
 - `packages/core/src/domain`
-  Holds workload/currentness policy and other state rules shared across snapshot assembly and tests.
+  Holds workload/currentness policy, derived workspace activity summaries, and other state rules shared across snapshot assembly and tests.
 - `packages/core/src/utils`
   Holds small reusable JSON/text helpers extracted from the older source-specific modules.
 
@@ -295,6 +298,7 @@ The browser now carries a stronger event attribution path:
 - browser notifications can react to those event-native records directly
 - approval and input waits are also surfaced in a durable cross-project "needs you" queue
 - Claude-derived sessions are explicitly marked through provenance/confidence metadata so transcript inference and hook-backed state do not read the same
+- delegated-agent activity now uses a shared activity family where possible: Codex `collabToolCall` / `collabAgentToolCall` items and Claude Agent/Task/Subagent signals both feed `collabAgentToolCall`-style activity and `subagent` dashboard events
 
 What is still missing is richer motion and posture tied to those events. The product can now explain more of what changed; the next step is making those changes feel more visible in-scene.
 
@@ -405,6 +409,7 @@ Claude support uses a deliberately weaker contract than Codex:
 - recent Claude session messages can now be read through the supported Agent SDK `getSessionMessages()` API before falling back to raw JSONL transcript sampling
 - transcript-only Claude session state is still inferred from recent tool uses such as read, edit, bash, and task delegation when no typed hook signal exists
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl` can be produced either by a Claude Code hook script or by the exported Agent SDK sidecar bridge, and they upgrade Claude sessions to typed permission, tool, subagent, and stop state
+- Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records normalize to the same delegated-work activity family as Codex collab-agent items, while still preserving Claude provenance and weaker parent/child correlation
 - the same Agent SDK sidecar bridge can now hold `PermissionRequest` and `Elicitation` hooks open while the browser writes a response file under the same project-scoped user-data area, then return the official hook decision back to Claude
 - the browser `Needs You` queue can now answer hook-backed Claude approval waits and schema-backed elicitation forms when the sidecar record came from that Agent SDK bridge
 - Claude agents are rendered in the same room model, but with explicit provenance/confidence so transcript inference and hook-backed state do not pretend to have Codex-grade app-server coverage
@@ -446,6 +451,26 @@ OpenClaw support uses the official Gateway session model instead of trying to re
 - the current integration is read-only and surfaces session/workspace presence, not OpenClaw action controls
 
 This keeps OpenClaw aligned with its real abstraction boundary, which is sessions inside configured agent workspaces rather than project tasks.
+
+## Secondary Hermes support
+
+Hermes support follows the local runtime surfaces exposed by `nousresearch/hermes-agent`:
+
+- the adapter reads `~/.hermes/state.db`, `HERMES_HOME`, and Hermes profile homes for durable session/message metadata
+- Agents Office can install a small global Hermes plugin with `codex-agents-office agents link hermes`; that plugin writes typed lifecycle hook sidecars into machine-local Agents Office storage
+- it uses live process cwd/env hints such as `HERMES_CWD`, `TERMINAL_CWD`, and `HERMES_HOME` when a Hermes CLI or TUI process is still running
+- it treats a Hermes session id as the stable agent and lets that agent move floors based on the latest project-bearing hook or DB activity
+- hook-only streams such as `default`, `process-<pid>`, and UUID tool/task files are activity sidecars, not agents; they are folded into the nearest durable SQLite session by explicit ids, platform/cwd hints, and recent timing
+- Hermes command, file-change, and MCP/tool hook events update `detail`, `activityEvent`, toasts, and map activity cues; they do not replace `latestMessage`, which stays on the latest useful prompt or assistant reply
+- generic Hermes maintenance prompts, such as skill-library review prompts, are ignored as display messages so they do not overwrite the last real conversation text
+- it maps work to projects by normalized cwd, system-prompt working directory, tool paths, payload paths, and git-root discovery rather than matching project names
+- it contributes project discovery roots only from a live Hermes process cwd or the latest current root of a fresh hook session, so old `state.db` history and the full set of touched hook paths cannot create floors
+- exact transient system roots such as `/tmp`, `/var/tmp`, and `/dev/shm` are not promoted into fleet workspaces, even if temporary hook cwd data or a stray `.git` directory makes them look project-like
+- hook sessions outside the current fleet project set are attached to an existing tower floor as floating `hermes:roaming` agents instead of creating new floors
+- SQLite session exports, hook scan counts, hook file tails, hook line size, and request JSON bodies are bounded so Hermes history and sidecar payloads cannot grow the live web process without limit
+- the current integration is read-only; plugin-hook activity renders with `confidence = typed`, while SQLite/process fallback activity renders with `confidence = inferred`
+
+This keeps Hermes aligned with its actual abstraction boundary: local sessions inside a current working directory, with optional profiles under the Hermes home.
 
 
 ## Asset pipeline

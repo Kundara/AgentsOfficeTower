@@ -35,12 +35,13 @@ Important `server-meta` fields:
 Shape:
 
 ```bash
-node packages/cli/dist/index.js web query <repo> <recent|last> [scope=local|team] [limit=N] [type=agents|events|all] [state=STATE] [source=SOURCE] [kind=KIND] [since=ISO] [agent=NAME] [--json]
+node packages/cli/dist/index.js web query <repo> <gist|recent|last> [scope=local|team] [limit=N] [type=agents|events|all] [state=STATE] [source=SOURCE] [kind=KIND] [since=ISO] [agent=NAME] [--json]
 ```
 
 Examples:
 
 ```bash
+node packages/cli/dist/index.js web query CodexAgentsOffice gist scope=local --json
 node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=local type=agents limit=5 --json
 node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=team type=events kind=command limit=10 --json
 node packages/cli/dist/index.js web query CodexAgentsOffice last scope=local type=events kind=fileChange --json
@@ -48,6 +49,7 @@ node packages/cli/dist/index.js web query CodexAgentsOffice last scope=local typ
 
 Commands:
 
+- `gist`: light state sync for checkups before deeper reads. It returns top `activity.hotChanges` plus active agents with state, last message, and last file change. Default limit `8`, max `50`.
 - `recent`: newest matching items, default limit `10`, max `50`.
 - `last`: newest single matching item.
 

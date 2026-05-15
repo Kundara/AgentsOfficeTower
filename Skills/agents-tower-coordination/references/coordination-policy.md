@@ -51,6 +51,20 @@ When overlap is high-risk, prefer one of these:
 Current local activity:
 
 ```bash
+node packages/cli/dist/index.js web query <repo> gist scope=local --json
+```
+
+Team-coordinated light check:
+
+```bash
+node packages/cli/dist/index.js web query <repo> gist scope=team --json
+```
+
+Use gist before deeper reads. It is intended to answer: which files are hot, which agents are active, what did they last say, and what file did they last change?
+
+Current local agent detail:
+
+```bash
 node packages/cli/dist/index.js web query <repo> recent scope=local type=agents limit=10 --json
 ```
 

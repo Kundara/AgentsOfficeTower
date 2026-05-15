@@ -24,7 +24,7 @@
 ## Claude
 
 - [Claude Agent SDK TypeScript reference](https://platform.claude.com/docs/en/agent-sdk/typescript)
-  Official session APIs, hook callback contracts, and SDK-managed Claude Code integration surface.
+  Official session APIs, hook callback contracts, SDK-managed Claude Code integration surface, and built-in tool schemas such as `Agent`, `TaskOutput`, `Bash`, `Edit`, and `Write`.
 - [Claude Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview)
   Current setup and capability overview confirming SDK hooks, sessions, permissions, MCP, and bundled Claude Code behavior.
 - [Claude Agent SDK TypeScript V2 preview](https://platform.claude.com/docs/en/agent-sdk/typescript-v2-preview)
@@ -32,7 +32,7 @@
 - [Claude API client SDKs](https://platform.claude.com/docs/en/api/client-sdks)
   Useful contrast with the Agent SDK: model API wrappers, not Claude Code session observability.
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
-  Official hook lifecycle and input schema for `PermissionRequest`, `PreToolUse`, `PostToolUse`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, and related events.
+  Official hook lifecycle and input schema for `PermissionRequest`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, and related events.
 - [Automate workflows with hooks](https://code.claude.com/docs/en/automate-workflows-with-hooks)
   Quickstart examples for wiring command hooks and project-local hook scripts.
 
@@ -42,6 +42,11 @@
   Primary upstream implementation and README for the Gateway, session model, and workspace configuration.
 - [OpenClaw ACP bridge](https://github.com/openclaw/openclaw/blob/main/docs.acp.md)
   Clear explanation of Gateway-backed session routing, session keys such as `agent:main:main`, and the relationship between ACP sessions and Gateway sessions.
+
+## Hermes
+
+- [Hermes Agent repository](https://github.com/nousresearch/hermes-agent)
+  Primary upstream implementation for Hermes CLI/TUI behavior, local `~/.hermes/state.db` persistence, profile homes, and working-directory context handling.
 
 ## Cursor
 

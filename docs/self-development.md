@@ -20,7 +20,7 @@ A good iteration improves at least one of these:
 - Parent sessions are the primary actors.
 - Subagents should visually attach to their parent session and role cluster.
 - Room visuals should stay legible without text banners pasted over the scene.
-- High-level transparency should stay inside the office scene when possible, using motion, placement, hover cards, and session detail instead of detached dashboard slabs.
+- High-level transparency should stay inside the office scene when possible, using motion, placement, hover cards, session detail, and compact surfaces like the Ops Wall instead of detached dashboard slabs.
 - Decorative art must not obscure agent state.
 
 ## Current technical priorities
@@ -55,6 +55,15 @@ A good iteration improves at least one of these:
 - browser render for `/scene-effects-audit`
 - browser render for terminal mode
 - verify default `web --port 4181` launch stays in fleet mode and does not pin to the current cwd
+- verify Hermes discovery can add a workspace only from a live Hermes process cwd or the latest current root of a fresh hook session, not from old DB history or every path the session touched
+- verify Hermes discovery ignores exact transient system roots such as `/tmp`, `/var/tmp`, and `/dev/shm`, even when they contain temporary `.git` metadata
+- verify Hermes workstation agents use durable SQLite session ids and do not expose hook-only ids such as `hermes:default`, `hermes:process-<pid>`, or `hermes:<uuid>`
+- verify Hermes fleet reads stay bounded by checking `/api/fleet` response size and web-process memory after repeated refreshes against live hook files
+- verify out-of-workspace Hermes sessions appear only as floating `hermes:roaming` agents on an existing tower floor
+- verify active Hermes command/tool sessions keep the command or tool in `detail` / `activityEvent` while `latestMessage` remains the latest real prompt/reply, not the command text
+- verify long Hermes hook streams still retain enough recent context to recover earlier conversation text after many tool calls
+- verify generic Hermes maintenance prompts do not replace the prior useful message in hover cards, session cards, or `web query` output
+- when validating Hermes fleet behavior, inspect `/api/server-meta` and `/api/fleet` with short timeouts and stop the listener immediately if unexpected workspace floors spike
 - browser render for explicit `web /abs/project/path` launch
 - `demo preview` creates a disposable workspace, serves it, and removes it when the run ends
 - verify workspace tabs show real Codex workspaces
@@ -83,10 +92,14 @@ A good iteration improves at least one of these:
 - verify monitor-tracked `isOngoing` Codex threads stay workstation-seated through quiet text gaps even when their latest read-only `notLoaded` payload is stale
 - verify a stopped top-level Codex lead keeps its workstation for about 3 seconds, then cools into rec-room visibility
 - verify delayed first hydration from the Codex app-server does not replay stale replies as fresh toasts or trigger late doorway-entry motion for historical Codex agents
+- verify nested multi-agent v2 subagents remain visible with their recursive ancestor chain and render at `0.75 ** depth` avatar scale
 - verify rec-strip furniture starts on the first floor-grid row and does not exceed 2 tiles of depth from the top band
 - verify desk pods start on tile columns and their workstation seat cells remain aligned to the same grid contract as rec-strip furniture
 - verify global text scale changes hover/toast/map text without changing room geometry or desk assignment
 - verify approval, input-wait, file-change, command-run, and turn lifecycle states have clear visible notification paths
+- verify the Ops Wall shows decayed hottest script/doc/media file changes from real typed events, cools quiet changes naturally, and excludes tool/command activity from the hot-stuff board
+- verify the primary room wall dashboard stays subtle, title-free, and animates file leaderboard row changes without becoming a detached admin panel
+- verify `web query <repo> gist` returns the same hot-change signal plus active-agent last message and last file change as a light state sync before deeper `recent` / `last` reads
 - verify recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events raise distinct short above-head badges in the map scene
 - verify recent typed plan, command, file/diff, and tool-call events raise short animated `PLAN`, `RUN`, `EDIT`, and `TOOL` cues in the map scene
 - verify patch-update, MCP-progress, terminal-interaction, and hook-run notifications land in the same event/history paths as their corresponding file, tool, command, and hook activity
@@ -110,6 +123,7 @@ A good iteration improves at least one of these:
 - verify Claude hook-backed sessions are visibly marked as typed rather than inferred when the matching project-scoped Claude hook sidecar exists in Agents Office user data
 - verify hook-backed Claude `PermissionRequest` waits can be accepted/declined from the browser queue and clear immediately through the local response-file bridge
 - verify hook-backed Claude `Elicitation` waits render schema-backed questions, ignore optional unanswered fields, and clear immediately after browser submit
+- verify Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records produce shared delegated-work activity and `subagent` dashboard events while preserving Claude provenance
 - verify OpenClaw gateway sessions appear only for projects whose normalized root matches the configured OpenClaw agent workspace
 - verify OpenClaw sessions preserve parent-child structure through the shared `parentThreadId` hierarchy
 - verify inferred local Cursor sessions appear for repos that Cursor has opened locally and are marked as inferred in hover/session detail
@@ -119,7 +133,7 @@ A good iteration improves at least one of these:
 
 ## Near-term roadmap
 
-- keep extending the typed event-to-motion mapping beyond the current turn badges, cue chips, workstation pulses, and request-structure signatures
+- keep extending the typed event-to-scene mapping beyond the current turn badges, cue chips, workstation pulses, request-structure signatures, and Ops Wall summaries
 - keep tightening browser action affordances around typed local Codex waits, especially richer queue UX for multi-question inputs
 - decide whether Cursor hook sidecars should also capture `beforeReadFile` and Tab-specific events or stay focused on Agent-only workload visibility
 - decide whether OpenClaw needs broader workspace containment rules beyond exact workspace-root equality
