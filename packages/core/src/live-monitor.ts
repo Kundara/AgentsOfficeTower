@@ -41,6 +41,7 @@ import {
   extractThreadId,
   hasEquivalentRecentMessageEvent,
   isFinalAgentMessageNotification,
+  latestThreadAgentMessageIsInLastTurn,
   latestThreadAgentMessage,
   type PendingUserRequest,
   shouldMarkThreadLiveFromAppServerNotification,
@@ -981,6 +982,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       if (
         wasHydrated
         && nextMessage
+        && latestThreadAgentMessageIsInLastTurn(thread)
         && (
           nextMessage.itemId !== previousMessage?.itemId
           || nextMessage.text !== previousMessage?.text

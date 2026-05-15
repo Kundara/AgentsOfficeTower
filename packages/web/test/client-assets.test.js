@@ -300,18 +300,17 @@ test("runtime source adds transient turn-phase badges for started, completed, in
   assert.ok(sceneSource.includes('if (entry.kind === "turn-signal") {'));
 });
 
-test("runtime source maps recent typed plan, command, file, and tool events into transient activity cues", () => {
+test("runtime source keeps typed plan, command, file, and tool events out of mock activity cues", () => {
   const renderSource = readRuntimeSource("render-source.ts");
   const navigationSource = readRuntimeSource("navigation-source.ts");
   const sceneSource = readRuntimeSource("scene-source.ts");
 
   assert.ok(renderSource.includes("const ACTIVITY_CUE_MAX_AGE_MS = 4800;"));
   assert.ok(renderSource.includes("function activityCueForEvent(event) {"));
-  assert.ok(renderSource.includes('return { mode: "plan", label: "PLAN" };'));
-  assert.ok(renderSource.includes('return { mode: "command", label: "RUN" };'));
-  assert.ok(renderSource.includes('return { mode: "file", label: "EDIT" };'));
-  assert.ok(renderSource.includes('return { mode: "tool", label: "TOOL" };'));
-  assert.ok(renderSource.includes('event.method === "item/mcpToolCall/progress"'));
+  assert.doesNotMatch(renderSource, /return \{ mode: "plan", label: "PLAN" \};/);
+  assert.doesNotMatch(renderSource, /return \{ mode: "command", label: "RUN" \};/);
+  assert.doesNotMatch(renderSource, /return \{ mode: "file", label: "EDIT" \};/);
+  assert.doesNotMatch(renderSource, /return \{ mode: "tool", label: "TOOL" \};/);
   assert.ok(renderSource.includes("function recentActivityCueForAgent(snapshot, agent) {"));
   assert.ok(sceneSource.includes("activityCue: recentActivityCueForAgent(snapshot, agent),"));
   assert.ok(sceneSource.includes("activityCue: recentActivityCueForAgent(snapshot, entry.agent),"));
@@ -356,7 +355,7 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes("function addWallDashboardNode(dashboard)"));
   assert.ok(navigationSource.includes("(model.wallDashboards || []).forEach((dashboard) =>"));
   assert.ok(navigationSource.includes("function renderWallDashboardHotHover(row)"));
-  assert.ok(navigationSource.includes('class="agent-hover-worktree"'));
+  assert.ok(renderSource.includes('class="agent-hover-worktree"'));
   assert.ok(navigationSource.includes('data-wall-hot-meta'));
   assert.ok(navigationSource.includes("function collectReusableOfficeOverlayNodes(layer, selector, datasetKey)"));
   assert.ok(navigationSource.includes("function setOfficeOverlayHtml(node, html)"));
@@ -415,6 +414,23 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes('typeof officeWallDashboardSceneToken === "function" ? officeWallDashboardSceneToken(snapshot) : ""'));
 });
 
+test("runtime source rerenders dragged furniture immediately without per-move storage writes", () => {
+  const settingsSource = readRuntimeSource("settings-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+
+  assert.ok(settingsSource.includes("function furnitureLayoutOverrideToken(projectRoot)"));
+  assert.ok(settingsSource.includes("if (options.persist !== false)"));
+  assert.ok(navigationSource.includes("furnitureLayoutOverrideToken(snapshot.projectRoot),"));
+  assert.ok(navigationSource.includes("function furnitureDragRendererForTarget(target, host)"));
+  assert.ok(navigationSource.includes("const snapshot = latestOfficeMapProjects.find((project) => project && project.projectRoot === projectRoot);"));
+  assert.ok(navigationSource.includes("setFurnitureColumnOverride(furnitureDragState.projectRoot, furnitureDragState.item.roomId, furnitureDragState.item.id, nextColumn, { persist: false });"));
+  assert.ok(navigationSource.includes("if (furnitureDragState.dirty)"));
+  assert.ok(navigationSource.includes("saveFurnitureLayoutOverrides();"));
+  assert.ok(uiSource.includes("const renderer = furnitureDragRendererForTarget(target, host);"));
+  assert.ok(uiSource.includes("dirty: false,"));
+});
+
 test("runtime source maps approval waits, input waits, and resolved requests into transient lifecycle cues", () => {
   const renderSource = readRuntimeSource("render-source.ts");
   const navigationSource = readRuntimeSource("navigation-source.ts");
@@ -430,32 +446,24 @@ test("runtime source maps approval waits, input waits, and resolved requests int
   assert.ok(sceneSource.includes('entry.mode === "resolved" ? -Math.round(progress * 7 + Math.sin((now + entry.phase) / 150) * 1.2)'));
 });
 
-test("activity cues include mode-specific icon adornments and icon-side animation, not just text chips", () => {
+test("request lifecycle cues include mode-specific icon adornments and icon-side animation", () => {
   const navigationSource = readRuntimeSource("navigation-source.ts");
   const sceneSource = readRuntimeSource("scene-source.ts");
 
   assert.ok(navigationSource.includes("const ACTIVITY_CUE_ICON_WIDTH = 8;"));
   assert.ok(navigationSource.includes("const ACTIVITY_CUE_ICON_GAP = 3;"));
   assert.ok(navigationSource.includes("function activityCueFrameRadius(mode) {"));
-  assert.ok(navigationSource.includes('return mode === "command" || mode === "file" ? 1 : 4;'));
-  assert.ok(navigationSource.includes("fillColor: 0x080c10,"));
-  assert.ok(navigationSource.includes("fillColor: 0x101714,"));
-  assert.ok(navigationSource.includes('if (mode === "plan") {'));
-  assert.ok(navigationSource.includes('} else if (mode === "command") {'));
-  assert.ok(navigationSource.includes('} else if (mode === "file") {'));
-  assert.ok(navigationSource.includes('} else if (mode === "tool") {'));
   assert.ok(navigationSource.includes('} else if (mode === "approval") {'));
   assert.ok(navigationSource.includes('} else if (mode === "input") {'));
   assert.ok(navigationSource.includes('} else if (mode === "resolved") {'));
   assert.ok(navigationSource.includes("activityCueContainer.addChild(adornment.iconContainer);"));
   assert.ok(navigationSource.includes("iconContainer,"));
-  assert.ok(sceneSource.includes('if (cueIcon && entry.mode === "plan") {'));
-  assert.ok(sceneSource.includes('} else if (cueIcon && entry.mode === "tool") {'));
-  assert.ok(sceneSource.includes('cueIcon.rotation = (now + entry.phase) / 420;'));
-  assert.ok(sceneSource.includes('cueAccent.rotation = (now + entry.phase) / 260;'));
+  assert.ok(sceneSource.includes('if (cueIcon && entry.mode === "approval") {'));
+  assert.ok(sceneSource.includes('} else if (cueIcon && entry.mode === "input") {'));
+  assert.ok(sceneSource.includes('} else if (cueIcon && entry.mode === "resolved") {'));
 });
 
-test("recent workstation activity also creates non-text desk effects beyond the floating cue chip", () => {
+test("recent workstation request activity also creates non-text desk effects beyond the floating cue chip", () => {
   const renderSource = readRuntimeSource("render-source.ts");
   const navigationSource = readRuntimeSource("navigation-source.ts");
   const sceneSource = readRuntimeSource("scene-source.ts");
@@ -482,7 +490,6 @@ test("recent workstation activity also creates non-text desk effects beyond the 
   assert.ok(sceneSource.includes("const approvalProfile = entry.requestProfile && typeof entry.requestProfile === \"object\""));
   assert.ok(sceneSource.includes("const inputProfile = entry.requestProfile && typeof entry.requestProfile === \"object\""));
   assert.ok(sceneSource.includes("index < requiredCount"));
-  assert.ok(sceneSource.includes('entry.mode === "command") {'));
   assert.ok(sceneSource.includes('entry.mode === "resolved") {'));
 });
 
@@ -1125,6 +1132,10 @@ test("toast label icons fit a fixed slot instead of driving toast height", () =>
 
 test("tool dashboard events prefer semantic thread-item icon overrides", () => {
   const renderSource = readRuntimeSource("render-source.ts").replace(/\r\n/g, "\n");
+  const pixelOfficeSource = readFileSync(
+    join(__dirname, "../src/pixel-office.ts"),
+    "utf8"
+  ).replace(/\r\n/g, "\n");
   const toastSource = readFileSync(
     join(__dirname, "../src/client/toast-source.ts"),
     "utf8"
@@ -1141,6 +1152,18 @@ test("tool dashboard events prefer semantic thread-item icon overrides", () => {
   assert.ok(
     renderSource.includes("return itemIconUrl || methodIconUrl;"),
     "tool and subagent events should prefer semantic item icons over exact method icons"
+  );
+  assert.ok(
+    pixelOfficeSource.includes('scriptEdit: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/scriptEdit.png`'),
+    "script edit icon should be exposed through the thread-item icon map"
+  );
+  assert.ok(
+    renderSource.includes('eventIconUrlForThreadItemType("scriptEdit")'),
+    "dashboard-event icon resolver should have a script file-change icon fallback"
+  );
+  assert.ok(
+    renderSource.includes("labelIconUrl: scriptFileChangeIconUrl(event) || options.labelIconUrl || null"),
+    "file-change toasts should prefer the script edit icon when the changed path is script-like"
   );
   assert.ok(
     renderSource.includes("iconUrl: eventIconUrlForDashboardEvent(event) || threadHistoryIconUrl({ tone: tone.tone })"),

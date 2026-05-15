@@ -4250,6 +4250,89 @@ test("hydrated thread rereads backfill fresh assistant replies when live events 
   assert.equal(messageEvents[0].detail, "Fresh follow-up reply");
 });
 
+test("hydrated rereads do not replay an older final reply after a newer user prompt", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const listedThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt: Math.floor((Date.now() - 30_000) / 1000),
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_commentary",
+            type: "agentMessage",
+            text: "Still wrapping this up.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+  const hydratedThread = {
+    ...listedThread,
+    updatedAt: Math.floor(Date.now() / 1000),
+    status: { type: "active", activeFlags: [] },
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_final",
+            type: "agentMessage",
+            text: "Old final summary that was missed.",
+            phase: "final_answer"
+          }
+        ]
+      },
+      {
+        id: "turn_2",
+        status: "inProgress",
+        error: null,
+        items: [
+          {
+            id: "item_user",
+            type: "userMessage",
+            text: "Follow up on the live state."
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(listedThread.id, listedThread);
+  monitor.client = {
+    readThread: async () => listedThread
+  };
+
+  await monitor.refreshThread(listedThread.id);
+  monitor.client = {
+    readThread: async () => hydratedThread
+  };
+
+  await monitor.refreshThread(listedThread.id);
+  await monitor.rebuildSnapshot();
+
+  assert.equal(
+    monitor.recentEvents.some((event) => event.method === "thread/read/agentMessage"),
+    false
+  );
+  const snapshot = monitor.getSnapshot();
+  const agent = snapshot.agents.find((entry) => entry.threadId === listedThread.id);
+  assert.ok(agent);
+  assert.equal(agent.detail, "Follow up on the live state.");
+  assert.equal(agent.latestMessage, "Old final summary that was missed.");
+  assert.equal(agent.isCurrent, true);
+});
+
 test("unsubscribed thread rereads still synthesize assistant replies as fallback events", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",

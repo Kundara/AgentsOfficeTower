@@ -18,12 +18,14 @@ const THREAD_ITEM_LABELS: Record<string, string> = {
   collabAgentToolCall: "Collab agent tool call",
   webSearch: "Web search",
   imageView: "Image view",
+  scriptEdit: "Script edit",
   enteredReviewMode: "Entered review mode",
   exitedReviewMode: "Exited review mode",
   contextCompaction: "Context compaction"
 };
 
 const THREAD_ITEM_NOTES: Partial<Record<string, string>> = {
+  scriptEdit: "Used by script file-change toasts when the event has no more specific method icon.",
   mcpToolCall: "Uses the refined wrench icon shared with dynamic tool calls.",
   dynamicToolCall: "Uses the refined wrench icon shared with MCP tool calls.",
   collabAgentToolCall: "Legacy compatibility item retained outside the current official list."
@@ -54,7 +56,7 @@ export function renderIconAuditHtml(): string {
     note: THREAD_ITEM_NOTES[type]
   }));
 
-  const compatibilityThreadItems = ["collabAgentToolCall"].map((type) => ({
+  const compatibilityThreadItems = ["scriptEdit", "collabAgentToolCall"].map((type) => ({
     id: type,
     label: THREAD_ITEM_LABELS[type] ?? type,
     url: PIXEL_OFFICE_THREAD_ITEM_ICON_URLS[type as keyof typeof PIXEL_OFFICE_THREAD_ITEM_ICON_URLS],

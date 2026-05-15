@@ -62,6 +62,7 @@ export const PIXEL_OFFICE_THREAD_ITEM_ICON_URLS = {
   collabAgentToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/collabToolCall.png`,
   webSearch: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/webSearch.png`,
   imageView: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/imageView.png`,
+  scriptEdit: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/scriptEdit.png`,
   enteredReviewMode: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/enteredReviewMode.png`,
   exitedReviewMode: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/exitedReviewMode.svg`,
   contextCompaction: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/contextCompaction.svg`

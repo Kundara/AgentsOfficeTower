@@ -101,13 +101,13 @@ A good iteration improves at least one of these:
 - verify the primary room wall dashboard stays subtle, title-free, and animates file leaderboard row changes without becoming a detached admin panel
 - verify `web query <repo> gist` returns the same hot-change signal plus active-agent last message and last file change as a light state sync before deeper `recent` / `last` reads
 - verify recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events raise distinct short above-head badges in the map scene
-- verify recent typed plan, command, file/diff, and tool-call events raise short animated `PLAN`, `RUN`, `EDIT`, and `TOOL` cues in the map scene
+- verify recent typed plan, command, file/diff, and tool-call events stay on toast/event, hover, and session-history surfaces without raising mock-style `PLAN`, `RUN`, `EDIT`, or `TOOL` labels in the map scene
 - verify patch-update, MCP-progress, terminal-interaction, and hook-run notifications land in the same event/history paths as their corresponding file, tool, command, and hook activity
 - verify global app-server warnings, MCP startup/login failures, rate-limit notices, and Windows sandbox warnings appear as notes/status rather than silently disappearing
 - verify unsupported `item/tool/call` dynamic-tool requests receive an explicit unsuccessful response instead of leaving the Codex turn pending
 - verify typed approval waits, input waits, and resolved request clears raise short animated `WAIT`, `ASK`, and `OK` cues in the map scene
-- verify activity/request cue chips keep mode-specific iconography and icon-side motion instead of collapsing back to plain text-only pills
-- verify recent typed workstation activity also raises a short mode-specific non-text desk effect instead of relying only on the floating cue chip
+- verify request lifecycle cue chips keep mode-specific iconography and icon-side motion instead of collapsing back to plain text-only pills
+- verify recent typed workstation request activity also raises a short mode-specific non-text desk effect instead of relying only on the floating cue chip
 - verify approval waits and input waits expose some of their request structure in-scene, such as decision breadth or question/required load, instead of sharing one generic workstation pulse
 - verify waiting desk work pulses in-place, blocked desk work shakes subtly, and validating desk work uses a brighter pulsing workstation glow
 - verify planning/scanning/editing/running/validating/delegating desk work no longer share one generic seated bob

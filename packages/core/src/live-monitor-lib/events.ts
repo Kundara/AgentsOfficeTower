@@ -367,6 +367,12 @@ export function latestThreadAgentMessage(thread: CodexThread): {
   return null;
 }
 
+export function latestThreadAgentMessageIsInLastTurn(thread: CodexThread): boolean {
+  const lastTurn = thread.turns.at(-1);
+  const latestMessage = latestThreadAgentMessage(thread);
+  return Boolean(lastTurn && latestMessage?.turnId === lastTurn.id);
+}
+
 function isLiveAppServerMethod(method: string): boolean {
   return (
     method === "thread/started"

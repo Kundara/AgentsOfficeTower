@@ -752,25 +752,41 @@ function toolKind(toolName: string): {
   eventKind: DashboardEvent["kind"];
 } {
   const normalized = toolName.toLowerCase();
-  if (normalized === "terminal" || normalized.includes("shell") || normalized.includes("bash")) {
+  if (normalized === "todo") {
+    return { state: "planning", eventType: "plan", eventKind: "turn" };
+  }
+  if (
+    normalized === "terminal"
+    || normalized === "process"
+    || normalized === "execute_code"
+    || normalized.includes("shell")
+    || normalized.includes("bash")
+  ) {
     return { state: "running", eventType: "commandExecution", eventKind: "command" };
   }
   if (normalized.startsWith("mcp_")) {
     return { state: "running", eventType: "mcpToolCall", eventKind: "tool" };
   }
-  if (
-    normalized === "write_file"
-    || normalized === "patch"
-    || normalized.includes("file")
-    || normalized.includes("edit")
-  ) {
+  if (normalized === "write_file" || normalized === "patch") {
     return { state: "editing", eventType: "fileChange", eventKind: "fileChange" };
   }
   if (normalized.includes("delegate") || normalized.includes("subagent")) {
     return { state: "delegating", eventType: "collabAgentToolCall", eventKind: "subagent" };
   }
-  if (normalized.includes("web") || normalized.includes("search")) {
+  if (normalized === "web_search" || normalized.includes("browser_search")) {
     return { state: "scanning", eventType: "webSearch", eventKind: "tool" };
+  }
+  if (
+    normalized === "read_file"
+    || normalized === "search_files"
+    || normalized === "skills_list"
+    || normalized === "skill_view"
+    || normalized === "web_extract"
+    || normalized.includes("search")
+    || normalized.includes("read")
+    || normalized.includes("list")
+  ) {
+    return { state: "scanning", eventType: "dynamicToolCall", eventKind: "tool" };
   }
   return { state: "running", eventType: "dynamicToolCall", eventKind: "tool" };
 }
@@ -779,7 +795,21 @@ function toolTitle(toolName: string, args: Record<string, unknown>): string {
   if (toolName === "terminal" && typeof args.command === "string") {
     return shorten(args.command, 120);
   }
-  for (const key of ["path", "file_path", "filepath", "workdir", "query"]) {
+  if (toolName === "process") {
+    const action = typeof args.action === "string" && args.action.trim() ? args.action.trim() : "manage";
+    const sessionId = typeof args.session_id === "string" && args.session_id.trim()
+      ? ` ${shorten(args.session_id.trim(), 40)}`
+      : "";
+    return `process ${action}${sessionId}`;
+  }
+  if (toolName === "todo") {
+    const todos = Array.isArray(args.todos) ? args.todos : null;
+    if (!todos) {
+      return "todo: reading task list";
+    }
+    return `todo: ${args.merge === true ? "updating" : "planning"} ${todos.length} task(s)`;
+  }
+  for (const key of ["path", "file_path", "filepath", "workdir", "query", "pattern", "name", "category"]) {
     if (typeof args[key] === "string" && String(args[key]).trim()) {
       return `${toolName}: ${shorten(String(args[key]), 90)}`;
     }
@@ -1598,7 +1628,7 @@ function summarizeHermesHookSession(input: {
       detail,
       paths: input.paths,
       activityEvent: {
-        type: "dynamicToolCall",
+        type: "reasoning",
         action: "updated",
         path: input.paths[0] ?? input.projectRoot,
         title: detail,
@@ -1681,8 +1711,12 @@ function buildHermesHookEvents(input: {
     const toolEventPath = kind
       ? toolPath(input.projectRoot, record.cwd, args) ?? input.projectRoot
       : input.projectRoot;
-    const command = kind?.eventKind === "command" && typeof args.command === "string" && args.command.trim()
-      ? shorten(args.command, 240)
+    const command = kind?.eventKind === "command"
+      ? (
+        typeof args.command === "string" && args.command.trim()
+          ? shorten(args.command, 240)
+          : toolName === "process" ? toolEventTitle : undefined
+      )
       : undefined;
     const assistantText = hermesHookResponseText(record) ?? hermesHookTerminalOutput(record);
     const userText = hermesHookText(record, ["user_message"]);
@@ -1690,7 +1724,9 @@ function buildHermesHookEvents(input: {
       ? latestHermesHookMeaningfulText(input.records.slice(0, startIndex + index + 1))
       : null;
     const method =
-      kind?.eventKind === "command"
+      kind?.eventType === "plan"
+        ? "turn/plan/updated"
+      : kind?.eventKind === "command"
         ? record.eventName === "pre_tool_call" ? "item/started" : "item/commandExecution/outputDelta"
         : kind?.eventKind === "fileChange"
           ? record.eventName === "pre_tool_call" ? "item/started" : "item/fileChange/outputDelta"
@@ -1711,6 +1747,7 @@ function buildHermesHookEvents(input: {
     const action: DashboardEvent["action"] =
       kind?.eventKind === "command" ? "ran"
       : kind?.eventKind === "fileChange" ? "edited"
+      : kind?.eventType === "plan" ? "updated"
       : eventKind === "message" ? "said"
       : "updated";
     return {
@@ -1727,7 +1764,9 @@ function buildHermesHookEvents(input: {
         : eventKind === "message" ? "agentMessage"
         : undefined,
       kind: eventKind,
-      phase: hermesHookIsToolCompletion(record.eventName)
+      phase: kind?.eventType === "plan"
+        ? "updated"
+        : hermesHookIsToolCompletion(record.eventName)
         ? hermesHookResultLooksFailed(record) ? "failed" : "completed"
         : record.eventName === "pre_tool_call" ? "started" : "updated",
       title: kind ? toolEventTitle : record.eventName,

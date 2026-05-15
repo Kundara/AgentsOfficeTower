@@ -185,6 +185,7 @@ How we use it:
 - map the session into project rooms using extracted paths
 - keep read-only visibility for older threads outside the live subscription window
 - synthesize fallback assistant-message events from reread desktop rollout threads when the latest assistant message changed and no equivalent recent live message event exists, so read-only or subscribed threads can still toast if the live terminal message notification is missed
+- only synthesize those fallback assistant-message events when the latest assistant message belongs to the latest turn, so an older missed final answer is not replayed as fresh activity after a newer user prompt starts the next turn
 - treat those synthesized `thread/read/agentMessage` events as recovery-only signal; streamed `item/completed` final answers remain the authoritative visible reply when both exist for the same thread, so a late reread cannot overwrite a newer live final answer in the UI
 - keep synthesized `thread/read/agentMessage` commentary as `updated`; only a latest assistant message with `phase = final_answer` is treated as completed
 
@@ -767,7 +768,9 @@ How we use it:
 - keep Hermes SQLite session ids as the only normal workstation agents; hook-only ids such as `default`, `process-<pid>`, and UUID task/tool streams are folded into the nearest durable Hermes session by direct session id, payload session id, platform, cwd, and time window instead of creating separate avatars
 - treat fresh `ended_at IS NULL` Hermes gateway sessions as current open work, even after the latest assistant reply, so the still-open main session stays desk-visible instead of only contributing activity history
 - treat Hermes compression-continuation children as the lead session, matching Hermes' own latest-descendant/session-list behavior, instead of rendering them as subagents under the compressed parent
-- keep Hermes `latestMessage` tied to the latest useful user or assistant conversation text; terminal commands, file changes, MCP calls, and dynamic tool calls update `detail`, typed events, and toasts instead of becoming the visible last message
+- keep Hermes `latestMessage` tied to the latest useful user or assistant conversation text; terminal commands, process-management calls, file changes, MCP calls, and dynamic tool calls update `detail`, typed events, and toasts instead of becoming the visible last message
+- map Hermes `process(...)` hooks such as background `wait`, `poll`, and `log` to the command/process-management family, while model API request hooks map to reasoning/thinking activity rather than generic dynamic-tool activity
+- decode Hermes tool hooks through Hermes' own registry/display semantics: `todo` is planning, `read_file`/`search_files`/`skill_view` are scanning tool activity, and only `write_file`/`patch` are file-edit activity
 - ignore generic Hermes maintenance prompts, including skill-library review prompts, when choosing display message text so they do not replace the prior real conversation message
 - prefer the latest project-bearing hook payload paths over Hermes process cwd when deciding which floor the session currently belongs on
 - use `system_prompt` working-directory text, live `HERMES_CWD` / `TERMINAL_CWD`, tool path arguments, and absolute paths in messages to associate work with a project
@@ -794,7 +797,7 @@ Operational validation:
 - `GET /api/server-meta` may include a Hermes-discovered floor only when it comes from a live process cwd or a fresh hook session's latest current project root
 - `GET /api/fleet` may include `source = hermes` agents on matching floors, or `sourceKind = hermes:roaming` agents attached to an existing floor when the hook session is outside known workspace roots
 - `GET /api/fleet` should show durable ids like `hermes:20260515_...` or `hermes:cron_...`; it should not show hook-only ids such as `hermes:default`, `hermes:process-<pid>`, or `hermes:<uuid>`, including in roaming agents
-- active Hermes command/tool sessions should expose the command or tool in `detail` / `activityEvent`, while `latestMessage` remains either the prior real conversation text or `null`; a command string such as `sleep 75` should not appear as the agent's last message
+- active Hermes command/process/planning/tool sessions should expose the command, process action, planning update, or tool in `detail` / `activityEvent`, while `latestMessage` remains either the prior real conversation text or `null`; a command string such as `sleep 75` should not appear as the agent's last message
 - the hook output directory should contain `codex-agents-office.status.json` with `status_event_name = registered` and the current gateway pid after Hermes reloads the plugin
 - if a Hermes validation run starts producing many unexpected workspace floors, stop the web listener immediately and inspect project discovery before restarting it; do not reintroduce DB-history or all-path hook sweeps as discovery inputs
 

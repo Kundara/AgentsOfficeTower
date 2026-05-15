@@ -253,6 +253,31 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         }
       }
 
+      function extensionForNotificationPath(location) {
+        const normalized = String(location || "").split(/[?#]/)[0].toLowerCase();
+        const match = normalized.match(/[.]([a-z0-9]+)$/);
+        return match ? match[1] : "";
+      }
+
+      function isScriptFileChangeEvent(event) {
+        if (!event || (event.kind !== "fileChange" && event.type !== "fileChange")) {
+          return false;
+        }
+        const extension = extensionForNotificationPath(event.path || event.title || event.detail || "");
+        return [
+          "js", "jsx", "ts", "tsx", "mjs", "cjs", "css", "scss", "sass", "less", "html",
+          "py", "rb", "go", "rs", "java", "kt", "kts", "swift", "c", "cc", "cpp", "h",
+          "hpp", "cs", "php", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "sql",
+          "graphql", "gql", "vue", "svelte", "astro", "lua", "pl", "r"
+        ].includes(extension);
+      }
+
+      function scriptFileChangeIconUrl(event) {
+        return isScriptFileChangeEvent(event)
+          ? eventIconUrlForThreadItemType("scriptEdit") || "/assets/pixel-office/sprites/icons/thread-item/scriptEdit.png"
+          : null;
+      }
+
       function notificationFileName(projectRoot, location, fallback = "") {
         const cleaned = cleanReportedPath(projectRoot, location);
         const normalized = cleaned || String(fallback || "").trim();
@@ -275,7 +300,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return {
           kindClass: notificationKindClassForFileChange(event.action),
           label: notificationLabel(event),
-          labelIconUrl: options.labelIconUrl || null,
+          labelIconUrl: scriptFileChangeIconUrl(event) || options.labelIconUrl || null,
           title: notificationFileName(projectRoot, path, fallbackTitle) || fallbackTitle || "Files",
           imageUrl,
           anchor: "agent",
@@ -364,6 +389,10 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         }
         const itemIconUrl = eventIconUrlForThreadItemType(event.itemType);
         const methodIconUrl = eventIconUrlForMethod(event.method);
+        const scriptFileIconUrl = scriptFileChangeIconUrl(event);
+        if (scriptFileIconUrl) {
+          return scriptFileIconUrl;
+        }
         if (
           event.kind === "tool"
           || event.kind === "subagent"
@@ -522,14 +551,6 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
 
       function activityCueDurationMs(mode) {
         switch (mode) {
-          case "plan":
-            return 2600;
-          case "command":
-            return 2200;
-          case "file":
-            return 2400;
-          case "tool":
-            return 2200;
           case "approval":
             return 3200;
           case "input":
@@ -544,29 +565,6 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
       function activityCueForEvent(event) {
         if (!event) {
           return null;
-        }
-        if (event.method === "turn/plan/updated" || event.method === "item/plan/delta") {
-          return { mode: "plan", label: "PLAN" };
-        }
-        if (
-          event.method === "item/commandExecution/outputDelta"
-          || (event.method === "item/started" && event.kind === "command")
-        ) {
-          return { mode: "command", label: "RUN" };
-        }
-        if (
-          event.method === "turn/diff/updated"
-          || event.method === "item/fileChange/outputDelta"
-          || (event.method === "item/started" && event.kind === "fileChange")
-        ) {
-          return { mode: "file", label: "EDIT" };
-        }
-        if (
-          event.method === "item/tool/call"
-          || event.method === "item/mcpToolCall/progress"
-          || (event.method === "item/started" && event.kind === "tool")
-        ) {
-          return { mode: "tool", label: "TOOL" };
         }
         if (
           event.method === "item/commandExecution/requestApproval"

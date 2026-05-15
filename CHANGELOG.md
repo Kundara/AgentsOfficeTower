@@ -34,6 +34,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed the in-scene hot-stuff board to show only file-change heat, grouped into a title-free 3x3 script/doc/media grid with compact Shared/Focus-style item text, no per-row progress bars, faster decay, and animated leaderboard row movement.
 - Changed hot-stuff file heat scoring so each file-change event contributes much less heat, keeping small or single edits from immediately reading as high-heat board items.
 - Changed the in-scene hot-stuff board file labels to clip with a short edge fade instead of inserting ellipses.
+- Changed hot-stuff hover tooltips so branch labels sit on the bottom-right footer row instead of consuming their own tooltip row.
 - Changed the in-scene hot-stuff board to use flexible item columns, brighter panel colors, behind-board shadows, and larger scene-overlay hover tooltips with Windows-normalized paths, tighter shadows, and a heat bar for file heat details.
 - Changed the in-scene hot-stuff board grid to use tighter item insets and gaps so file cells do not look over-margined.
 - Changed hot-stuff file heat entries to carry branch and multiplayer user attribution through snapshots, web CLI gist output, shared-room merges, and hover tooltips.
@@ -55,12 +56,13 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed seated active desk animation so planning, scanning, editing, running, validating, and delegating work now use distinct micro-motion profiles instead of one shared bob.
 - Changed scene movement so visible room changes now render as a doorway exit in the old room plus a doorway entry in the destination room, instead of retargeting one live sprite across rooms.
 - Changed motion reuse so tiny same-slot refresh deltas now keep the settled target instead of triggering unnecessary reroutes on ordinary polling.
-- Changed scene event visibility so recent typed plan, command, file/diff, and tool-call events now raise short animated `PLAN`, `RUN`, `EDIT`, and `TOOL` cues near the actor in addition to their toast treatment.
+- Changed scene event visibility so recent typed plan, command, and file/diff events stay on typed toast, history, hover, and current-action surfaces instead of raising mock-style `PLAN`, `RUN`, or `EDIT` labels in the room scene.
 - Changed request lifecycle visibility so typed approval waits, input waits, and request resolution now raise short animated `WAIT`, `ASK`, and `OK` cues near the actor in addition to the durable queue and toast surfaces.
 - Changed activity/request cue rendering so those chips now include mode-specific icon adornments and icon-side motion instead of relying on color and text alone.
+- Changed script file-change toasts to use a dedicated pixel edit icon when the typed event or fallback activity path identifies a script-like file.
 - Changed thread-item toast icon overrides for MCP tool calls, dynamic tool calls, collab tool calls, file changes, and entered review mode.
 - Changed toast label icons to fit inside a smaller fixed-size slot and keep single file-change deltas inline with the filename.
-- Changed workstation activity rendering so recent typed command, edit, tool, approval, input, and resolve events now also raise short mode-specific desk-side Pixi effects instead of depending only on floating cue chips.
+- Changed workstation activity rendering so approval, input, and resolve events keep short mode-specific desk-side Pixi effects, while ordinary command/edit activity stays on the toast and session surfaces.
 - Changed request workstation effects so approval waits now reflect decision breadth/type and input waits now reflect question and required-answer load instead of reusing one generic approval/input pulse.
 - Added a `/scene-effects-audit` browser route that runs the normal client bundle against mocked typed approval/input fleet data so the new request-specific scene effects can be visually checked on demand.
 - Changed the scene audit fixture so mocked request threads now include typed message history, making the new click-open thread cards visually inspectable on the audit route as well.
@@ -86,6 +88,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed in-scene hot-stuff board labels so the clipped edge fade applies to overflowing text at the row end instead of cutting into the first characters.
 - Fixed hot-stuff heat refreshes so the one-second decay tick updates the existing tooltip overlay instead of invalidating and rebuilding the whole office scene.
 - Fixed hot-stuff hover tooltips so scene anchor syncs preserve the existing hot-row DOM node instead of recreating it and resetting CSS hover state.
+- Fixed dragged furniture so layout override changes invalidate the Pixi scene immediately, while persistence waits until pointer release instead of writing storage on every move.
 - Fixed scene hover flashing more broadly by reconciling agent, workstation, furniture, and hot-board overlay nodes through stable view-controller keys instead of recreating the overlay layer on scene sync.
 - Fixed active Hermes sessions so they are marked as current workload agents and seat at workstations instead of only feeding activity surfaces.
 - Fixed ended Hermes hook sessions so hover and history summaries preserve the last actual hook message instead of replacing it with generic lifecycle text.
@@ -95,6 +98,9 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed Hermes hook event normalization so terminal commands, file edits, and MCP tool calls use the same typed event shapes as Codex and Claude toasts instead of generic message text.
 - Fixed Hermes active command/tool hover summaries so `latestMessage` stays on the latest conversation text instead of being replaced by the current command or tool name.
 - Fixed Hermes command/tool-only hover fallbacks so sessions without a visible message show their work state plus a separate action row instead of treating the command as chat text, and generic maintenance prompts no longer replace the previous real message.
+- Fixed Hermes tool execution so typed tool, planning, command, and file-edit events keep their normal toast/history treatment without also raising mock-style in-scene `TOOL`, `PLAN`, `RUN`, or `EDIT` cue labels.
+- Fixed Hermes `process(...)` hooks so background-process polling/waits render as command activity with readable process-action text, and model API hooks render as reasoning activity instead of generic tool calls.
+- Fixed Hermes tool classification to follow Hermes' own display and mutation semantics: `todo` maps to planning, `read_file`/`search_files`/`skill_view` map to scanning/tool activity, and only `write_file`/`patch` map to file edits.
 - Fixed Hermes hook reads on Windows by converting canonical `/mnt/<drive>/...` identities back to host filesystem paths for local file access, and by reading the legacy `~/.codex/codex-agents-office/hermes-hooks` directory as a compatibility fallback.
 - Fixed fleet project discovery so a slow source such as the Codex app-server cannot block faster adapters from contributing Hermes-discovered workspace floors.
 - Fixed Codex app-server stdout parsing so non-JSON process noise is ignored instead of crashing the web listener.
@@ -113,12 +119,13 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed browser chat action submissions so a stalled local app-server request times out with a visible error instead of leaving the composer stuck in a permanent sending state.
 - Fixed browser Codex reply submissions so desktop thread attach/reread/steer work gets a longer dedicated timeout instead of aborting after the generic 15-second action budget.
 - Fixed browser Codex reply routing so observed desktop, VS Code, and CLI threads are rejected server-side instead of attempting `turn/start` / `turn/steer` from the observer connection and hanging or creating a detached side turn.
-- Fixed command and file activity cue styling so the in-scene `RUN` / `EDIT` chips use the existing dark pixel toast palette instead of a bright rounded badge that looked unrelated to the rest of the office UI.
+- Removed command and file activity cue chips from the room scene so `RUN` and `EDIT` no longer appear as separate mock-style overlays.
 - Fixed scene chat opening so clicking an agent renders the thread panel immediately and repeated clicks on the same character keep it open instead of toggling it closed.
 - Fixed local Codex currentness when `thread/list` reports a fresh desktop-backed thread but `thread/read` returns a stale transcript timestamp, preserving the fresher list timestamp for workload classification.
 - Fixed local Codex threads that are still producing fresh non-final command/tool/file activity so they reserve a workstation even when the observer is temporarily `readOnly` or the app-server top-level thread status temporarily reads `idle`.
 - Fixed desktop reread fallback messages so commentary stays `Reply updated` and only `final_answer` assistant messages become `Reply completed`, preventing active work from starting the finished-workstation cooldown too early.
 - Fixed subscribed desktop final replies that update `latestMessage` but miss the live message event by letting hydrated rereads backfill a deduped `thread/read/agentMessage` toast event.
+- Fixed desktop reread fallback messages so an older missed final answer is not replayed as fresh desk activity after a newer user prompt starts the next turn.
 - Fixed active Codex workstation release so `thread/closed`, non-final `turn/completed`, and non-final `turn/interrupted` no longer send an active desktop session back to the rec area between assistant progress updates.
 - Fixed monitor-tracked Codex sessions so stale `notLoaded` rereads without a final answer no longer clear ongoing workstation occupancy or let the browser rec-room path claim the agent while the thread is still in progress.
 - Fixed desktop `notLoaded` prompt handling so fresh unhydrated rows reserve a desk for about 8 seconds after the user types, while stale finished fallback rows use the 3-second cooldown instead of keeping completed threads looking active for about a minute.
@@ -147,7 +154,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Updated the README, architecture notes, product spec, integration hooks, and self-development roadmap to document that scene thread panels are read-only history, while inline browser Codex replies remain limited to app-server-owned non-scene controls.
 - Updated the README, architecture notes, product spec, integration hooks, and self-development roadmap to document the new hook-backed Claude browser action path and to clarify that Cursor remains read-only.
 - Updated the README, product spec, architecture notes, and self-development roadmap to document doorway-based room-change motion, preserved exit ghosts across refreshes, and the tighter no-op motion reuse rule.
-- Updated the README, product spec, architecture notes, and self-development roadmap to document the new typed `PLAN`/`RUN`/`EDIT`/`TOOL` activity cues and their acceptance checks.
+- Updated the README, product spec, architecture notes, and self-development roadmap to document that typed plan, command, file, and tool events should use toasts/history/detail surfaces rather than in-scene `PLAN`/`RUN`/`EDIT`/`TOOL` labels.
 - Updated the README, product spec, architecture notes, and self-development roadmap to document the new typed `WAIT`/`ASK`/`OK` request lifecycle cues and their acceptance checks.
 - Updated the README, product spec, architecture notes, and self-development roadmap to document the richer icon-and-motion treatment for typed activity/request cues.
 - Updated the README, product spec, architecture notes, and self-development roadmap to document the new workstation-side non-text activity effects and their acceptance checks.

@@ -393,13 +393,18 @@ export function startClientApp(): void {
         } catch {}
       }
 
+      function furnitureLayoutOverrideToken(projectRoot) {
+        const projectOverrides = state.furnitureLayoutOverrides?.[projectRoot];
+        return projectOverrides ? JSON.stringify(projectOverrides) : "";
+      }
+
       function furnitureColumnOverride(projectRoot, roomId, furnitureId, fallbackColumn) {
         return Number(
           state.furnitureLayoutOverrides?.[projectRoot]?.[roomId]?.[furnitureId]
         ) || fallbackColumn;
       }
 
-      function setFurnitureColumnOverride(projectRoot, roomId, furnitureId, column) {
+      function setFurnitureColumnOverride(projectRoot, roomId, furnitureId, column, options = {}) {
         state.furnitureLayoutOverrides = {
           ...state.furnitureLayoutOverrides,
           [projectRoot]: {
@@ -410,7 +415,9 @@ export function startClientApp(): void {
             }
           }
         };
-        saveFurnitureLayoutOverrides();
+        if (options.persist !== false) {
+          saveFurnitureLayoutOverrides();
+        }
       }
 
       function applyGlobalSceneSettings() {
@@ -4789,6 +4796,31 @@ export function startClientApp(): void {
         }
       }
 
+      function extensionForNotificationPath(location) {
+        const normalized = String(location || "").split(/[?#]/)[0].toLowerCase();
+        const match = normalized.match(/[.]([a-z0-9]+)$/);
+        return match ? match[1] : "";
+      }
+
+      function isScriptFileChangeEvent(event) {
+        if (!event || (event.kind !== "fileChange" && event.type !== "fileChange")) {
+          return false;
+        }
+        const extension = extensionForNotificationPath(event.path || event.title || event.detail || "");
+        return [
+          "js", "jsx", "ts", "tsx", "mjs", "cjs", "css", "scss", "sass", "less", "html",
+          "py", "rb", "go", "rs", "java", "kt", "kts", "swift", "c", "cc", "cpp", "h",
+          "hpp", "cs", "php", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "sql",
+          "graphql", "gql", "vue", "svelte", "astro", "lua", "pl", "r"
+        ].includes(extension);
+      }
+
+      function scriptFileChangeIconUrl(event) {
+        return isScriptFileChangeEvent(event)
+          ? eventIconUrlForThreadItemType("scriptEdit") || "/assets/pixel-office/sprites/icons/thread-item/scriptEdit.png"
+          : null;
+      }
+
       function notificationFileName(projectRoot, location, fallback = "") {
         const cleaned = cleanReportedPath(projectRoot, location);
         const normalized = cleaned || String(fallback || "").trim();
@@ -4811,7 +4843,7 @@ export function startClientApp(): void {
         return {
           kindClass: notificationKindClassForFileChange(event.action),
           label: notificationLabel(event),
-          labelIconUrl: options.labelIconUrl || null,
+          labelIconUrl: scriptFileChangeIconUrl(event) || options.labelIconUrl || null,
           title: notificationFileName(projectRoot, path, fallbackTitle) || fallbackTitle || "Files",
           imageUrl,
           anchor: "agent",
@@ -4900,6 +4932,10 @@ export function startClientApp(): void {
         }
         const itemIconUrl = eventIconUrlForThreadItemType(event.itemType);
         const methodIconUrl = eventIconUrlForMethod(event.method);
+        const scriptFileIconUrl = scriptFileChangeIconUrl(event);
+        if (scriptFileIconUrl) {
+          return scriptFileIconUrl;
+        }
         if (
           event.kind === "tool"
           || event.kind === "subagent"
@@ -5058,14 +5094,6 @@ export function startClientApp(): void {
 
       function activityCueDurationMs(mode) {
         switch (mode) {
-          case "plan":
-            return 2600;
-          case "command":
-            return 2200;
-          case "file":
-            return 2400;
-          case "tool":
-            return 2200;
           case "approval":
             return 3200;
           case "input":
@@ -5080,29 +5108,6 @@ export function startClientApp(): void {
       function activityCueForEvent(event) {
         if (!event) {
           return null;
-        }
-        if (event.method === "turn/plan/updated" || event.method === "item/plan/delta") {
-          return { mode: "plan", label: "PLAN" };
-        }
-        if (
-          event.method === "item/commandExecution/outputDelta"
-          || (event.method === "item/started" && event.kind === "command")
-        ) {
-          return { mode: "command", label: "RUN" };
-        }
-        if (
-          event.method === "turn/diff/updated"
-          || event.method === "item/fileChange/outputDelta"
-          || (event.method === "item/started" && event.kind === "fileChange")
-        ) {
-          return { mode: "file", label: "EDIT" };
-        }
-        if (
-          event.method === "item/tool/call"
-          || event.method === "item/mcpToolCall/progress"
-          || (event.method === "item/started" && event.kind === "tool")
-        ) {
-          return { mode: "tool", label: "TOOL" };
         }
         if (
           event.method === "item/commandExecution/requestApproval"
@@ -8787,17 +8792,16 @@ const stableAgentTileReservations = new Map();
         const time = row && row.updatedAt ? formatUpdatedAt(row.updatedAt) : "recent";
         const userText = users.length > 0 ? " · by " + users.join(", ") : "";
         const branchHtml = branchLabel
-          ? '<div class="agent-hover-worktree"><img class="worktree-inline-icon" src="' + escapeHtml(worktreeIconUrl()) + '" alt="" aria-hidden="true" /><span>' + escapeHtml(branchLabel) + '</span></div>'
+          ? '<span class="office-wall-hot-branch"><img class="worktree-inline-icon" src="' + escapeHtml(worktreeIconUrl()) + '" alt="" aria-hidden="true" /><span>' + escapeHtml(branchLabel) + '</span></span>'
           : "";
-        const pathHtml = path && path !== label
-          ? '<div class="agent-hover-meta office-wall-hot-path">' + escapeHtml(path) + '</div>'
+        const footerHtml = (path && path !== label) || branchHtml
+          ? '<div class="agent-hover-meta office-wall-hot-footer"><span class="office-wall-hot-path-text">' + escapeHtml(path && path !== label ? path : "") + '</span>' + branchHtml + '</div>'
           : "";
         return '<div class="agent-hover office-wall-hot-hover">'
           + '<div class="agent-hover-title"><strong>' + escapeHtml(label) + '</strong></div>'
-          + branchHtml
           + '<div class="agent-hover-meta" data-wall-hot-meta>' + escapeHtml(type + " · heat " + heat + "% · " + time + userText) + '</div>'
           + '<div class="office-wall-hot-heat-track"><span data-wall-hot-heat-fill style="width: ' + heatWidth + '%"></span></div>'
-          + pathHtml
+          + footerHtml
           + '</div>';
       }
 
@@ -9356,7 +9360,7 @@ const stableAgentTileReservations = new Map();
               stroke: 0x7c9690,
               text: 0xd1dfda,
               accent: 0xa9c7bb,
-              label: "RUN"
+              label: ""
             };
           }
           if (tone === "empty") {
@@ -9392,7 +9396,7 @@ const stableAgentTileReservations = new Map();
               stroke: 0x7bcbff,
               text: 0xd6ecff,
               accent: 0x76d98e,
-              label: "RUN"
+              label: ""
             };
           }
           if (tone === "file" || tone === "editing") {
@@ -9401,7 +9405,7 @@ const stableAgentTileReservations = new Map();
               stroke: 0x4bd69f,
               text: 0xe7fff3,
               accent: 0xffcf75,
-              label: "EDIT"
+              label: ""
             };
           }
           return {
@@ -9415,6 +9419,18 @@ const stableAgentTileReservations = new Map();
 
         function wallDashboardTextValue(value) {
           return String(value || "");
+        }
+
+        function wallDashboardBranchLabel(row) {
+          const branches = Array.isArray(row && row.branches)
+            ? row.branches.filter((value) => typeof value === "string" && value.trim().length > 0)
+            : (row && row.branch ? [String(row.branch)] : []);
+          const branch = branches[0] || "";
+          if (!branch) {
+            return "";
+          }
+          const label = branches.length > 1 ? branch + "+" + (branches.length - 1) : branch;
+          return label.length > 12 ? "..." + label.slice(-9) : label;
         }
 
         function mixColorChannel(left, right, amount) {
@@ -9537,6 +9553,7 @@ const stableAgentTileReservations = new Map();
             const type = wallDashboardTextValue(row.column || row.kind || "file");
             const heat = Number.isFinite(row.heat) ? Math.round(row.heat) : null;
             const heatRatio = heat === null ? 0 : Math.max(0, Math.min(1, heat / 100));
+            const branchLabel = wallDashboardBranchLabel(row);
             const titleText = createPixiText(renderer, label, tooltipTextStyle);
             const metaBits = [
               type,
@@ -9545,18 +9562,25 @@ const stableAgentTileReservations = new Map();
             ].filter(Boolean);
             const metaText = createPixiText(renderer, metaBits.join(" · "), tooltipMetaStyle);
             const pathText = createPixiText(renderer, path === label ? "" : path, tooltipMetaStyle);
+            const branchText = createPixiText(renderer, branchLabel, {
+              ...tooltipMetaStyle,
+              fill: wallDashboardHeatPalette(row, wallDashboardPalette(row)).accent
+            });
             titleText.x = 6;
             titleText.y = 4;
             metaText.x = 6;
             metaText.y = 13;
             pathText.x = 6;
             pathText.y = 24;
-            const textWidth = Math.max(titleText.width, metaText.width, pathText.text ? pathText.width : 0);
+            branchText.y = 24;
+            const footerWidth = (pathText.text ? pathText.width : 0) + (branchText.text ? branchText.width + 10 : 0);
+            const textWidth = Math.max(titleText.width, metaText.width, footerWidth);
             const sceneWidth = Math.max(width, Number(renderer.model && renderer.model.width) || width);
             const sceneHeight = Math.max(height, Number(renderer.model && renderer.model.height) || height);
             const tooltipWidth = Math.min(sceneWidth - 8, Math.max(86, Math.ceil(textWidth) + 12));
-            const tooltipHeight = pathText.text ? 34 : 28;
+            const tooltipHeight = pathText.text || branchText.text ? 34 : 28;
             const heatBarWidth = Math.max(8, tooltipWidth - 12);
+            branchText.x = Math.max(6, tooltipWidth - 6 - Math.ceil(branchText.width));
             const bubble = new PIXI.Graphics()
               .rect(0, 0, tooltipWidth, tooltipHeight)
               .fill({ color: 0x10251e, alpha: 0.98 })
@@ -9579,6 +9603,9 @@ const stableAgentTileReservations = new Map();
             dashboardTooltip.addChild(heatFill);
             if (pathText.text) {
               dashboardTooltip.addChild(pathText);
+            }
+            if (branchText.text) {
+              dashboardTooltip.addChild(branchText);
             }
             dashboardTooltip.visible = true;
           };
@@ -12286,6 +12313,7 @@ const stableAgentTileReservations = new Map();
           snapshot.projectRoot,
           roomsSnapshotToken(snapshot.rooms),
           sceneSnapshotToken(snapshot),
+          furnitureLayoutOverrideToken(snapshot.projectRoot),
           recentActivitySceneToken(snapshot),
           officeSceneInteractionToken(snapshot),
           options.compact ? "compact" : "wide",
@@ -12413,6 +12441,38 @@ function focusKeysIntersect(keys, focusedKeys) {
         return officeSceneRenderers.get(host.dataset.officeMapHost || "") || null;
       }
 
+      function furnitureDragRendererForTarget(target, host) {
+        const renderer = rendererForHost(host);
+        if (renderer && renderer.model && Number.isFinite(renderer.scale)) {
+          return renderer;
+        }
+        if (!(host instanceof HTMLElement)) {
+          return null;
+        }
+        const projectRoot = host.dataset.projectRoot || target?.dataset?.projectRoot || "";
+        const snapshot = latestOfficeMapProjects.find((project) => project && project.projectRoot === projectRoot);
+        if (!snapshot) {
+          return null;
+        }
+        const model = buildOfficeSceneModel(snapshot, {
+          compact: host.dataset.compact === "1",
+          focusMode: host.dataset.focusMode === "1",
+          liveOnly: state.activeOnly
+        });
+        if (!model) {
+          return null;
+        }
+        const availableWidth = Math.max(Math.round(host.getBoundingClientRect().width || host.clientWidth || model.width), 1);
+        const scale = Math.min(Math.max(availableWidth / model.width, 0.5), 3.5);
+        const scaledWidth = Math.max(1, Math.min(availableWidth, Math.round(model.width * scale)));
+        return {
+          host,
+          model,
+          scale,
+          leftOffset: Math.max(0, Math.round((availableWidth - scaledWidth) / 2))
+        };
+      }
+
       function canPlaceFurniture(model, movingItem, nextColumn) {
         const room = model.rooms.find((entry) => entry.id === movingItem.roomId);
         if (!room) {
@@ -12446,7 +12506,8 @@ function focusKeysIntersect(keys, focusedKeys) {
           return;
         }
         furnitureDragState.currentColumn = nextColumn;
-        setFurnitureColumnOverride(furnitureDragState.projectRoot, furnitureDragState.item.roomId, furnitureDragState.item.id, nextColumn);
+        furnitureDragState.dirty = true;
+        setFurnitureColumnOverride(furnitureDragState.projectRoot, furnitureDragState.item.roomId, furnitureDragState.item.id, nextColumn, { persist: false });
         render();
       }
 
@@ -12457,6 +12518,9 @@ function focusKeysIntersect(keys, focusedKeys) {
         window.removeEventListener("pointermove", handleFurnitureDragMove);
         window.removeEventListener("pointerup", stopFurnitureDrag);
         window.removeEventListener("pointercancel", stopFurnitureDrag);
+        if (furnitureDragState.dirty) {
+          saveFurnitureLayoutOverrides();
+        }
         furnitureDragState = null;
       }
 
@@ -14029,7 +14093,7 @@ function focusKeysIntersect(keys, focusedKeys) {
           return;
         }
         const host = target.closest("[data-office-map-host]");
-        const renderer = rendererForHost(host);
+        const renderer = furnitureDragRendererForTarget(target, host);
         if (!renderer || !renderer.model) {
           return;
         }
@@ -14044,6 +14108,7 @@ function focusKeysIntersect(keys, focusedKeys) {
           projectRoot: renderer.model.projectRoot,
           item,
           currentColumn: item.column,
+          dirty: false,
           pointerOffsetTiles,
           hostRect: renderer.host.getBoundingClientRect()
         };

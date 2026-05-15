@@ -1282,7 +1282,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
           return;
         }
         const host = target.closest("[data-office-map-host]");
-        const renderer = rendererForHost(host);
+        const renderer = furnitureDragRendererForTarget(target, host);
         if (!renderer || !renderer.model) {
           return;
         }
@@ -1297,6 +1297,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
           projectRoot: renderer.model.projectRoot,
           item,
           currentColumn: item.column,
+          dirty: false,
           pointerOffsetTiles,
           hostRect: renderer.host.getBoundingClientRect()
         };

@@ -897,9 +897,30 @@ export const CLIENT_STYLES = `
         background: #62d597;
       }
 
-      .office-wall-hot-path {
+      .office-wall-hot-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .office-wall-hot-path,
+      .office-wall-hot-path-text {
         overflow: hidden;
         text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .office-wall-hot-path-text {
+        min-width: 0;
+      }
+
+      .office-wall-hot-branch {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        flex: 0 0 auto;
+        color: #9ff0c0;
         white-space: nowrap;
       }
 

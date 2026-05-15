@@ -275,17 +275,16 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
         const time = row && row.updatedAt ? formatUpdatedAt(row.updatedAt) : "recent";
         const userText = users.length > 0 ? " · by " + users.join(", ") : "";
         const branchHtml = branchLabel
-          ? '<div class="agent-hover-worktree"><img class="worktree-inline-icon" src="' + escapeHtml(worktreeIconUrl()) + '" alt="" aria-hidden="true" /><span>' + escapeHtml(branchLabel) + '</span></div>'
+          ? '<span class="office-wall-hot-branch"><img class="worktree-inline-icon" src="' + escapeHtml(worktreeIconUrl()) + '" alt="" aria-hidden="true" /><span>' + escapeHtml(branchLabel) + '</span></span>'
           : "";
-        const pathHtml = path && path !== label
-          ? '<div class="agent-hover-meta office-wall-hot-path">' + escapeHtml(path) + '</div>'
+        const footerHtml = (path && path !== label) || branchHtml
+          ? '<div class="agent-hover-meta office-wall-hot-footer"><span class="office-wall-hot-path-text">' + escapeHtml(path && path !== label ? path : "") + '</span>' + branchHtml + '</div>'
           : "";
         return '<div class="agent-hover office-wall-hot-hover">'
           + '<div class="agent-hover-title"><strong>' + escapeHtml(label) + '</strong></div>'
-          + branchHtml
           + '<div class="agent-hover-meta" data-wall-hot-meta>' + escapeHtml(type + " · heat " + heat + "% · " + time + userText) + '</div>'
           + '<div class="office-wall-hot-heat-track"><span data-wall-hot-heat-fill style="width: ' + heatWidth + '%"></span></div>'
-          + pathHtml
+          + footerHtml
           + '</div>';
       }
 
@@ -844,7 +843,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
               stroke: 0x7c9690,
               text: 0xd1dfda,
               accent: 0xa9c7bb,
-              label: "RUN"
+              label: ""
             };
           }
           if (tone === "empty") {
@@ -880,7 +879,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
               stroke: 0x7bcbff,
               text: 0xd6ecff,
               accent: 0x76d98e,
-              label: "RUN"
+              label: ""
             };
           }
           if (tone === "file" || tone === "editing") {
@@ -889,7 +888,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
               stroke: 0x4bd69f,
               text: 0xe7fff3,
               accent: 0xffcf75,
-              label: "EDIT"
+              label: ""
             };
           }
           return {
@@ -903,6 +902,18 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
 
         function wallDashboardTextValue(value) {
           return String(value || "");
+        }
+
+        function wallDashboardBranchLabel(row) {
+          const branches = Array.isArray(row && row.branches)
+            ? row.branches.filter((value) => typeof value === "string" && value.trim().length > 0)
+            : (row && row.branch ? [String(row.branch)] : []);
+          const branch = branches[0] || "";
+          if (!branch) {
+            return "";
+          }
+          const label = branches.length > 1 ? branch + "+" + (branches.length - 1) : branch;
+          return label.length > 12 ? "..." + label.slice(-9) : label;
         }
 
         function mixColorChannel(left, right, amount) {
@@ -1025,6 +1036,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             const type = wallDashboardTextValue(row.column || row.kind || "file");
             const heat = Number.isFinite(row.heat) ? Math.round(row.heat) : null;
             const heatRatio = heat === null ? 0 : Math.max(0, Math.min(1, heat / 100));
+            const branchLabel = wallDashboardBranchLabel(row);
             const titleText = createPixiText(renderer, label, tooltipTextStyle);
             const metaBits = [
               type,
@@ -1033,18 +1045,25 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             ].filter(Boolean);
             const metaText = createPixiText(renderer, metaBits.join(" · "), tooltipMetaStyle);
             const pathText = createPixiText(renderer, path === label ? "" : path, tooltipMetaStyle);
+            const branchText = createPixiText(renderer, branchLabel, {
+              ...tooltipMetaStyle,
+              fill: wallDashboardHeatPalette(row, wallDashboardPalette(row)).accent
+            });
             titleText.x = 6;
             titleText.y = 4;
             metaText.x = 6;
             metaText.y = 13;
             pathText.x = 6;
             pathText.y = 24;
-            const textWidth = Math.max(titleText.width, metaText.width, pathText.text ? pathText.width : 0);
+            branchText.y = 24;
+            const footerWidth = (pathText.text ? pathText.width : 0) + (branchText.text ? branchText.width + 10 : 0);
+            const textWidth = Math.max(titleText.width, metaText.width, footerWidth);
             const sceneWidth = Math.max(width, Number(renderer.model && renderer.model.width) || width);
             const sceneHeight = Math.max(height, Number(renderer.model && renderer.model.height) || height);
             const tooltipWidth = Math.min(sceneWidth - 8, Math.max(86, Math.ceil(textWidth) + 12));
-            const tooltipHeight = pathText.text ? 34 : 28;
+            const tooltipHeight = pathText.text || branchText.text ? 34 : 28;
             const heatBarWidth = Math.max(8, tooltipWidth - 12);
+            branchText.x = Math.max(6, tooltipWidth - 6 - Math.ceil(branchText.width));
             const bubble = new PIXI.Graphics()
               .rect(0, 0, tooltipWidth, tooltipHeight)
               .fill({ color: 0x10251e, alpha: 0.98 })
@@ -1067,6 +1086,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             dashboardTooltip.addChild(heatFill);
             if (pathText.text) {
               dashboardTooltip.addChild(pathText);
+            }
+            if (branchText.text) {
+              dashboardTooltip.addChild(branchText);
             }
             dashboardTooltip.visible = true;
           };
@@ -3774,6 +3796,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           snapshot.projectRoot,
           roomsSnapshotToken(snapshot.rooms),
           sceneSnapshotToken(snapshot),
+          furnitureLayoutOverrideToken(snapshot.projectRoot),
           recentActivitySceneToken(snapshot),
           officeSceneInteractionToken(snapshot),
           options.compact ? "compact" : "wide",
@@ -3901,6 +3924,38 @@ function focusKeysIntersect(keys, focusedKeys) {
         return officeSceneRenderers.get(host.dataset.officeMapHost || "") || null;
       }
 
+      function furnitureDragRendererForTarget(target, host) {
+        const renderer = rendererForHost(host);
+        if (renderer && renderer.model && Number.isFinite(renderer.scale)) {
+          return renderer;
+        }
+        if (!(host instanceof HTMLElement)) {
+          return null;
+        }
+        const projectRoot = host.dataset.projectRoot || target?.dataset?.projectRoot || "";
+        const snapshot = latestOfficeMapProjects.find((project) => project && project.projectRoot === projectRoot);
+        if (!snapshot) {
+          return null;
+        }
+        const model = buildOfficeSceneModel(snapshot, {
+          compact: host.dataset.compact === "1",
+          focusMode: host.dataset.focusMode === "1",
+          liveOnly: state.activeOnly
+        });
+        if (!model) {
+          return null;
+        }
+        const availableWidth = Math.max(Math.round(host.getBoundingClientRect().width || host.clientWidth || model.width), 1);
+        const scale = Math.min(Math.max(availableWidth / model.width, 0.5), 3.5);
+        const scaledWidth = Math.max(1, Math.min(availableWidth, Math.round(model.width * scale)));
+        return {
+          host,
+          model,
+          scale,
+          leftOffset: Math.max(0, Math.round((availableWidth - scaledWidth) / 2))
+        };
+      }
+
       function canPlaceFurniture(model, movingItem, nextColumn) {
         const room = model.rooms.find((entry) => entry.id === movingItem.roomId);
         if (!room) {
@@ -3934,7 +3989,8 @@ function focusKeysIntersect(keys, focusedKeys) {
           return;
         }
         furnitureDragState.currentColumn = nextColumn;
-        setFurnitureColumnOverride(furnitureDragState.projectRoot, furnitureDragState.item.roomId, furnitureDragState.item.id, nextColumn);
+        furnitureDragState.dirty = true;
+        setFurnitureColumnOverride(furnitureDragState.projectRoot, furnitureDragState.item.roomId, furnitureDragState.item.id, nextColumn, { persist: false });
         render();
       }
 
@@ -3945,6 +4001,9 @@ function focusKeysIntersect(keys, focusedKeys) {
         window.removeEventListener("pointermove", handleFurnitureDragMove);
         window.removeEventListener("pointerup", stopFurnitureDrag);
         window.removeEventListener("pointercancel", stopFurnitureDrag);
+        if (furnitureDragState.dirty) {
+          saveFurnitureLayoutOverrides();
+        }
         furnitureDragState = null;
       }
 

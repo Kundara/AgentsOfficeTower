@@ -321,10 +321,10 @@ Current mapping:
 - head markers now render smaller than the original 16px pass so they sit above the sprite more quietly and stay visually secondary to toasts
 - the thinking light is intentionally transient and drops away once the first visible assistant message/toast is present, so speech evidence replaces the generic “still thinking” cue
 - recent typed `turn/*` lifecycle events now also render short above-head Pixi badges (`START`, `DONE`, `STOP`, `FAIL`) so turn transitions remain visible even when the toast layer is busy
-- recent typed plan, command, file/diff, and tool-call events now also render brief animated Pixi activity cues (`PLAN`, `RUN`, `EDIT`, `TOOL`) near the actor so those item-level actions read in-scene instead of only through toast churn
+- recent typed plan, command, file/diff, and tool-call events stay on toast/event, hover, and session-history surfaces rather than rendering duplicate mock-style in-scene labels such as `PLAN`, `RUN`, `EDIT`, or `TOOL`
 - typed approval waits, input waits, and `serverRequest/resolved` queue-clear events now also render short `WAIT`, `ASK`, and `OK` cues so the in-scene request lifecycle matches the durable `Needs You` queue
-- those activity cues now include mode-specific icon adornments and per-mode icon animation so the scene can differentiate the cue family visually before the user reads the label text
-- recent typed workstation activity now also emits short desk-side Pixi effects keyed to the same cue mode, so command/edit/tool/request motion is visible on the station itself instead of only in floating text chips
+- request lifecycle cues now include mode-specific icon adornments and per-mode icon animation so the scene can differentiate the cue family visually before the user reads the label text
+- recent typed workstation request activity now also emits short desk-side Pixi effects keyed to the same cue mode, so approval/input/resolve motion is visible on the station itself instead of only in floating text chips
 - approval waits now encode decision breadth and approval type in that workstation effect, while input waits encode question count, required-question load, and schema richness so request shape is visible without opening the queue
 - local Codex agents now expose a scene-native click target that opens a single right-edge thread history panel with recent typed thread history. The scene panel is read-only and does not include Send, resume, launch, or copy controls. The card closes with a short slide motion on outside click or `Escape`; long message bubbles clamp to eight lines with a `Show more` toggle, and command-like entries reuse the toast command-window language with event icons
 - `item/*` command execution
@@ -461,7 +461,9 @@ Hermes support follows the local runtime surfaces exposed by `nousresearch/herme
 - it uses live process cwd/env hints such as `HERMES_CWD`, `TERMINAL_CWD`, and `HERMES_HOME` when a Hermes CLI or TUI process is still running
 - it treats a Hermes session id as the stable agent and lets that agent move floors based on the latest project-bearing hook or DB activity
 - hook-only streams such as `default`, `process-<pid>`, and UUID tool/task files are activity sidecars, not agents; they are folded into the nearest durable SQLite session by explicit ids, platform/cwd hints, and recent timing
-- Hermes command, file-change, and MCP/tool hook events update `detail`, `activityEvent`, toasts, and map activity cues; they do not replace `latestMessage`, which stays on the latest useful prompt or assistant reply
+- Hermes command, process-management, planning, file-change, and MCP/tool hook events update `detail`, `activityEvent`, toasts, and session history; they do not replace `latestMessage`, which stays on the latest useful prompt or assistant reply
+- Hermes tool classification follows Hermes' registered/displayed tool vocabulary: `todo` maps to planning, `process`/`terminal`/`execute_code` map to command activity, `read_file`/`search_files`/`skill_view` map to scanning tool activity, and only Hermes' mutating file tools (`write_file` and `patch`) map to file edits
+- Hermes model/API request hooks map to reasoning/thinking activity rather than generic dynamic-tool activity, so model status does not appear as a fake tool action
 - generic Hermes maintenance prompts, such as skill-library review prompts, are ignored as display messages so they do not overwrite the last real conversation text
 - it maps work to projects by normalized cwd, system-prompt working directory, tool paths, payload paths, and git-root discovery rather than matching project names
 - it contributes project discovery roots only from a live Hermes process cwd or the latest current root of a fresh hook session, so old `state.db` history and the full set of touched hook paths cannot create floors

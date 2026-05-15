@@ -125,6 +125,30 @@ test("Hermes final assistant reply after older tool call is done, not running", 
   assert.equal(summary.isOngoing, false);
 });
 
+test("Hermes read-only tools map to scanning instead of file edits", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const summary = summarizeHermesSessionForTest({
+    session: session({
+      messages: [
+        message({
+          role: "assistant",
+          content: "",
+          toolCalls: JSON.stringify([{ name: "read_file", arguments: { path: "/tmp/project/src/app.ts" } }]),
+          timestamp: now
+        })
+      ],
+      lastActive: now
+    }),
+    projectRoot: "/tmp/project",
+    now: now * 1000
+  });
+
+  assert.equal(summary.state, "scanning");
+  assert.equal(summary.activityEvent.type, "dynamicToolCall");
+  assert.equal(summary.activityEvent.action, "updated");
+  assert.equal(summary.activityEvent.path, "/tmp/project/src/app.ts");
+});
+
 test("fresh open Hermes gateway session remains current waiting work after a reply", () => {
   const now = Math.floor(Date.now() / 1000);
   const summary = summarizeHermesSessionForTest({
@@ -413,6 +437,7 @@ test("durable Hermes hook cron sessions use project task labels instead of raw i
     assert.ok(agent);
     assert.equal(agent.label, "IkaBot tick");
     assert.equal(agent.detail, "Thinking with gpt-5.5");
+    assert.equal(agent.activityEvent?.type, "reasoning");
     assert.equal(agent.label.includes("cron_"), false);
   } finally {
     if (previousCodexHome === undefined) {
@@ -443,7 +468,10 @@ test("durable Hermes hook tool events expose command, file, and MCP toast shapes
   try {
     const started = new Date(Date.now() - 3000).toISOString();
     const edited = new Date(Date.now() - 2000).toISOString();
+    const read = new Date(Date.now() - 1700).toISOString();
+    const planned = new Date(Date.now() - 1400).toISOString();
     const clicked = new Date(Date.now() - 1000).toISOString();
+    const waited = new Date(Date.now() - 500).toISOString();
     writeFileSync(
       join(hooksDir, "20260515_200001_abcdef.jsonl"),
       [
@@ -470,20 +498,58 @@ test("durable Hermes hook tool events expose command, file, and MCP toast shapes
         JSON.stringify({
           session_id: "20260515_200001_abcdef",
           hook_event_name: "pre_tool_call",
+          timestamp: read,
+          cwd: projectRoot,
+          payload: {
+            tool_name: "read_file",
+            args: { path: join(projectRoot, "README.md") }
+          }
+        }),
+        JSON.stringify({
+          session_id: "20260515_200001_abcdef",
+          hook_event_name: "pre_tool_call",
+          timestamp: planned,
+          cwd: projectRoot,
+          payload: {
+            tool_name: "todo",
+            args: {
+              todos: [
+                { id: "1", content: "inspect", status: "completed" },
+                { id: "2", content: "patch", status: "in_progress" }
+              ]
+            }
+          }
+        }),
+        JSON.stringify({
+          session_id: "20260515_200001_abcdef",
+          hook_event_name: "pre_tool_call",
           timestamp: clicked,
           cwd: projectRoot,
           payload: {
             tool_name: "mcp_ikabot_bridge_click_at",
             args: { x: 10, y: 20 }
           }
+        }),
+        JSON.stringify({
+          session_id: "20260515_200001_abcdef",
+          hook_event_name: "pre_tool_call",
+          timestamp: waited,
+          cwd: projectRoot,
+          payload: {
+            tool_name: "process",
+            args: { action: "wait", session_id: "proc_abc123", timeout: 120 }
+          }
         })
       ].join("\n") + "\n"
     );
 
     const snapshot = await loadHermesProjectSnapshotData(projectRoot, 4);
-    const commandEvent = snapshot.events.find((event) => event.kind === "command");
+    const commandEvent = snapshot.events.find((event) => event.command === "sleep 75");
     const fileEvent = snapshot.events.find((event) => event.kind === "fileChange");
+    const readEvent = snapshot.events.find((event) => event.detail.includes("read_file:"));
+    const planEvent = snapshot.events.find((event) => event.method === "turn/plan/updated");
     const mcpEvent = snapshot.events.find((event) => event.itemType === "mcpToolCall");
+    const processEvent = snapshot.events.find((event) => event.command === "process wait proc_abc123");
 
     assert.ok(commandEvent);
     assert.equal(commandEvent.method, "item/started");
@@ -496,10 +562,26 @@ test("durable Hermes hook tool events expose command, file, and MCP toast shapes
     assert.match(fileEvent.detail, /write_file:/);
     assert.match(fileEvent.path, /src[\\/]app\.ts$/);
 
+    assert.ok(readEvent);
+    assert.equal(readEvent.kind, "tool");
+    assert.equal(readEvent.itemType, "dynamicToolCall");
+    assert.equal(readEvent.action, "updated");
+    assert.match(readEvent.path, /README\.md$/);
+
+    assert.ok(planEvent);
+    assert.equal(planEvent.kind, "turn");
+    assert.equal(planEvent.detail, "todo: planning 2 task(s)");
+    assert.equal(planEvent.phase, "updated");
+
     assert.ok(mcpEvent);
     assert.equal(mcpEvent.kind, "tool");
     assert.equal(mcpEvent.method, "item/tool/call");
     assert.equal(mcpEvent.detail, "mcp_ikabot_bridge_click_at");
+
+    assert.ok(processEvent);
+    assert.equal(processEvent.kind, "command");
+    assert.equal(processEvent.method, "item/started");
+    assert.equal(processEvent.detail, "process wait proc_abc123");
   } finally {
     if (previousCodexHome === undefined) {
       delete process.env.CODEX_HOME;
@@ -734,6 +816,32 @@ test("Hermes transform hook output maps to terminal activity", () => {
   assert.equal(summary.state, "running");
   assert.equal(summary.detail, "npm test");
   assert.equal(summary.activityEvent.type, "commandExecution");
+});
+
+test("Hermes process hooks map to command activity instead of generic tool text", () => {
+  const now = Date.now();
+  const summary = summarizeHermesHookSessionForTest({
+    projectRoot: "/tmp/project",
+    paths: ["/tmp/project"],
+    now,
+    records: [{
+      eventName: "pre_tool_call",
+      timestampMs: now,
+      payload: {
+        tool_name: "process",
+        args: {
+          action: "wait",
+          session_id: "proc_abc123",
+          timeout: 120
+        }
+      }
+    }]
+  });
+
+  assert.equal(summary.state, "running");
+  assert.equal(summary.detail, "process wait proc_abc123");
+  assert.equal(summary.activityEvent.type, "commandExecution");
+  assert.equal(summary.activityEvent.title, "process wait proc_abc123");
 });
 
 test("Hermes command hooks keep latestMessage on conversation text", () => {

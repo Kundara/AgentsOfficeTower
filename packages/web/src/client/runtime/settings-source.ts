@@ -323,13 +323,18 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
         } catch {}
       }
 
+      function furnitureLayoutOverrideToken(projectRoot) {
+        const projectOverrides = state.furnitureLayoutOverrides?.[projectRoot];
+        return projectOverrides ? JSON.stringify(projectOverrides) : "";
+      }
+
       function furnitureColumnOverride(projectRoot, roomId, furnitureId, fallbackColumn) {
         return Number(
           state.furnitureLayoutOverrides?.[projectRoot]?.[roomId]?.[furnitureId]
         ) || fallbackColumn;
       }
 
-      function setFurnitureColumnOverride(projectRoot, roomId, furnitureId, column) {
+      function setFurnitureColumnOverride(projectRoot, roomId, furnitureId, column, options = {}) {
         state.furnitureLayoutOverrides = {
           ...state.furnitureLayoutOverrides,
           [projectRoot]: {
@@ -340,7 +345,9 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
             }
           }
         };
-        saveFurnitureLayoutOverrides();
+        if (options.persist !== false) {
+          saveFurnitureLayoutOverrides();
+        }
       }
 
       function applyGlobalSceneSettings() {

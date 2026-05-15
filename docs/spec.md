@@ -121,21 +121,21 @@ Recent typed turn lifecycle handling:
 - `turn/failed` -> short above-head `FAIL` badge
 - these badges should be brief scene-native cues layered above the ordinary state markers, not durable dashboard labels
 
-Recent typed activity cue handling:
+Recent typed activity handling:
 
-- `turn/plan/updated` and `item/plan/delta` -> brief animated `PLAN` cue near the actor
-- `item/commandExecution/outputDelta` and typed command-item starts -> brief animated `RUN` cue near the actor/workstation
-- `item/commandExecution/terminalInteraction` -> command activity/history and the same `RUN` family cue
-- `turn/diff/updated`, `item/fileChange/outputDelta`, `item/fileChange/patchUpdated`, and typed file-change item starts -> brief animated `EDIT` cue near the actor/workstation
-- `item/tool/call`, `item/mcpToolCall/progress`, Codex hook-run notifications, and typed tool-item starts -> brief animated `TOOL` cue near the actor
+- `turn/plan/updated`, `item/plan/delta`, command execution, file-change, MCP/tool, and hook-run notifications -> toast/event, hover, and session-history surfaces only, with no extra mock-style in-scene activity cue
+- command execution should not render separate `RUN` labels in the room scene
+- file changes should not render separate `EDIT` labels in the room scene
+- planning updates should not render separate `PLAN` labels in the room scene
+- tool activity should not render separate `TOOL` labels in the room scene
 - `collabToolCall`, `collabAgentToolCall`, and source-normalized delegated-agent events -> subagent/delegation notification and motion path, distinct from generic tool calls when enough parent/child data exists
 - `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` -> brief animated `WAIT` cue near the actor while the durable approval queue entry is active
 - `item/autoApprovalReview/*` -> non-actionable approval-review activity; it should not create a durable `Needs You` entry unless app-server also sends an approval request
 - `item/tool/requestUserInput` -> brief animated `ASK` cue near the actor while the durable input queue entry is active
 - `serverRequest/resolved` for approval/input requests -> brief animated `OK` cue near the actor to acknowledge queue clearance
 - warning, config, deprecation, MCP startup/login, rate-limit, model reroute, and Windows sandbox notifications -> status/history/notes surfaces; they should not by themselves move a session into active desk work
-- these cues should stay short-lived, scene-native, and motion-first; they are not a replacement for the durable toast or queue surfaces
-- each cue mode should also carry a distinct icon/motion treatment inside the chip so the scene does not depend only on the text label to communicate the activity type
+- request lifecycle cues should stay short-lived, scene-native, and motion-first; they are not a replacement for the durable toast or queue surfaces
+- each request cue mode should also carry a distinct icon/motion treatment inside the chip so the scene does not depend only on the text label to communicate the activity type
 - workstation-seated activity should also raise a short non-text visual treatment on or around the workstation itself so item/request activity does not collapse back to text-only chips
 - structured request waits should expose at least some of their shape in-scene, such as approval decision breadth or input question/required load, instead of rendering every request as the same generic wait
 
@@ -306,7 +306,8 @@ Worktree identity rules:
 - Agent hover cards should expose the source worktree name with the same worktree icon so duplicate repo clones remain distinguishable even when the tower floor is merged.
 - Agent labels, hover titles, and session-card titles should normalize repo-local paths into readable relative labels and must not surface raw WSL mount paths like `/mnt/f/...` as the primary visible title.
 - Agent-facing labels in the scene and session list should normalize repo-local paths so raw `/mnt/...` WSL paths do not appear as the primary visible title.
-- Hermes command/tool activity should appear as current action state, activity cues, and toasts, not as chat speech. If a Hermes session is currently running a command after an earlier prompt or assistant reply, hover and session summaries should show that prior useful conversation text as `latestMessage` and expose the command separately as the action.
+- Hermes command/process/tool activity should appear as current action state, toasts, and session history, not as chat speech or extra room-scene labels. If a Hermes session is currently running a command or background-process action after an earlier prompt or assistant reply, hover and session summaries should show that prior useful conversation text as `latestMessage` and expose the action separately.
+- Hermes tool activity should preserve Hermes' own tool meanings: `todo` should look like planning, `read_file`/`search_files`/`skill_view` should look like scanning/tool activity, and only `write_file`/`patch` should count as file edits.
 - If a Hermes session has only command/tool activity and no visible prompt or assistant reply, hover should show a state summary such as `Running` plus the action row; it should not fabricate the command text as the last message.
 - Generic Hermes maintenance prompts such as skill-library review prompts should not overwrite the previous real message in hover cards or session panels.
 
