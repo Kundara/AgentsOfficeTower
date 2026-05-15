@@ -1,4 +1,5 @@
 export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservations = new Map();
+      const WORKSTATION_REVEAL_BLINK_DURATION_MS = 280;
 
       function reserveAgentTiles(model, roomById) {
         const reservations = new Map();
@@ -258,6 +259,232 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
         });
       }
 
+      function renderWallDashboardHotHover(row) {
+        const label = String(row && row.label || "Hot file");
+        const path = String(row && (row.displayPath || row.path) || label);
+        const type = String(row && (row.column || row.kind) || "file");
+        const branches = Array.isArray(row && row.branches)
+          ? row.branches.filter((value) => typeof value === "string" && value.trim().length > 0)
+          : (row && row.branch ? [String(row.branch)] : []);
+        const users = Array.isArray(row && row.users)
+          ? row.users.filter((value) => typeof value === "string" && value.trim().length > 0)
+          : [];
+        const branchLabel = branches.length > 1 ? branches[0] + " +" + (branches.length - 1) : branches[0] || "";
+        const heat = wallDashboardHotHeat(row);
+        const heatWidth = Math.max(1, Math.min(100, heat));
+        const time = row && row.updatedAt ? formatUpdatedAt(row.updatedAt) : "recent";
+        const userText = users.length > 0 ? " · by " + users.join(", ") : "";
+        const branchHtml = branchLabel
+          ? '<div class="agent-hover-worktree"><img class="worktree-inline-icon" src="' + escapeHtml(worktreeIconUrl()) + '" alt="" aria-hidden="true" /><span>' + escapeHtml(branchLabel) + '</span></div>'
+          : "";
+        const pathHtml = path && path !== label
+          ? '<div class="agent-hover-meta office-wall-hot-path">' + escapeHtml(path) + '</div>'
+          : "";
+        return '<div class="agent-hover office-wall-hot-hover">'
+          + '<div class="agent-hover-title"><strong>' + escapeHtml(label) + '</strong></div>'
+          + branchHtml
+          + '<div class="agent-hover-meta" data-wall-hot-meta>' + escapeHtml(type + " · heat " + heat + "% · " + time + userText) + '</div>'
+          + '<div class="office-wall-hot-heat-track"><span data-wall-hot-heat-fill style="width: ' + heatWidth + '%"></span></div>'
+          + pathHtml
+          + '</div>';
+      }
+
+      function wallDashboardHotHeatFromValues(score, generatedAtMs, fallbackHeat) {
+        const numericScore = Number(score);
+        const numericGeneratedAt = Number(generatedAtMs);
+        if (Number.isFinite(numericScore) && numericScore > 0 && Number.isFinite(numericGeneratedAt) && numericGeneratedAt > 0) {
+          const halfLifeMs = typeof OFFICE_WALL_HEAT_HALF_LIFE_MS === "number" ? OFFICE_WALL_HEAT_HALF_LIFE_MS : 3 * 60 * 1000;
+          const ageMs = Math.max(0, Date.now() - numericGeneratedAt);
+          const decay = Math.pow(0.5, ageMs / halfLifeMs);
+          return Math.round(Math.max(1, Math.min(100, numericScore * decay * 4)));
+        }
+        return Math.round(Math.max(1, Math.min(100, Number(fallbackHeat) || 0)));
+      }
+
+      function wallDashboardHotHeat(row) {
+        if (!row) {
+          return 0;
+        }
+        return wallDashboardHotHeatFromValues(row.score, row.generatedAtMs, row.heat);
+      }
+
+      function syncOfficeWallDashboardHeatNode(node) {
+        if (!(node instanceof HTMLElement)) {
+          return;
+        }
+          const heat = wallDashboardHotHeatFromValues(
+            node.dataset.wallHotScore,
+            node.dataset.wallHotGeneratedAt,
+            node.dataset.wallHotHeat
+          );
+          node.dataset.wallHotHeat = String(heat);
+          const meta = node.querySelector("[data-wall-hot-meta]");
+          if (meta) {
+            const type = node.dataset.wallHotType || "file";
+            const updatedAt = node.dataset.wallHotUpdatedAt || "";
+            const time = updatedAt ? formatUpdatedAt(updatedAt) : "recent";
+            const users = node.dataset.wallHotUsers ? node.dataset.wallHotUsers.split(",").filter(Boolean) : [];
+            const userText = users.length > 0 ? " · by " + users.join(", ") : "";
+            meta.textContent = type + " · heat " + heat + "% · " + time + userText;
+          }
+          const fill = node.querySelector("[data-wall-hot-heat-fill]");
+          if (fill instanceof HTMLElement) {
+            fill.style.width = Math.max(1, Math.min(100, heat)) + "%";
+          }
+      }
+
+      function syncOfficeWallDashboardHeat() {
+        document.querySelectorAll(".office-map-wall-hot-hit").forEach((node) => {
+          syncOfficeWallDashboardHeatNode(node);
+        });
+      }
+
+      function wallDashboardHotNodeKey(dashboard, row, itemIndex) {
+        const boardKey = String(dashboard && (dashboard.id || dashboard.roomId) || "wall-dashboard");
+        const rowKey = String((row && (row.path || row.label)) || itemIndex || "");
+        const columnKey = String(row && (row.column || row.kind) || "");
+        return boardKey + "::" + rowKey + "::" + columnKey;
+      }
+
+      function wallDashboardHotNodeRenderKey(row) {
+        return JSON.stringify([
+          String(row && row.label || "Hot file"),
+          String(row && (row.displayPath || row.path) || ""),
+          String(row && (row.column || row.kind) || "file"),
+          Array.isArray(row && row.branches) ? row.branches.join(",") : String(row && row.branch || ""),
+          Array.isArray(row && row.users) ? row.users.join(",") : ""
+        ]);
+      }
+
+      function syncWallDashboardHotNode(node, dashboard, row, itemIndex, scale, layout) {
+        const cellX = layout.gridX + layout.column * (layout.columnWidth + layout.columnGap);
+        const rowY = 5 + layout.index * layout.rowStep;
+        node.className = "office-map-wall-hot-hit";
+        node.dataset.wallHotKey = wallDashboardHotNodeKey(dashboard, row, itemIndex);
+        node.dataset.wallHotType = String(row.column || row.kind || "file");
+        node.dataset.wallHotScore = String(Number(row.score) || 0);
+        node.dataset.wallHotGeneratedAt = String(Number(row.generatedAtMs || dashboard.generatedAtMs) || 0);
+        node.dataset.wallHotHeat = String(wallDashboardHotHeat(row));
+        node.dataset.wallHotUpdatedAt = String(row.updatedAt || "");
+        node.dataset.wallHotUsers = Array.isArray(row.users) ? row.users.join(",") : "";
+        node.style.left = Math.round((dashboard.x + cellX) * scale) + "px";
+        node.style.top = Math.round((dashboard.y + rowY) * scale) + "px";
+        node.style.width = Math.max(12, Math.round(layout.columnWidth * scale)) + "px";
+        node.style.height = Math.max(8, Math.round(layout.cellHeight * scale)) + "px";
+        const renderKey = wallDashboardHotNodeRenderKey(row);
+        if (node.dataset.wallHotRenderKey !== renderKey) {
+          node.innerHTML = renderWallDashboardHotHover(row);
+          node.dataset.wallHotRenderKey = renderKey;
+        }
+        syncOfficeWallDashboardHeatNode(node);
+      }
+
+      function collectReusableOfficeOverlayNodes(layer, selector, datasetKey) {
+        const nodes = new Map();
+        Array.from(layer.querySelectorAll(selector)).forEach((node) => {
+          if (node instanceof HTMLElement && node.dataset[datasetKey]) {
+            nodes.set(node.dataset[datasetKey], node);
+          }
+        });
+        return nodes;
+      }
+
+      function officeOverlayNodeIsActive(node) {
+        return node instanceof HTMLElement && (node.matches(":hover") || node.matches(":focus-within"));
+      }
+
+      function flushPendingOfficeOverlayHtml(node) {
+        if (!(node instanceof HTMLElement) || officeOverlayNodeIsActive(node)) {
+          return;
+        }
+        const pendingHtml = node.dataset.pendingRenderHtml;
+        if (typeof pendingHtml !== "string") {
+          return;
+        }
+        node.innerHTML = pendingHtml;
+        node.dataset.renderHtml = pendingHtml;
+        delete node.dataset.pendingRenderHtml;
+        delete node.dataset.pendingRenderListener;
+      }
+
+      function setOfficeOverlayHtml(node, html) {
+        if (!(node instanceof HTMLElement)) {
+          return;
+        }
+        const nextHtml = String(html || "");
+        if (node.dataset.renderHtml === nextHtml) {
+          delete node.dataset.pendingRenderHtml;
+          return;
+        }
+        if (officeOverlayNodeIsActive(node)) {
+          node.dataset.pendingRenderHtml = nextHtml;
+          if (node.dataset.pendingRenderListener !== "1") {
+            node.dataset.pendingRenderListener = "1";
+            const flush = () => {
+              window.requestAnimationFrame(() => flushPendingOfficeOverlayHtml(node));
+            };
+            node.addEventListener("mouseleave", flush, { once: true });
+            node.addEventListener("focusout", flush, { once: true });
+          }
+          return;
+        }
+        node.innerHTML = nextHtml;
+        node.dataset.renderHtml = nextHtml;
+        delete node.dataset.pendingRenderHtml;
+        delete node.dataset.pendingRenderListener;
+      }
+
+      function setOfficeOverlayDataset(node, key, value) {
+        if (!(node instanceof HTMLElement)) {
+          return;
+        }
+        if (value === null || value === undefined || value === "") {
+          delete node.dataset[key];
+          return;
+        }
+        node.dataset[key] = String(value);
+      }
+
+      function syncAgentOverlayNode(node, anchor, scale) {
+        const classNames = ["office-map-agent-hit"];
+        if (anchor.threadOpen) {
+          classNames.push("is-thread-open");
+        }
+        node.className = classNames.join(" ");
+        node.dataset.agentKey = anchor.key;
+        node.dataset.focusAgent = "true";
+        setOfficeOverlayDataset(node, "focusKey", anchor.focusKey || "");
+        setOfficeOverlayDataset(node, "focusKeys", Array.isArray(anchor.focusKeys) ? JSON.stringify(anchor.focusKeys) : "");
+        node.style.left = Math.round((anchor.left ?? anchor.x) * scale) + "px";
+        node.style.top = Math.round((anchor.top ?? anchor.y) * scale) + "px";
+        node.style.width = Math.max(8, Math.round((anchor.width ?? 0) * scale)) + "px";
+        node.style.height = Math.max(8, Math.round((anchor.height ?? 0) * scale)) + "px";
+        const triggerHtml = anchor.replyProjectRoot && anchor.threadId
+          ? '<button type="button" class="office-map-agent-trigger" data-action="open-agent-thread" data-project-root="' + escapeHtml(anchor.replyProjectRoot) + '" data-thread-id="' + escapeHtml(anchor.threadId) + '" aria-label="Open ' + escapeHtml(anchor.key) + ' chat"></button>'
+          : "";
+        setOfficeOverlayHtml(node, triggerHtml + (anchor.hoverHtml || ""));
+      }
+
+      function syncWorkstationOverlayNode(node, anchor, scale) {
+        node.className = "office-map-anchor";
+        node.dataset.workstationKey = anchor.key;
+        node.style.left = Math.round(anchor.x * scale) + "px";
+        node.style.top = Math.round(anchor.y * scale) + "px";
+        node.style.width = "";
+        node.style.height = "";
+      }
+
+      function syncFurnitureOverlayNode(node, item, model, scale) {
+        const room = model.rooms.find((entry) => entry.id === item.roomId);
+        node.className = "office-map-furniture-hit";
+        node.dataset.furnitureId = item.id;
+        node.dataset.roomId = item.roomId;
+        node.style.left = Math.round(item.column * model.tile * scale) + "px";
+        node.style.top = Math.round((room ? room.floorTop : 0) * scale) + "px";
+        node.style.width = Math.round(item.widthTiles * model.tile * scale) + "px";
+        node.style.height = Math.round(model.tile * scale) + "px";
+      }
+
       function replacePanelSectionIfChanged(card, nextCard, selector) {
         const current = card.querySelector(selector);
         const next = nextCard.querySelector(selector);
@@ -368,51 +595,103 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
 
       function syncOfficeAnchors(renderer, model, scale) {
         const layer = renderer.anchorLayer;
-        layer.innerHTML = "";
+        const reusableAgentNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-agent-hit", "agentKey");
+        const reusableWorkstationNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-anchor", "workstationKey");
+        const reusableFurnitureNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-furniture-hit", "furnitureId");
+        const reusableHotNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-wall-hot-hit", "wallHotKey");
         syncThreadPanel(renderer, model);
         renderer.agentHitNodes = new Map();
+        const activeAgentKeys = new Set();
+        const activeWorkstationKeys = new Set();
         model.anchors.forEach((anchor) => {
-          const node = document.createElement("div");
           if (anchor.type === "agent") {
-            node.className = "office-map-agent-hit";
-            node.dataset.agentKey = anchor.key;
-            node.dataset.focusAgent = "true";
-            if (anchor.threadOpen) {
-              node.classList.add("is-thread-open");
+            activeAgentKeys.add(anchor.key);
+            let node = reusableAgentNodes.get(anchor.key);
+            if (!(node instanceof HTMLElement)) {
+              node = document.createElement("div");
+              layer.appendChild(node);
             }
-            if (anchor.focusKey) {
-              node.dataset.focusKey = anchor.focusKey;
-            }
-            if (Array.isArray(anchor.focusKeys)) {
-              node.dataset.focusKeys = JSON.stringify(anchor.focusKeys);
-            }
-            node.style.left = Math.round((anchor.left ?? anchor.x) * scale) + "px";
-            node.style.top = Math.round((anchor.top ?? anchor.y) * scale) + "px";
-            node.style.width = Math.max(8, Math.round((anchor.width ?? 0) * scale)) + "px";
-            node.style.height = Math.max(8, Math.round((anchor.height ?? 0) * scale)) + "px";
-            const triggerHtml = anchor.replyProjectRoot && anchor.threadId
-              ? \`<button type="button" class="office-map-agent-trigger" data-action="open-agent-thread" data-project-root="\${escapeHtml(anchor.replyProjectRoot)}" data-thread-id="\${escapeHtml(anchor.threadId)}" aria-label="Open \${escapeHtml(anchor.key)} chat"></button>\`
-              : "";
-            node.innerHTML = triggerHtml + (anchor.hoverHtml || "");
+            syncAgentOverlayNode(node, anchor, scale);
             renderer.agentHitNodes.set(anchor.key, node);
           } else {
-            node.className = "office-map-anchor";
-            node.dataset.workstationKey = anchor.key;
-            node.style.left = Math.round(anchor.x * scale) + "px";
-            node.style.top = Math.round(anchor.y * scale) + "px";
+            activeWorkstationKeys.add(anchor.key);
+            let node = reusableWorkstationNodes.get(anchor.key);
+            if (!(node instanceof HTMLElement)) {
+              node = document.createElement("div");
+              layer.appendChild(node);
+            }
+            syncWorkstationOverlayNode(node, anchor, scale);
           }
-          layer.appendChild(node);
         });
+        const activeHotKeys = new Set();
+        (model.wallDashboards || []).forEach((dashboard) => {
+          if (!dashboard || !Number.isFinite(dashboard.width) || !Number.isFinite(dashboard.height)) {
+            return;
+          }
+          const width = Math.max(48, Math.round(dashboard.width));
+          const hotRows = (Array.isArray(dashboard.hotGrid) ? dashboard.hotGrid : [])
+            .filter((row) => row && row.label)
+            .slice(0, 9);
+          const gridInset = 3;
+          const columnGap = 3;
+          const cellHeight = 7;
+          const contentWidth = Math.max(24, width - gridInset * 2);
+          const maxCellWidth = Math.max(30, Math.floor(contentWidth / 2));
+          const columnCount = hotRows.length <= 1 ? 1 : hotRows.length <= 4 ? 2 : 3;
+          const columnWidth = Math.min(maxCellWidth, Math.max(24, Math.floor((contentWidth - columnGap * (columnCount - 1)) / columnCount)));
+          const gridWidth = columnCount * columnWidth + columnGap * (columnCount - 1);
+          const gridX = gridInset + Math.max(0, Math.floor((contentWidth - gridWidth) / 2));
+          const rowStep = 8;
+          hotRows.forEach((row, itemIndex) => {
+            const column = itemIndex % columnCount;
+            const index = Math.floor(itemIndex / columnCount);
+            const hotKey = wallDashboardHotNodeKey(dashboard, row, itemIndex);
+            activeHotKeys.add(hotKey);
+            let node = reusableHotNodes.get(hotKey);
+            if (!(node instanceof HTMLElement)) {
+              node = document.createElement("div");
+              layer.appendChild(node);
+            }
+            syncWallDashboardHotNode(node, dashboard, row, itemIndex, scale, {
+              column,
+              index,
+              gridX,
+              columnGap,
+              columnWidth,
+              cellHeight,
+              rowStep
+            });
+          });
+        });
+        reusableHotNodes.forEach((node, key) => {
+          if (!activeHotKeys.has(key)) {
+            node.remove();
+          }
+        });
+        const activeFurnitureKeys = new Set();
         model.furniture.forEach((item) => {
-          const node = document.createElement("div");
-          node.className = "office-map-furniture-hit";
-          node.dataset.furnitureId = item.id;
-          node.dataset.roomId = item.roomId;
-          node.style.left = Math.round(item.column * model.tile * scale) + "px";
-          node.style.top = Math.round(model.rooms.find((room) => room.id === item.roomId).floorTop * scale) + "px";
-          node.style.width = Math.round(item.widthTiles * model.tile * scale) + "px";
-          node.style.height = Math.round(model.tile * scale) + "px";
-          layer.appendChild(node);
+          activeFurnitureKeys.add(item.id);
+          let node = reusableFurnitureNodes.get(item.id);
+          if (!(node instanceof HTMLElement)) {
+            node = document.createElement("div");
+            layer.appendChild(node);
+          }
+          syncFurnitureOverlayNode(node, item, model, scale);
+        });
+        reusableAgentNodes.forEach((node, key) => {
+          if (!activeAgentKeys.has(key)) {
+            node.remove();
+          }
+        });
+        reusableWorkstationNodes.forEach((node, key) => {
+          if (!activeWorkstationKeys.has(key)) {
+            node.remove();
+          }
+        });
+        reusableFurnitureNodes.forEach((node, key) => {
+          if (!activeFurnitureKeys.has(key)) {
+            node.remove();
+          }
         });
       }
 
@@ -510,6 +789,355 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             holdOpenMs: Number.isFinite(door.holdOpenMs) ? Number(door.holdOpenMs) : 520,
             slideOffsetPx: Number.isFinite(door.slideOffsetPx) ? Number(door.slideOffsetPx) : 8
           };
+        }
+
+        function wallDashboardPalette(row) {
+          const tone = row && row.tone ? row.tone : row && row.kind ? row.kind : "quiet";
+          if (tone === "script") {
+            return {
+              fill: 0x1d5c8f,
+              stroke: 0x8bd2ff,
+              text: 0xf4fbff,
+              accent: 0x8bd2ff,
+              label: ""
+            };
+          }
+          if (tone === "doc") {
+            return {
+              fill: 0x80621a,
+              stroke: 0xffea8a,
+              text: 0xfff8d8,
+              accent: 0xffea8a,
+              label: ""
+            };
+          }
+          if (tone === "media") {
+            return {
+              fill: 0x1d6b3e,
+              stroke: 0x91f3ad,
+              text: 0xf0fff3,
+              accent: 0x91f3ad,
+              label: ""
+            };
+          }
+          if (tone === "hot") {
+            return {
+              fill: 0x21120a,
+              stroke: 0xffb24a,
+              text: 0xfff2cf,
+              accent: 0xffd36f,
+              label: "HOT"
+            };
+          }
+          if (tone === "failed") {
+            return {
+              fill: 0x220c0a,
+              stroke: 0xf06d5e,
+              text: 0xffded8,
+              accent: 0xff9b8f,
+              label: "FAIL"
+            };
+          }
+          if (tone === "quiet-command") {
+            return {
+              fill: 0x121817,
+              stroke: 0x7c9690,
+              text: 0xd1dfda,
+              accent: 0xa9c7bb,
+              label: "RUN"
+            };
+          }
+          if (tone === "empty") {
+            return {
+              fill: 0x0b120f,
+              stroke: 0x2d4b3f,
+              text: 0x9eb7ad,
+              accent: 0x527567,
+              label: ""
+            };
+          }
+          if (tone === "validating") {
+            return {
+              fill: 0x102938,
+              stroke: 0x7ed8ff,
+              text: 0xdff7ff,
+              accent: 0x8ce6ff,
+              label: "CHK"
+            };
+          }
+          if (tone === "tool") {
+            return {
+              fill: 0x151229,
+              stroke: 0xb991ff,
+              text: 0xf0eaff,
+              accent: 0xcdb3ff,
+              label: "MCP"
+            };
+          }
+          if (tone === "running" || tone === "command") {
+            return {
+              fill: 0x071016,
+              stroke: 0x7bcbff,
+              text: 0xd6ecff,
+              accent: 0x76d98e,
+              label: "RUN"
+            };
+          }
+          if (tone === "file" || tone === "editing") {
+            return {
+              fill: 0x0b1612,
+              stroke: 0x4bd69f,
+              text: 0xe7fff3,
+              accent: 0xffcf75,
+              label: "EDIT"
+            };
+          }
+          return {
+            fill: 0x101916,
+            stroke: 0x61796f,
+            text: 0xc9d7d0,
+            accent: 0x95dcb5,
+            label: ""
+          };
+        }
+
+        function wallDashboardTextValue(value) {
+          return String(value || "");
+        }
+
+        function mixColorChannel(left, right, amount) {
+          return Math.round(left + (right - left) * amount);
+        }
+
+        function mixColor(left, right, amount) {
+          const clamped = Math.max(0, Math.min(1, Number(amount) || 0));
+          const lr = (left >> 16) & 255;
+          const lg = (left >> 8) & 255;
+          const lb = left & 255;
+          const rr = (right >> 16) & 255;
+          const rg = (right >> 8) & 255;
+          const rb = right & 255;
+          return (mixColorChannel(lr, rr, clamped) << 16)
+            | (mixColorChannel(lg, rg, clamped) << 8)
+            | mixColorChannel(lb, rb, clamped);
+        }
+
+        function wallDashboardHeatPalette(row, fallback) {
+          const heat = Number.isFinite(row && row.heat) ? Math.max(0, Math.min(100, Number(row.heat))) : 25;
+          const amount = heat / 100;
+          const baseFill =
+            row && row.column === "doc" ? 0x5f4a16
+            : row && row.column === "media" ? 0x184d2f
+            : 0x194a76;
+          const hotFill =
+            row && row.column === "doc" ? 0x9a7620
+            : row && row.column === "media" ? 0x21834a
+            : 0x247fc5;
+          const fill = mixColor(baseFill, hotFill, amount);
+          const accent =
+            row && row.column === "doc" ? 0xffd54f
+            : row && row.column === "media" ? 0x63df8e
+            : 0x57a9ff;
+          return {
+            ...fallback,
+            fill,
+            stroke: fallback.stroke,
+            text: 0xf2f0df,
+            accent
+          };
+        }
+
+        function addWallDashboardNode(dashboard) {
+          if (!dashboard || !Number.isFinite(dashboard.width) || !Number.isFinite(dashboard.height)) {
+            return;
+          }
+          const width = Math.max(48, Math.round(dashboard.width));
+          const height = Math.max(24, Math.round(dashboard.height));
+          const x = pixelSnap(dashboard.x);
+          const y = pixelSnap(dashboard.y);
+          const container = new PIXI.Container();
+          container.x = x;
+          container.y = y;
+          container.zIndex = 2.45;
+          container.sortableChildren = true;
+
+          const shadow = new PIXI.Graphics()
+            .rect(3, 3, width, height)
+            .fill({ color: 0x000000, alpha: 0.28 });
+          shadow.zIndex = 0;
+          container.addChild(shadow);
+
+          const frame = new PIXI.Graphics()
+            .rect(0, 0, width, height)
+            .fill({ color: 0x16352c, alpha: 1 })
+            .stroke({ color: 0x1f5e47, width: 1, alpha: 1 });
+          frame.zIndex = 1;
+          container.addChild(frame);
+
+          const fontSize = 5;
+          const hotRows = (Array.isArray(dashboard.hotGrid) ? dashboard.hotGrid : [])
+            .filter((row) => row && row.label)
+            .slice(0, 9);
+          const gridInset = 3;
+          const columnGap = 3;
+          const cellHeight = 7;
+          const contentWidth = Math.max(24, width - gridInset * 2);
+          const maxCellWidth = Math.max(30, Math.floor(contentWidth / 2));
+          const columnCount = hotRows.length <= 1 ? 1 : hotRows.length <= 4 ? 2 : 3;
+          const columnWidth = Math.min(maxCellWidth, Math.max(24, Math.floor((contentWidth - columnGap * (columnCount - 1)) / columnCount)));
+          const gridWidth = columnCount * columnWidth + columnGap * (columnCount - 1);
+          const gridX = gridInset + Math.max(0, Math.floor((contentWidth - gridWidth) / 2));
+          const rowStep = 8;
+          const boardKey = String(dashboard.id || dashboard.roomId || "wall-dashboard");
+          const previousRows = wallDashboardLeaderboardMemory.get(boardKey) || new Map();
+          const nextRows = new Map();
+          const dashboardTooltip = new PIXI.Container();
+          dashboardTooltip.visible = false;
+          dashboardTooltip.zIndex = 21000;
+          dashboardTooltip.eventMode = "none";
+          renderer.root.addChild(dashboardTooltip);
+          const tooltipTextStyle = {
+            fill: 0xf3fff8,
+            fontFamily: "IBM Plex Mono, Cascadia Code, monospace",
+            fontSize: 6,
+            fontWeight: "700"
+          };
+          const tooltipMetaStyle = {
+            fill: 0x9fd9bd,
+            fontFamily: "IBM Plex Mono, Cascadia Code, monospace",
+            fontSize: 4,
+            fontWeight: "700"
+          };
+          const formatDashboardTime = (value) => {
+            if (!value) {
+              return "recent";
+            }
+            const date = new Date(value);
+            if (!Number.isFinite(date.getTime())) {
+              return "recent";
+            }
+            return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          };
+          const showDashboardTooltip = (row, event, cellX, rowY, cellWidth) => {
+            dashboardTooltip.removeChildren();
+            const path = wallDashboardTextValue(row.path || row.label || "");
+            const label = wallDashboardTextValue(row.label || path);
+            const type = wallDashboardTextValue(row.column || row.kind || "file");
+            const heat = Number.isFinite(row.heat) ? Math.round(row.heat) : null;
+            const heatRatio = heat === null ? 0 : Math.max(0, Math.min(1, heat / 100));
+            const titleText = createPixiText(renderer, label, tooltipTextStyle);
+            const metaBits = [
+              type,
+              heat === null ? null : \`heat \${heat}%\`,
+              formatDashboardTime(row.updatedAt)
+            ].filter(Boolean);
+            const metaText = createPixiText(renderer, metaBits.join(" · "), tooltipMetaStyle);
+            const pathText = createPixiText(renderer, path === label ? "" : path, tooltipMetaStyle);
+            titleText.x = 6;
+            titleText.y = 4;
+            metaText.x = 6;
+            metaText.y = 13;
+            pathText.x = 6;
+            pathText.y = 24;
+            const textWidth = Math.max(titleText.width, metaText.width, pathText.text ? pathText.width : 0);
+            const sceneWidth = Math.max(width, Number(renderer.model && renderer.model.width) || width);
+            const sceneHeight = Math.max(height, Number(renderer.model && renderer.model.height) || height);
+            const tooltipWidth = Math.min(sceneWidth - 8, Math.max(86, Math.ceil(textWidth) + 12));
+            const tooltipHeight = pathText.text ? 34 : 28;
+            const heatBarWidth = Math.max(8, tooltipWidth - 12);
+            const bubble = new PIXI.Graphics()
+              .rect(0, 0, tooltipWidth, tooltipHeight)
+              .fill({ color: 0x10251e, alpha: 0.98 })
+              .stroke({ color: 0x62d597, width: 1, alpha: 0.95 });
+            const heatTrack = new PIXI.Graphics()
+              .rect(6, 20, heatBarWidth, 3)
+              .fill({ color: 0x07140f, alpha: 0.95 });
+            const heatFill = new PIXI.Graphics()
+              .rect(6, 20, Math.max(1, Math.round(heatBarWidth * heatRatio)), 3)
+              .fill({ color: wallDashboardHeatPalette(row, wallDashboardPalette(row)).accent, alpha: 0.95 });
+            const localPoint = event && event.global && typeof renderer.root.toLocal === "function"
+              ? renderer.root.toLocal(event.global)
+              : { x: x + cellX + cellWidth / 2, y: y + rowY };
+            dashboardTooltip.x = Math.max(4, Math.min(sceneWidth - tooltipWidth - 4, Math.round(localPoint.x - tooltipWidth / 2)));
+            dashboardTooltip.y = Math.max(4, Math.min(sceneHeight - tooltipHeight - 4, Math.round(localPoint.y - tooltipHeight - 10)));
+            dashboardTooltip.addChild(bubble);
+            dashboardTooltip.addChild(titleText);
+            dashboardTooltip.addChild(metaText);
+            dashboardTooltip.addChild(heatTrack);
+            dashboardTooltip.addChild(heatFill);
+            if (pathText.text) {
+              dashboardTooltip.addChild(pathText);
+            }
+            dashboardTooltip.visible = true;
+          };
+          const hideDashboardTooltip = () => {
+            dashboardTooltip.visible = false;
+            dashboardTooltip.removeChildren();
+          };
+          const drawHotCell = (row, itemIndex) => {
+            const column = itemIndex % columnCount;
+            const index = Math.floor(itemIndex / columnCount);
+            const palette = wallDashboardHeatPalette(row, wallDashboardPalette(row));
+            const cellX = gridX + column * (columnWidth + columnGap);
+            const rowY = 5 + index * rowStep;
+            const rowKey = String((row && (row.path || row.label)) || "") + "::" + String(row && row.column || column);
+            const rowContainer = new PIXI.Container();
+            rowContainer.x = 0;
+            rowContainer.y = rowY;
+            rowContainer.zIndex = 2;
+            rowContainer.eventMode = "none";
+            const previous = previousRows.get(rowKey);
+            if (previous && Number.isFinite(previous.index) && previous.index !== index) {
+              const fromY = 5 + Number(previous.index) * rowStep;
+              rowContainer.y = fromY;
+              rowContainer.alpha = 0.68;
+              renderer.animatedSprites.push({
+                kind: "wall-dashboard-row",
+                node: rowContainer,
+                fromY,
+                toY: rowY,
+                startedAt: performance.now(),
+                durationMs: 430
+              });
+            }
+            nextRows.set(rowKey, { index, column });
+
+            const body = new PIXI.Graphics()
+              .rect(cellX, 0, columnWidth, cellHeight)
+              .fill({ color: palette.fill, alpha: 0.96 });
+            rowContainer.addChild(body);
+            const textInset = 2;
+            const maskedTextWidth = Math.max(1, columnWidth - textInset * 2);
+            const rowText = createPixiText(renderer, wallDashboardTextValue(row.label || ""), {
+              fill: palette.text,
+              fontFamily: "IBM Plex Mono, Cascadia Code, monospace",
+              fontSize: 4,
+              fontWeight: "700"
+            });
+            rowText.x = cellX + textInset;
+            rowText.y = 1;
+            const textMask = new PIXI.Graphics()
+              .rect(cellX + textInset, 0, maskedTextWidth, cellHeight)
+              .fill({ color: 0xffffff });
+            rowText.mask = textMask;
+            rowContainer.addChild(textMask);
+            rowContainer.addChild(rowText);
+            if (rowText.width > maskedTextWidth) {
+              const fadeWidth = Math.min(7, Math.max(4, Math.floor(columnWidth / 4)));
+              const fadeX = cellX + textInset + maskedTextWidth - fadeWidth;
+              const fade = new PIXI.Graphics();
+              for (let step = 0; step < fadeWidth; step += 1) {
+                fade.rect(fadeX + step, 0, 1, cellHeight)
+                  .fill({ color: palette.fill, alpha: ((step + 1) / fadeWidth) * 0.9 });
+              }
+              rowContainer.addChild(fade);
+            }
+            container.addChild(rowContainer);
+          };
+          hotRows.forEach((row, index) => drawHotCell(row, index));
+          wallDashboardLeaderboardMemory.set(boardKey, nextRows);
+
+          renderer.root.addChild(container);
         }
 
         function sceneIdleBehaviorConfig() {
@@ -2670,6 +3298,10 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
 
         });
 
+        (model.wallDashboards || []).forEach((dashboard) => {
+          addWallDashboardNode(dashboard);
+        });
+
         renderer.relationshipLineEntries = [];
         model.relationshipLines.forEach((line) => {
           const dx = line.x2 - line.x1;
@@ -2848,7 +3480,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
               kind: "blink",
               nodes: enteringRevealNodes,
               startedAt: performance.now(),
-              durationMs: 140
+              durationMs: WORKSTATION_REVEAL_BLINK_DURATION_MS
             });
           }
 
@@ -2992,7 +3624,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
               kind: "blink",
               nodes: enteringRevealNodes,
               startedAt: performance.now(),
-              durationMs: 140
+              durationMs: WORKSTATION_REVEAL_BLINK_DURATION_MS
             });
           }
 
@@ -3146,14 +3778,28 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           officeSceneInteractionToken(snapshot),
           options.compact ? "compact" : "wide",
           options.focusMode ? "focus" : "normal",
-          options.liveOnly ? "live" : "all"
+          options.liveOnly ? "live" : "all",
+          typeof officeWallDashboardSceneToken === "function" ? officeWallDashboardSceneToken(snapshot) : ""
         ].join("::");
+      }
+
+      function scheduleOfficeSceneViewportSync() {
+        if (officeSceneViewportSyncQueued || state.view !== "map" || latestOfficeMapProjects.length === 0) {
+          return;
+        }
+        officeSceneViewportSyncQueued = true;
+        window.requestAnimationFrame(() => {
+          officeSceneViewportSyncQueued = false;
+          if (state.view === "map" && latestOfficeMapProjects.length > 0) {
+            void syncOfficeMapScenes(latestOfficeMapProjects);
+          }
+        });
       }
 
       async function syncOfficeMapScenes(projects) {
   cleanupOfficeRenderers();
-  const hostNodes = Array.from(document.querySelectorAll("[data-office-map-host]"));
-  for (const host of hostNodes) {
+  latestOfficeMapProjects = Array.isArray(projects) ? projects : [];
+  for (const host of Array.from(document.querySelectorAll("[data-office-map-host]"))) {
     if (!(host instanceof HTMLElement)) {
       continue;
     }
@@ -3192,16 +3838,17 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error("office scene render failed", {
-        projectRoot,
-        compact,
-        focusMode,
-        message,
-        modelSummary: {
-          rooms: model.rooms.length,
-          tileObjects: model.tileObjects.length,
-          desks: model.desks.length,
-          offices: model.offices.length,
+          console.error("office scene render failed", {
+            projectRoot,
+            compact,
+            focusMode,
+            message,
+            modelSummary: {
+              rooms: model.rooms.length,
+              wallDashboards: (model.wallDashboards || []).length,
+              tileObjects: model.tileObjects.length,
+              desks: model.desks.length,
+              offices: model.offices.length,
           recAgents: model.recAgents.length
         }
       });

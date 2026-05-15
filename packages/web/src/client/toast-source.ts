@@ -309,7 +309,7 @@ export const TOAST_SCRIPT = `
           return null;
         }
         const requestTitle = normalizeDisplayText(snapshot.projectRoot, event.command || event.reason || event.detail || event.title);
-        const labelIconUrl = eventIconUrlForMethod(event.method) || eventIconUrlForThreadItemType(event.itemType);
+        const labelIconUrl = eventIconUrlForDashboardEvent(event);
         switch (event.kind) {
           case "approval":
             return {
@@ -1172,7 +1172,7 @@ export const TOAST_SCRIPT = `
             ).join("");
             const nextHtml = entry.isCommand
               ? \`<div class="agent-toast-window-bar"><div class="agent-toast-window-label">cmd.exe</div><div class="agent-toast-window-lights"><span></span><span></span><span></span></div></div><div class="agent-toast-window-body"><pre class="agent-toast-command">\${commandLinesHtml}</pre></div>\`
-              : \`<div class="agent-toast-copy"><div class="agent-toast-head">\${line.labelIconUrl || line.label ? \`<div class="agent-toast-label-group">\${line.labelIconUrl ? \`<img class="agent-toast-label-icon" src="\${escapeHtml(line.labelIconUrl)}" alt="" />\` : ""}\${line.label ? \`<div class="agent-toast-label">\${escapeHtml(line.label)}</div>\` : ""}</div>\` : ""}<div class="\${line.toastItems.length > 1 ? "agent-toast-lines" : "agent-toast-title"}">\${line.toastItems.length > 1 ? toastLinesHtml : escapeHtml(line.title)}</div></div>\${line.toastItems.length > 1 ? "" : statsHtml}</div>\${entry.imageUrl ? \`<img class="agent-toast-preview" src="\${escapeHtml(entry.imageUrl)}" alt="\${escapeHtml(entry.title)}" />\` : ""}\`;
+              : \`<div class="agent-toast-copy"><div class="agent-toast-head">\${line.labelIconUrl || line.label ? \`<div class="agent-toast-label-group">\${line.labelIconUrl ? \`<span class="agent-toast-label-icon-slot"><img class="agent-toast-label-icon" src="\${escapeHtml(line.labelIconUrl)}" alt="" /></span>\` : ""}\${line.label ? \`<div class="agent-toast-label">\${escapeHtml(line.label)}</div>\` : ""}</div>\` : ""}<div class="\${line.toastItems.length > 1 ? "agent-toast-lines" : "agent-toast-title"}">\${line.toastItems.length > 1 ? toastLinesHtml : escapeHtml(line.title)}</div>\${line.toastItems.length > 1 ? "" : statsHtml}</div></div>\${entry.imageUrl ? \`<img class="agent-toast-preview" src="\${escapeHtml(entry.imageUrl)}" alt="\${escapeHtml(entry.title)}" />\` : ""}\`;
             if (toast.dataset.renderHtml !== nextHtml) {
               toast.innerHTML = nextHtml;
               toast.dataset.renderHtml = nextHtml;

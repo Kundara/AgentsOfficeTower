@@ -1,9 +1,9 @@
-import type { DashboardAgent, DashboardEvent, DashboardSnapshot } from "@codex-agents-office/core";
+import type { DashboardAgent, DashboardEvent, DashboardSnapshot, HotChangeSummary } from "@codex-agents-office/core";
 
 import type { FleetResponse } from "./server-types";
 
 export type WebCliScope = "local" | "team";
-export type WebCliCommand = "recent" | "last";
+export type WebCliCommand = "recent" | "last" | "gist";
 export type WebCliItemType = "agents" | "events" | "all";
 
 export interface WebCliQueryValues {
@@ -51,6 +51,54 @@ export interface WebCliQueryItem {
   eventPhase?: string;
 }
 
+export interface WebCliGistHotChange {
+  path: string;
+  label: string;
+  fileType: HotChangeSummary["fileType"];
+  branch: string | null;
+  branches: string[];
+  users: string[];
+  heat: number;
+  changeCount: number;
+  lastChangedAt: string;
+  linesAdded: number;
+  linesRemoved: number;
+  agents: string[];
+  provenance: HotChangeSummary["provenance"];
+  confidence: HotChangeSummary["confidence"];
+}
+
+export interface WebCliGistAgent {
+  id: string;
+  label: string;
+  state: string;
+  source: string;
+  role: string | null;
+  updatedAt: string;
+  roomId: string | null;
+  threadId: string | null;
+  peerLabel: string | null;
+  lastMessage: string;
+  lastFileChange: {
+    path: string | null;
+    label: string;
+    action: string;
+    lastUpdatedAt: string;
+    linesAdded?: number;
+    linesRemoved?: number;
+  } | null;
+  provenance: string;
+  confidence: string;
+}
+
+export interface WebCliGist {
+  summary: string;
+  activeAgentCount: number;
+  hotChangeCount: number;
+  hotChanges: WebCliGistHotChange[];
+  activeAgents: WebCliGistAgent[];
+}
+
 export interface WebCliProjectMatch {
   projectRoot: string;
   projectLabel: string;
@@ -71,6 +119,7 @@ export interface WebCliQueryResponse {
   teamCacheAgeMs: number | null;
   matchedProject: WebCliProjectMatch;
   items: WebCliQueryItem[];
+  gist?: WebCliGist;
 }
 
 export type WebCliQueryResult =
@@ -188,6 +237,9 @@ function normalizeLimit(value: number | undefined, command: WebCliCommand): numb
   if (command === "last") {
     return 1;
   }
+  if (command === "gist" && !Number.isFinite(value ?? NaN)) {
+    return 8;
+  }
   if (!Number.isFinite(value ?? NaN)) {
     return DEFAULT_LIMIT;
   }
@@ -275,6 +327,94 @@ function eventToItem(snapshot: DashboardSnapshot, event: DashboardEvent): WebCli
   };
 }
 
+function isActiveAgent(agent: DashboardAgent): boolean {
+  return agent.isCurrent
+    || agent.isOngoing
+    || !["done", "idle", "cloud"].includes(agent.state);
+}
+
+function hotChangeToGist(change: HotChangeSummary): WebCliGistHotChange {
+  return {
+    path: change.path,
+    label: change.label,
+    fileType: change.fileType,
+    branch: change.branch,
+    branches: change.branches,
+    users: change.users,
+    heat: change.heat,
+    changeCount: change.changeCount,
+    lastChangedAt: change.lastChangedAt,
+    linesAdded: change.linesAdded,
+    linesRemoved: change.linesRemoved,
+    agents: change.agents,
+    provenance: change.provenance,
+    confidence: change.confidence
+  };
+}
+
+function agentLastFileChange(agent: DashboardAgent): WebCliGistAgent["lastFileChange"] {
+  const hotFile = agent.activitySummary?.hotFiles?.[0];
+  if (hotFile) {
+    return {
+      path: hotFile.path,
+      label: hotFile.label,
+      action: hotFile.action,
+      lastUpdatedAt: hotFile.lastUpdatedAt,
+      linesAdded: hotFile.linesAdded,
+      linesRemoved: hotFile.linesRemoved
+    };
+  }
+  if (agent.activityEvent?.type === "fileChange") {
+    return {
+      path: agent.activityEvent.path,
+      label: agent.activityEvent.title,
+      action: agent.activityEvent.action,
+      lastUpdatedAt: agent.updatedAt,
+      linesAdded: agent.activityEvent.linesAdded,
+      linesRemoved: agent.activityEvent.linesRemoved
+    };
+  }
+  return null;
+}
+
+function agentToGist(agent: DashboardAgent): WebCliGistAgent {
+  return {
+    id: agent.id,
+    label: agent.label,
+    state: agent.state,
+    source: agent.source,
+    role: agent.role,
+    updatedAt: agent.updatedAt,
+    roomId: agent.roomId,
+    threadId: agent.threadId,
+    peerLabel: agentPeerLabel(agent),
+    lastMessage: agentDetail(agent),
+    lastFileChange: agentLastFileChange(agent),
+    provenance: agent.provenance,
+    confidence: agent.confidence
+  };
+}
+
+function buildGist(snapshot: DashboardSnapshot, limit: number): WebCliGist {
+  const activeAgents = snapshot.agents
+    .filter(isActiveAgent)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(0, limit)
+    .map(agentToGist);
+  const hotChanges = (snapshot.activity?.hotChanges ?? [])
+    .slice(0, limit)
+    .map(hotChangeToGist);
+  const agentPhrase = `${activeAgents.length} active agent${activeAgents.length === 1 ? "" : "s"}`;
+  const hotPhrase = `${hotChanges.length} hot change${hotChanges.length === 1 ? "" : "s"}`;
+  return {
+    summary: `${agentPhrase}; ${hotPhrase}`,
+    activeAgentCount: activeAgents.length,
+    hotChangeCount: hotChanges.length,
+    hotChanges,
+    activeAgents
+  };
+}
+
 function passesFilters(item: WebCliQueryItem, values: WebCliQueryValues, sinceMs: number | null): boolean {
   if (sinceMs !== null && itemTimeMs(item) < sinceMs) {
     return false;
@@ -329,8 +469,10 @@ export function buildWebCliQueryResponse(
 
   const limit = normalizeLimit(query.values.limit, query.command);
   const type = normalizeType(query.values.type);
-  const items = buildItems(project, { ...query.values, limit, type }).slice(0, limit);
+  const items = query.command === "gist" ? [] : buildItems(project, { ...query.values, limit, type }).slice(0, limit);
+  const gist = query.command === "gist" ? buildGist(project, limit) : undefined;
   const cacheReceivedMs = teamCache ? Date.parse(teamCache.receivedAt) : NaN;
+  const teamDataAvailable = query.scope === "team" && Boolean(teamCache?.hasSharedData);
   const teamCacheAgeMs = query.scope === "team" && Number.isFinite(cacheReceivedMs)
     ? Math.max(0, nowMs - cacheReceivedMs)
     : null;
@@ -348,12 +490,13 @@ export function buildWebCliQueryResponse(
         limit,
         type
       },
-      dataSource: query.scope === "team" && teamCache?.hasSharedData ? "team-cache" : "local",
-      teamDataAvailable: Boolean(teamCache?.hasSharedData),
-      teamCacheReceivedAt: teamCache?.receivedAt ?? null,
+      dataSource: teamDataAvailable ? "team-cache" : "local",
+      teamDataAvailable,
+      teamCacheReceivedAt: query.scope === "team" ? teamCache?.receivedAt ?? null : null,
       teamCacheAgeMs,
       matchedProject: projectMatchDescriptor(project),
-      items
+      items,
+      ...(gist ? { gist } : {})
     }
   };
 }

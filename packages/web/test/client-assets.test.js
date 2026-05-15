@@ -191,7 +191,7 @@ test("client runtime seats current local workload even when its latest item summ
   );
   assert.match(
     seatingSource,
-    /function isFinishedLeadForRec\(agent\) {\n\s+return isRecentLeadCandidate\(agent\)\n\s+&& agent\.isCurrent !== true\n\s+&& agent\.isOngoing !== true/
+    /function isFinishedLeadForRec\(agent\) \{[\s\S]*return isRecentLeadCandidate\(agent\)\n\s+&& agent\.isCurrent !== true\n\s+&& agent\.isOngoing !== true/
   );
 });
 
@@ -206,16 +206,28 @@ test("client runtime gives finished subagents a longer workstation cooldown than
   );
 });
 
-test("client runtime renders subagent avatars at 75 percent of regular agents", () => {
+test("client runtime renders each subagent depth at 75 percent of its parent depth", () => {
   const layoutSource = readRuntimeSource("layout-source.ts");
   const renderSource = readRuntimeSource("render-source.ts");
   const sceneSource = readRuntimeSource("scene-source.ts");
 
-  assert.match(layoutSource, /return normalizedBaseScale \* \(agent && agent\.parentThreadId \? 0\.75 : 1\);/);
+  assert.ok(layoutSource.includes("const rawDepth = Number(agent && agent.depth);"));
+  assert.ok(layoutSource.includes("const nestedDepth = Number.isFinite(rawDepth)"));
+  assert.ok(layoutSource.includes("return normalizedBaseScale * Math.pow(0.75, nestedDepth);"));
   assert.ok(renderSource.includes("const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5);"));
   assert.ok(renderSource.includes("const avatarSize = agent ? avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5) : null;"));
   assert.ok(sceneSource.includes("const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1 : 1.08);"));
   assert.doesNotMatch(sceneSource, /avatarForAgent\(agent\)\.[wh] \* \(compact \? 1 : 1\.08\)/);
+});
+
+test("scene effects audit includes nested subagents for recursive visibility checks", () => {
+  const html = renderSceneEffectsAuditHtml();
+
+  assert.ok(html.includes('"id":"audit-nested-lead"'));
+  assert.ok(html.includes('"id":"audit-nested-child-b"'));
+  assert.ok(html.includes('"parentThreadId":"audit-nested-child-b"'));
+  assert.ok(html.includes('"id":"audit-nested-great-grandchild"'));
+  assert.ok(html.includes('"depth":3'));
 });
 
 test("client runtime only keeps ordinary local desks for current workload", () => {
@@ -299,6 +311,7 @@ test("runtime source maps recent typed plan, command, file, and tool events into
   assert.ok(renderSource.includes('return { mode: "command", label: "RUN" };'));
   assert.ok(renderSource.includes('return { mode: "file", label: "EDIT" };'));
   assert.ok(renderSource.includes('return { mode: "tool", label: "TOOL" };'));
+  assert.ok(renderSource.includes('event.method === "item/mcpToolCall/progress"'));
   assert.ok(renderSource.includes("function recentActivityCueForAgent(snapshot, agent) {"));
   assert.ok(sceneSource.includes("activityCue: recentActivityCueForAgent(snapshot, agent),"));
   assert.ok(sceneSource.includes("activityCue: recentActivityCueForAgent(snapshot, entry.agent),"));
@@ -308,6 +321,98 @@ test("runtime source maps recent typed plan, command, file, and tool events into
   assert.ok(navigationSource.includes("function syncActivityCueNode(motionState, activityCue, driftX = 0, driftY = 0) {"));
   assert.ok(navigationSource.includes('kind: "activity-cue",'));
   assert.ok(sceneSource.includes('if (entry.kind === "activity-cue") {'));
+});
+
+test("runtime source renders a scene-native office wall dashboard from snapshot activity", () => {
+  const renderSource = readRuntimeSource("render-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+  const stylesSource = readClientSource("styles-source.ts");
+  const servedStyles = readClientSource("styles.css");
+
+  assert.ok(renderSource.includes("function activityWallSnapshot(snapshot)"));
+  assert.ok(renderSource.includes("entry.branches.join(\", \")"));
+  assert.ok(renderSource.includes("entry.users.join(\", \")"));
+  assert.ok(sceneSource.includes("function officeWallDecayedHeat(snapshot, entry)"));
+  assert.ok(sceneSource.includes("const OFFICE_WALL_HEAT_HALF_LIFE_MS = 3 * 60 * 1000;"));
+  assert.ok(sceneSource.includes("function buildOfficeWallDashboardData(snapshot"));
+  assert.ok(sceneSource.includes("const activity = activityWallSnapshot(snapshot);"));
+  assert.ok(sceneSource.includes('const columns = ["script", "doc", "media"];'));
+  assert.ok(sceneSource.includes('kind: "file",'));
+  assert.ok(sceneSource.includes("tone: column,"));
+  assert.ok(sceneSource.includes("displayPath: activityWallPath(snapshot, entry.path),"));
+  assert.ok(sceneSource.includes("branch: entry.branch || null,"));
+  assert.ok(sceneSource.includes("branches: Array.isArray(entry.branches) ? entry.branches : [],"));
+  assert.ok(sceneSource.includes("users: Array.isArray(entry.users) ? entry.users : [],"));
+  assert.ok(sceneSource.includes("heat: officeWallDecayedHeat(snapshot, entry),"));
+  assert.ok(sceneSource.includes("generatedAtMs: officeWallGeneratedAtMs(snapshot),"));
+  assert.ok(sceneSource.includes('title: "Hot",'));
+  assert.ok(sceneSource.includes("hotGrid: data.hotGrid.map((row) => ({"));
+  assert.ok(sceneSource.includes("function buildOfficeWallDashboardModel(snapshot, room"));
+  assert.ok(sceneSource.includes("wallDashboards: [],"));
+  assert.ok(sceneSource.includes("model.wallDashboards.push(wallDashboard);"));
+  assert.ok(sceneSource.includes("function officeWallDashboardSceneToken(snapshot)"));
+  assert.ok(navigationSource.includes("function addWallDashboardNode(dashboard)"));
+  assert.ok(navigationSource.includes("(model.wallDashboards || []).forEach((dashboard) =>"));
+  assert.ok(navigationSource.includes("function renderWallDashboardHotHover(row)"));
+  assert.ok(navigationSource.includes('class="agent-hover-worktree"'));
+  assert.ok(navigationSource.includes('data-wall-hot-meta'));
+  assert.ok(navigationSource.includes("function collectReusableOfficeOverlayNodes(layer, selector, datasetKey)"));
+  assert.ok(navigationSource.includes("function setOfficeOverlayHtml(node, html)"));
+  assert.ok(navigationSource.includes("function syncAgentOverlayNode(node, anchor, scale)"));
+  assert.ok(navigationSource.includes("function syncWorkstationOverlayNode(node, anchor, scale)"));
+  assert.ok(navigationSource.includes("function syncFurnitureOverlayNode(node, item, model, scale)"));
+  assert.ok(navigationSource.includes("function syncOfficeWallDashboardHeat()"));
+  assert.ok(navigationSource.includes("function syncWallDashboardHotNode(node, dashboard, row, itemIndex, scale, layout)"));
+  assert.ok(navigationSource.includes('const reusableAgentNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-agent-hit", "agentKey");'));
+  assert.ok(navigationSource.includes('const reusableWorkstationNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-anchor", "workstationKey");'));
+  assert.ok(navigationSource.includes('const reusableFurnitureNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-furniture-hit", "furnitureId");'));
+  assert.ok(navigationSource.includes('const reusableHotNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-wall-hot-hit", "wallHotKey");'));
+  assert.ok(navigationSource.includes("let node = reusableAgentNodes.get(anchor.key);"));
+  assert.ok(navigationSource.includes("setOfficeOverlayHtml(node, triggerHtml + (anchor.hoverHtml || \"\"));"));
+  assert.ok(navigationSource.includes("const gridInset = 3;"));
+  assert.ok(navigationSource.includes("const columnGap = 3;"));
+  assert.ok(navigationSource.includes("const contentWidth = Math.max(24, width - gridInset * 2);"));
+  assert.ok(navigationSource.includes("const rowStep = 8;"));
+  assert.ok(navigationSource.includes("row.displayPath || row.path"));
+  assert.ok(navigationSource.includes('node.className = "office-map-wall-hot-hit";'));
+  assert.ok(navigationSource.includes("node.dataset.wallHotKey = wallDashboardHotNodeKey(dashboard, row, itemIndex);"));
+  assert.doesNotMatch(navigationSource, /function syncOfficeAnchors[\s\S]*?layer\.innerHTML = "";/);
+  assert.ok(navigationSource.includes('node.dataset.wallHotGeneratedAt = String(Number(row.generatedAtMs || dashboard.generatedAtMs) || 0);'));
+  assert.ok(navigationSource.includes('node.dataset.wallHotUsers = Array.isArray(row.users) ? row.users.join(",") : "";'));
+  assert.ok(navigationSource.includes('data-wall-hot-heat-fill'));
+  assert.ok(navigationSource.includes('if (tone === "script") {'));
+  assert.ok(navigationSource.includes('if (tone === "doc") {'));
+  assert.ok(navigationSource.includes('if (tone === "media") {'));
+  assert.ok(navigationSource.includes("function wallDashboardHeatPalette(row, fallback)"));
+  assert.ok(navigationSource.includes("Number.isFinite(row.heat)"));
+  assert.ok(navigationSource.includes("dashboardTooltip.zIndex = 21000;"));
+  assert.ok(navigationSource.includes("renderer.root.addChild(dashboardTooltip);"));
+  assert.ok(navigationSource.includes('rowContainer.eventMode = "none";'));
+  assert.ok(navigationSource.includes("const heatTrack = new PIXI.Graphics()"));
+  assert.ok(navigationSource.includes("const heatFill = new PIXI.Graphics()"));
+  assert.ok(navigationSource.includes("renderer.root.toLocal(event.global)"));
+  assert.ok(navigationSource.includes("const textInset = 2;"));
+  assert.ok(navigationSource.includes("rowText.x = cellX + textInset;"));
+  assert.ok(navigationSource.includes("rowText.width > maskedTextWidth"));
+  assert.ok(uiSource.includes("window.setInterval(() => {"));
+  assert.ok(uiSource.includes("syncOfficeWallDashboardHeat();"));
+  assert.ok(uiSource.includes("}, 1000);"));
+  assert.ok(stylesSource.includes(".office-map-wall-hot-hit .office-wall-hot-hover"));
+  assert.ok(stylesSource.includes("left: 0;"));
+  assert.ok(stylesSource.includes("bottom: calc(100% + 26px);"));
+  assert.ok(stylesSource.includes("width: min(460px, calc(100vw - 24px));"));
+  assert.ok(stylesSource.includes("font-size: calc(20px * var(--ui-text-scale));"));
+  assert.ok(stylesSource.includes("box-shadow: 2px 2px 0 rgba(0,0,0,0.28);"));
+  assert.ok(stylesSource.includes("transform: translate(0, 4px);"));
+  assert.ok(stylesSource.includes(".office-wall-hot-heat-track"));
+  assert.ok(servedStyles.includes(".office-map-wall-hot-hit .office-wall-hot-hover"));
+  assert.ok(servedStyles.includes("left: 0;"));
+  assert.ok(servedStyles.includes("bottom: calc(100% + 26px);"));
+  assert.ok(servedStyles.includes("width: min(460px, calc(100vw - 24px));"));
+  assert.ok(servedStyles.includes("transform: translate(0, 4px);"));
+  assert.ok(navigationSource.includes('typeof officeWallDashboardSceneToken === "function" ? officeWallDashboardSceneToken(snapshot) : ""'));
 });
 
 test("runtime source maps approval waits, input waits, and resolved requests into transient lifecycle cues", () => {
@@ -396,6 +501,9 @@ test("runtime source lets scene-agent clicks open a stable thread history card",
   assert.ok(renderSource.includes("function recentThreadHistoryEntries(snapshot, agent) {"));
   assert.ok(renderSource.includes("function renderAgentThreadCard(snapshot, agent, options = {}) {"));
   assert.ok(renderSource.includes("function renderThreadHistoryEntry(snapshot, agent, entry) {"));
+  assert.ok(renderSource.includes('["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"].includes(agent.activityEvent.type)'));
+  assert.ok(renderSource.includes('const isHermes = agent.source === "hermes" || agent.provenance === "hermes";'));
+  assert.ok(renderSource.includes("if (title === latest || (!isHermes && title === detail)) {"));
   assert.ok(renderSource.includes("function threadEntryLooksLong(body) {"));
   assert.ok(renderSource.includes('data-action="toggle-thread-entry"'));
   assert.ok(renderSource.includes('data-thread-entry-key='));
@@ -415,7 +523,7 @@ test("runtime source lets scene-agent clicks open a stable thread history card",
   assert.ok(sceneSource.includes("hoverHtml: openThreadSuppressesHover ? \"\" : renderAgentHover(snapshot, agent)"));
   assert.ok(sceneSource.includes('data-office-map-thread-layer'));
   assert.ok(navigationSource.includes('class="office-map-agent-trigger" data-action="open-agent-thread"'));
-  assert.ok(navigationSource.includes("node.classList.add(\"is-thread-open\");"));
+  assert.ok(navigationSource.includes('classNames.push("is-thread-open");'));
   assert.ok(navigationSource.includes("renderer.threadLayer"));
   assert.ok(navigationSource.includes('className = "office-map-thread-panel-slot"'));
   assert.ok(navigationSource.includes("function syncThreadPanel(renderer, model) {"));
@@ -432,6 +540,8 @@ test("runtime source lets scene-agent clicks open a stable thread history card",
   assert.ok(uiSource.includes("function threadViewProjectRoot(snapshot, agent) {"));
   assert.ok(uiSource.includes("function findThreadViewEntry(projectRoot, threadId) {"));
   assert.ok(uiSource.includes('agent.sourceKind !== "appServer"'));
+  assert.ok(uiSource.includes('if (agent.source === "hermes" || agent.provenance === "hermes") {'));
+  assert.ok(uiSource.includes("return agent.sourceProjectRoot || snapshot.projectRoot;"));
   assert.ok(uiSource.includes("&& !findThreadViewEntry(state.openAgentThread.projectRoot, state.openAgentThread.threadId)"));
   assert.ok(uiSource.includes("function markReplyThreadWorkIntent(threadId"));
   assert.ok(uiSource.includes("function toggleThreadEntryExpanded(stateKey) {"));
@@ -541,6 +651,11 @@ test("runtime source preserves workstation entering-reveal flags for the Pixi fl
   assert.ok(
     /renderer\.animatedSprites\.push\(\{\s+kind: "blink",\s+nodes: enteringRevealNodes,/m.test(navigationSource)
   );
+  assert.ok(navigationSource.includes("const WORKSTATION_REVEAL_BLINK_DURATION_MS = 280;"));
+  assert.equal(
+    (navigationSource.match(/durationMs: WORKSTATION_REVEAL_BLINK_DURATION_MS/g) || []).length,
+    2
+  );
 });
 
 test("blocked failure hover summaries prefer the current error detail over stale latest messages", () => {
@@ -574,6 +689,10 @@ test("multiplayer runtime persists per-project sharing and cools remote-only pro
   assert.ok(multiplayerSource.includes("function loadMultiplayerProjectShares() {"));
   assert.ok(multiplayerSource.includes("function setProjectRootsSharedWithRoom(projectRoots, shared) {"));
   assert.ok(multiplayerSource.includes("function cooledRemoteProjectSnapshot(entry) {"));
+  assert.ok(multiplayerSource.includes("function mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer)"));
+  assert.ok(multiplayerSource.includes("function mergeSharedActivity(localSnapshot, remoteSnapshot, peer)"));
+  assert.ok(multiplayerSource.includes("const users = uniqueSharedList([...(change && Array.isArray(change.users) ? change.users : []), peer.peerLabel]);"));
+  assert.ok(multiplayerSource.includes("hotChanges: []"));
   assert.ok(multiplayerSource.includes("Shared project cooldown · keep remote-only floors visible for up to 1 hour after sharing stops."));
   assert.ok(multiplayerSource.includes(".filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot))"));
   assert.ok(multiplayerSource.includes("const localHatId = currentSelectedHatId();"));
@@ -963,12 +1082,69 @@ test("toast renderer keeps the message, file-change, and command toast classes a
     "command toasts should keep per-line command rendering"
   );
   assert.ok(
+    toastSource.includes('class="agent-toast-label-icon-slot"'),
+    "toast label icons should render inside a fixed slot"
+  );
+  assert.ok(
+    toastSource.includes('</div>\\${line.toastItems.length > 1 ? "" : statsHtml}</div></div>'),
+    "single-item file-change stats should stay in the toast head row"
+  );
+  assert.ok(
+    !toastSource.includes('</div></div>\\${line.toastItems.length > 1 ? "" : statsHtml}</div>'),
+    "single-item file-change stats should not render as a second row"
+  );
+  assert.ok(
     toastSource.includes('<span class="agent-toast-delta add">+\\${line.linesAdded}</span>'),
     "file-change toasts should keep added-line deltas"
   );
   assert.ok(
     toastSource.includes('<span class="agent-toast-delta remove">-\\${line.linesRemoved}</span>'),
     "file-change toasts should keep removed-line deltas"
+  );
+});
+
+test("toast label icons fit a fixed slot instead of driving toast height", () => {
+  const stylesSource = readClientSource("styles-source.ts");
+  const servedStyles = readClientSource("styles.css");
+
+  assert.ok(stylesSource.includes(".agent-toast-label-icon-slot {"));
+  assert.ok(stylesSource.includes("width: 18px;"));
+  assert.ok(stylesSource.includes("height: 18px;"));
+  assert.ok(stylesSource.includes("flex: 0 0 18px;"));
+  assert.ok(stylesSource.includes("overflow: hidden;"));
+  assert.ok(stylesSource.includes(".agent-toast-label-icon {"));
+  assert.ok(stylesSource.includes("width: 100%;"));
+  assert.ok(stylesSource.includes("height: 100%;"));
+  assert.ok(stylesSource.includes("object-fit: contain;"));
+  assert.ok(servedStyles.includes(".agent-toast-label-icon-slot {"));
+  assert.ok(servedStyles.includes("flex: 0 0 18px;"));
+  assert.ok(servedStyles.includes("object-fit: contain;"));
+  assert.ok(stylesSource.includes(".agent-toast.file-change .agent-toast-title {"));
+  assert.ok(stylesSource.includes("white-space: nowrap;"));
+});
+
+test("tool dashboard events prefer semantic thread-item icon overrides", () => {
+  const renderSource = readRuntimeSource("render-source.ts").replace(/\r\n/g, "\n");
+  const toastSource = readFileSync(
+    join(__dirname, "../src/client/toast-source.ts"),
+    "utf8"
+  ).replace(/\r\n/g, "\n");
+
+  assert.ok(
+    toastSource.includes("const labelIconUrl = eventIconUrlForDashboardEvent(event);"),
+    "toast events should use the dashboard-event icon resolver"
+  );
+  assert.ok(
+    renderSource.includes('event.method === "item/tool/call"'),
+    "dashboard-event icon resolver should special-case generic dynamic tool calls"
+  );
+  assert.ok(
+    renderSource.includes("return itemIconUrl || methodIconUrl;"),
+    "tool and subagent events should prefer semantic item icons over exact method icons"
+  );
+  assert.ok(
+    renderSource.includes("iconUrl: eventIconUrlForDashboardEvent(event) || threadHistoryIconUrl({ tone: tone.tone })"),
+    "thread history should share the dashboard-event icon resolver"
   );
 });
 

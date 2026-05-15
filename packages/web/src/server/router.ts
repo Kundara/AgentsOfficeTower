@@ -96,7 +96,7 @@ function requestOriginMatchesHost(context: RequestContext): boolean {
 }
 
 function parseWebCliCommand(value: string | null): WebCliCommand | null {
-  return value === "recent" || value === "last" ? value : null;
+  return value === "recent" || value === "last" || value === "gist" ? value : null;
 }
 
 function parseWebCliScope(value: string | null): WebCliScope | null {
@@ -136,7 +136,7 @@ function parseWebCliQuery(context: RequestContext): WebCliQueryRequest | { error
     return { error: "repo is required" };
   }
   if (!command) {
-    return { error: "command must be recent or last" };
+    return { error: "command must be recent, last, or gist" };
   }
   if (!scope) {
     return { error: "scope must be local or team" };

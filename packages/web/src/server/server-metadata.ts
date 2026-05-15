@@ -25,6 +25,12 @@ function createStartupSnapshot(project: ProjectDescriptor): DashboardSnapshot {
     agents: [],
     cloudTasks: [],
     events: [],
+    activity: {
+      generatedAt,
+      hotChanges: [],
+      hotTools: [],
+      runningCommands: []
+    },
     notes: [`Project ${project.label} is starting up.`]
   };
 }

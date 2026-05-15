@@ -20,6 +20,7 @@ function snapshot(overrides = {}) {
     agents: overrides.agents ?? [],
     cloudTasks: [],
     events: overrides.events ?? [],
+    activity: overrides.activity ?? { generatedAt: "2026-05-13T10:04:00.000Z", hotChanges: [], hotTools: [], runningCommands: [] },
     notes: [],
     ...overrides.extra
   };
@@ -35,11 +36,33 @@ function agent(overrides = {}) {
     role: overrides.role ?? "default",
     detail: overrides.detail ?? "Running tests",
     latestMessage: overrides.latestMessage ?? null,
+    activitySummary: overrides.activitySummary,
+    activityEvent: overrides.activityEvent ?? null,
     roomId: overrides.roomId ?? "main",
     threadId: overrides.threadId ?? "thread-1",
     provenance: overrides.provenance ?? "codex",
     confidence: overrides.confidence ?? "typed",
     network: overrides.network ?? null
+  };
+}
+
+function hotChange(overrides = {}) {
+  return {
+    path: overrides.path ?? "/work/CodexAgentsOffice/packages/web/src/server/web-cli-query.ts",
+    label: overrides.label ?? "web-cli-query.ts",
+    fileType: overrides.fileType ?? "script",
+    branch: overrides.branch ?? null,
+    branches: overrides.branches ?? [],
+    users: overrides.users ?? [],
+    heat: overrides.heat ?? 88,
+    score: overrides.score ?? 42,
+    changeCount: overrides.changeCount ?? 3,
+    lastChangedAt: overrides.lastChangedAt ?? "2026-05-13T10:03:30.000Z",
+    linesAdded: overrides.linesAdded ?? 12,
+    linesRemoved: overrides.linesRemoved ?? 2,
+    agents: overrides.agents ?? ["Nova"],
+    provenance: overrides.provenance ?? "codex",
+    confidence: overrides.confidence ?? "typed"
   };
 }
 
@@ -122,6 +145,72 @@ test("web CLI last command returns one filtered event", () => {
   assert.equal(result.ok, true);
   assert.equal(result.response.values.limit, 1);
   assert.deepEqual(result.response.items.map((item) => item.id), ["event-command"]);
+});
+
+test("web CLI gist returns hot changes and active agent state sync", () => {
+  const fleet = {
+    generatedAt: "2026-05-13T10:04:00.000Z",
+    projects: [
+      snapshot({
+        activity: {
+          generatedAt: "2026-05-13T10:04:00.000Z",
+          hotChanges: [hotChange({ label: "server.ts", branch: "feature/hot-board", branches: ["feature/hot-board"], users: ["Teammate"] })],
+          hotTools: [],
+          runningCommands: []
+        },
+        agents: [
+          agent({
+            id: "agent-active",
+            label: "Nova",
+            state: "editing",
+            isCurrent: true,
+            latestMessage: "Updating CLI state sync",
+            activitySummary: {
+              hotFiles: [
+                {
+                  path: "/work/CodexAgentsOffice/packages/cli/src/web-query.ts",
+                  label: "web-query.ts",
+                  action: "edited",
+                  count: 2,
+                  lastUpdatedAt: "2026-05-13T10:02:30.000Z",
+                  linesAdded: 20,
+                  linesRemoved: 1
+                }
+              ],
+              runningCommand: null,
+              blockers: [],
+              updatedAt: "2026-05-13T10:02:30.000Z"
+            }
+          }),
+          agent({ id: "agent-idle", label: "Resting", state: "idle", isCurrent: false, isOngoing: false })
+        ]
+      })
+    ]
+  };
+
+  const result = buildWebCliQueryResponse(
+    {
+      repo: "CodexAgentsOffice",
+      scope: "local",
+      command: "gist",
+      values: {}
+    },
+    fleet,
+    null,
+    Date.parse("2026-05-13T10:05:00.000Z")
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.response.items.length, 0);
+  assert.equal(result.response.values.limit, 8);
+  assert.equal(result.response.gist.summary, "1 active agent; 1 hot change");
+  assert.equal(result.response.gist.hotChanges[0].label, "server.ts");
+  assert.equal(result.response.gist.hotChanges[0].branch, "feature/hot-board");
+  assert.deepEqual(result.response.gist.hotChanges[0].branches, ["feature/hot-board"]);
+  assert.deepEqual(result.response.gist.hotChanges[0].users, ["Teammate"]);
+  assert.equal(result.response.gist.activeAgents[0].label, "Nova");
+  assert.equal(result.response.gist.activeAgents[0].lastMessage, "Updating CLI state sync");
+  assert.equal(result.response.gist.activeAgents[0].lastFileChange.label, "web-query.ts");
 });
 
 test("web CLI team scope uses coordinated shared fleet cache when available", () => {

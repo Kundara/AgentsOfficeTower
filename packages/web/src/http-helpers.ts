@@ -5,6 +5,7 @@ import { extname, normalize, resolve } from "node:path";
 import { canonicalizeProjectPath } from "@codex-agents-office/core";
 
 const WEB_PUBLIC_DIR = resolve(__dirname, "../public");
+const DEFAULT_JSON_BODY_MAX_BYTES = 1024 * 1024;
 
 function isInsideDirectory(root: string, candidate: string): boolean {
   return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
@@ -94,10 +95,11 @@ export async function readJsonBody(
 ): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
+  const maxBytes = options.maxBytes ?? DEFAULT_JSON_BODY_MAX_BYTES;
   for await (const chunk of request) {
     const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     totalBytes += buffer.byteLength;
-    if (typeof options.maxBytes === "number" && totalBytes > options.maxBytes) {
+    if (totalBytes > maxBytes) {
       throw new Error("Request body too large");
     }
     chunks.push(buffer);

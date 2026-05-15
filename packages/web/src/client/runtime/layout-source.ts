@@ -926,6 +926,9 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         if (agent.source === "cursor") {
           return "cursor";
         }
+        if (agent.source === "hermes") {
+          return "hermes";
+        }
         if (agent.source === "openclaw") {
           return "openclaw";
         }
@@ -1144,6 +1147,8 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
             return "#ffab91";
           case "cursor":
             return "#9fd6a4";
+          case "hermes":
+            return "#f7c76b";
           case "openclaw":
             return "#7ad0b3";
           case "default":
@@ -1341,7 +1346,11 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
 
       function avatarVisualScaleForAgent(agent, baseScale = 1) {
         const normalizedBaseScale = Number.isFinite(baseScale) ? Number(baseScale) : 1;
-        return normalizedBaseScale * (agent && agent.parentThreadId ? 0.75 : 1);
+        const rawDepth = Number(agent && agent.depth);
+        const nestedDepth = Number.isFinite(rawDepth)
+          ? Math.max(0, Math.min(8, Math.round(rawDepth)))
+          : (agent && agent.parentThreadId ? 1 : 0);
+        return normalizedBaseScale * Math.pow(0.75, nestedDepth);
       }
 
       function avatarVisualSizeForAgent(agent, baseScale = 1) {

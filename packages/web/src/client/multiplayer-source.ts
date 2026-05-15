@@ -484,6 +484,47 @@ export const MULTIPLAYER_SCRIPT = `
         };
       }
 
+      function uniqueSharedList(values) {
+        return Array.from(new Set((Array.isArray(values) ? values : [])
+          .map((value) => sanitizeMultiplayerField(value))
+          .filter(Boolean)));
+      }
+
+      function mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer) {
+        const branches = uniqueSharedList(change && change.branches);
+        const branch = sanitizeMultiplayerField(change && change.branch) || branches[0] || null;
+        const users = uniqueSharedList([...(change && Array.isArray(change.users) ? change.users : []), peer.peerLabel]);
+        return {
+          ...change,
+          path: remapSharedPath(remoteSnapshot.projectRoot, localSnapshot.projectRoot, change && change.path) || (change && change.path) || "",
+          branch,
+          branches: branch && !branches.includes(branch) ? [branch, ...branches] : branches,
+          users
+        };
+      }
+
+      function mergeSharedActivity(localSnapshot, remoteSnapshot, peer) {
+        const remoteHotChanges = remoteSnapshot && remoteSnapshot.activity && Array.isArray(remoteSnapshot.activity.hotChanges)
+          ? remoteSnapshot.activity.hotChanges
+          : [];
+        if (remoteHotChanges.length === 0) {
+          return;
+        }
+        if (!localSnapshot.activity || typeof localSnapshot.activity !== "object") {
+          localSnapshot.activity = {
+            generatedAt: localSnapshot.generatedAt || new Date().toISOString(),
+            hotChanges: [],
+            hotTools: [],
+            runningCommands: []
+          };
+        }
+        const currentHotChanges = Array.isArray(localSnapshot.activity.hotChanges) ? localSnapshot.activity.hotChanges : [];
+        localSnapshot.activity.hotChanges = currentHotChanges
+          .concat(remoteHotChanges.map((change) => mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer)))
+          .sort((left, right) => Number(right && right.score || 0) - Number(left && left.score || 0))
+          .slice(0, 12);
+      }
+
       function remoteProjectMemoryEntry(snapshot, participantLabels, receivedAt) {
         return {
           snapshot: cloneValue(snapshot),
@@ -557,6 +598,12 @@ export const MULTIPLAYER_SCRIPT = `
           const snapshot = cloneValue(remoteSnapshot);
           snapshot.agents = [];
           snapshot.events = [];
+          snapshot.activity = {
+            generatedAt: remoteSnapshot.activity && remoteSnapshot.activity.generatedAt || remoteSnapshot.generatedAt || new Date().toISOString(),
+            hotChanges: [],
+            hotTools: [],
+            runningCommands: []
+          };
           snapshot.sharedRemoteOnly = true;
           snapshot.sharedCoolingDown = false;
           setSnapshotSharedParticipants(snapshot, []);
@@ -606,6 +653,7 @@ export const MULTIPLAYER_SCRIPT = `
                 });
               bucket.snapshot.agents = bucket.snapshot.agents.concat(mergedAgents);
               bucket.snapshot.events = bucket.snapshot.events.concat(mergedEvents).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+              mergeSharedActivity(bucket.snapshot, remoteSnapshot, peer);
               continue;
             }
             const localAgentIdentityKeys = collectSharedAgentIdentityKeys(localSnapshot.agents);
@@ -614,11 +662,15 @@ export const MULTIPLAYER_SCRIPT = `
               .map((agent) => mergeSharedAgent(localSnapshot, remoteSnapshot, agent, peer));
             const mergedEvents = (Array.isArray(remoteSnapshot.events) ? remoteSnapshot.events : [])
               .map((event) => mergeSharedEvent(localSnapshot, remoteSnapshot, event, peer));
-            if (mergedAgents.length === 0 && mergedEvents.length === 0) {
+            const remoteHotChanges = remoteSnapshot && remoteSnapshot.activity && Array.isArray(remoteSnapshot.activity.hotChanges)
+              ? remoteSnapshot.activity.hotChanges
+              : [];
+            if (mergedAgents.length === 0 && mergedEvents.length === 0 && remoteHotChanges.length === 0) {
               continue;
             }
             localSnapshot.agents = localSnapshot.agents.concat(mergedAgents);
             localSnapshot.events = localSnapshot.events.concat(mergedEvents).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+            mergeSharedActivity(localSnapshot, remoteSnapshot, peer);
             const participantLabels = new Set(ensureSnapshotSharedParticipants(localSnapshot));
             participantLabels.add(peer.peerLabel);
             setSnapshotSharedParticipants(localSnapshot, [...participantLabels]);

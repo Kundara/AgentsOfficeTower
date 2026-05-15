@@ -813,6 +813,18 @@ export const CLIENT_STYLES = `
         z-index: 280;
       }
 
+      .office-map-wall-hot-hit {
+        position: absolute;
+        pointer-events: auto;
+        background: transparent;
+        z-index: 285;
+      }
+
+      .office-map-wall-hot-hit:hover,
+      .office-map-wall-hot-hit:focus-within {
+        z-index: 320;
+      }
+
       .office-map-agent-trigger {
         position: absolute;
         inset: 0;
@@ -834,6 +846,61 @@ export const CLIENT_STYLES = `
 
       .office-map-furniture-hit:active {
         cursor: grabbing;
+      }
+
+      .office-map-wall-hot-hit .office-wall-hot-hover {
+        left: 0;
+        bottom: calc(100% + 26px);
+        width: min(460px, calc(100vw - 24px));
+        min-width: 320px;
+        max-width: 460px;
+        padding: 12px 14px;
+        font-size: calc(16px * var(--ui-text-scale));
+        line-height: 1.35;
+        z-index: 330;
+        box-shadow: 2px 2px 0 rgba(0,0,0,0.28);
+        transform: translate(0, 4px);
+      }
+
+      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-title {
+        font-size: calc(18px * var(--ui-text-scale));
+        margin-bottom: 6px;
+      }
+
+      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-title strong {
+        font-size: calc(20px * var(--ui-text-scale));
+        line-height: 1.1;
+      }
+
+      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-meta {
+        font-size: calc(14px * var(--ui-text-scale));
+      }
+
+      .office-map-wall-hot-hit:hover .office-wall-hot-hover,
+      .office-map-wall-hot-hit:focus-within .office-wall-hot-hover {
+        opacity: 1;
+        transform: translate(0, 0);
+      }
+
+      .office-wall-hot-heat-track {
+        height: 8px;
+        margin: 9px 0 5px;
+        border: 1px solid rgba(122, 226, 170, 0.5);
+        background: rgba(4, 13, 10, 0.92);
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.28);
+      }
+
+      .office-wall-hot-heat-track span {
+        display: block;
+        height: 100%;
+        min-width: 2px;
+        background: #62d597;
+      }
+
+      .office-wall-hot-path {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .office-map-agent-hit .agent-hover {
@@ -1380,7 +1447,7 @@ export const CLIENT_STYLES = `
 
       .agent-toast.file-change {
         border-radius: 8px;
-        padding: 5px 8px 6px;
+        padding: 3px 6px;
         background: rgba(16, 23, 20, 0.9);
       }
 
@@ -1466,6 +1533,15 @@ export const CLIENT_STYLES = `
         max-width: 164px;
       }
 
+      .agent-toast.file-change .agent-toast-title {
+        display: block;
+        max-width: 150px;
+        max-height: none;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        -webkit-line-clamp: unset;
+      }
+
       .agent-toast.image {
         min-width: 120px;
         padding: 3px 7px;
@@ -1486,24 +1562,23 @@ export const CLIENT_STYLES = `
         display: inline-flex;
         flex-direction: column;
         align-items: flex-start;
-        gap: 2px;
+        gap: 1px;
         min-width: 0;
       }
 
       .agent-toast-head {
         display: inline-flex;
-        align-items: flex-start;
-        gap: 6px;
+        align-items: center;
+        gap: 4px;
         min-width: 0;
       }
 
       .agent-toast-label-group {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 3px;
         min-width: 0;
         flex: 0 0 auto;
-        padding-top: 1px;
       }
 
       .agent-toast-lines {
@@ -1615,11 +1690,21 @@ export const CLIENT_STYLES = `
         font-weight: 700;
       }
 
+      .agent-toast-label-icon-slot {
+        width: 18px;
+        height: 18px;
+        display: inline-grid;
+        place-items: center;
+        flex: 0 0 18px;
+        overflow: hidden;
+        line-height: 0;
+      }
+
       .agent-toast-label-icon {
-        width: 28px;
-        height: 28px;
+        width: 100%;
+        height: 100%;
         display: block;
-        flex: 0 0 auto;
+        object-fit: contain;
         image-rendering: pixelated;
       }
 
@@ -1640,7 +1725,8 @@ export const CLIENT_STYLES = `
       .agent-toast-stats {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
+        flex: 0 0 auto;
         font-size: 10px;
         line-height: 1;
         font-weight: 700;
@@ -2261,6 +2347,16 @@ export const CLIENT_STYLES = `
 
       .agent-hover-summary-error {
         color: #ff8f8f;
+      }
+
+      .agent-hover-action {
+        margin-top: 2px;
+        padding-top: 2px;
+        border-top: 1px solid rgba(244, 239, 223, 0.16);
+        font-size: 6px;
+        line-height: 1;
+        color: #9be7c4;
+        overflow-wrap: anywhere;
       }
 
       .agent-hover-meta {

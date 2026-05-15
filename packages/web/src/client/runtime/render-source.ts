@@ -47,6 +47,67 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return \`\${deltaDays}d ago\`;
       }
 
+      function activityWallSnapshot(snapshot) {
+        const activity = snapshot && snapshot.activity && typeof snapshot.activity === "object"
+          ? snapshot.activity
+          : {};
+        return {
+          hotChanges: Array.isArray(activity.hotChanges) ? activity.hotChanges : [],
+          hotTools: Array.isArray(activity.hotTools) ? activity.hotTools : [],
+          runningCommands: Array.isArray(activity.runningCommands) ? activity.runningCommands : []
+        };
+      }
+
+      function activityWallPath(snapshot, path) {
+        const cleaned = cleanReportedPath(snapshot.projectRoot, path);
+        return normalizeDisplayText(snapshot.projectRoot, cleaned || path || "");
+      }
+
+      function activityWallShortText(text, maxLength) {
+        const normalized = String(text || "").replace(/\\s+/g, " ").trim();
+        if (normalized.length <= maxLength) {
+          return normalized;
+        }
+        return normalized.slice(0, Math.max(0, maxLength - 3)) + "...";
+      }
+
+      function activityWallItemName(value, fallback) {
+        const text = String(value || fallback || "").trim();
+        const parts = text.split(/[\\\\/]/).filter(Boolean);
+        return parts[parts.length - 1] || text || "";
+      }
+
+      function renderActivityWallHotChange(snapshot, entry) {
+        const heat = Math.max(1, Math.min(100, Math.round(Number(entry.heat) || 0)));
+        const path = activityWallPath(snapshot, entry.path);
+        const label = activityWallItemName(entry.label || entry.path, path);
+        const agents = Array.isArray(entry.agents) && entry.agents.length > 0
+          ? \` · \${entry.agents.join(", ")}\`
+          : "";
+        const branches = Array.isArray(entry.branches) && entry.branches.length > 0
+          ? \` · \${entry.branches.join(", ")}\`
+          : entry.branch ? \` · \${entry.branch}\` : "";
+        const users = Array.isArray(entry.users) && entry.users.length > 0
+          ? \` · by \${entry.users.join(", ")}\`
+          : "";
+        const fileType = ["script", "doc", "media"].includes(entry.fileType) ? entry.fileType : "script";
+        return \`<div class="office-wall-row office-wall-hot-row is-\${escapeHtml(fileType)}" title="\${escapeHtml(path + branches + agents + users)}" style="--heat: \${heat}%;"><div class="office-wall-row-main"><span class="office-wall-row-label">\${escapeHtml(activityWallShortText(label, 22))}</span></div></div>\`;
+      }
+
+      function renderActivityWallDashboard(snapshot, wall) {
+        const activity = activityWallSnapshot(snapshot);
+        const columns = ["script", "doc", "media"].map((fileType) =>
+          activity.hotChanges
+            .filter((entry) => entry && entry.fileType === fileType)
+            .slice(0, 3)
+        );
+        const hasActivity = columns.some((entries) => entries.length > 0);
+        const hotHtml = columns
+          .map((entries) => \`<div class="office-wall-section">\${entries.map((entry) => renderActivityWallHotChange(snapshot, entry)).join("")}</div>\`)
+          .join("");
+        return \`<div class="office-wall-dashboard\${hasActivity ? " has-activity" : ""}" aria-label="Workspace activity wall"><div class="office-wall-hot-grid">\${hotHtml}</div></div>\`;
+      }
+
       function updatedAtAgeMs(value) {
         const updatedAt = Date.parse(value || "");
         if (!Number.isFinite(updatedAt)) {
@@ -117,6 +178,13 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         }
         const focus = primaryFocusPath(snapshot, agent);
         const source = agent.activityEvent && agent.activityEvent.type === "userMessage" ? "user" : "agent";
+        if (
+          (agent.source === "hermes" || agent.provenance === "hermes")
+          && agent.activityEvent
+          && ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"].includes(agent.activityEvent.type)
+        ) {
+          return { text: titleCaseWords(agent.state || "working") || "Working", source };
+        }
         if (!focus) {
           return { text: detail, source };
         }
@@ -124,6 +192,30 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           return { text: \`In \${focus}\`, source };
         }
         return { text: detail, source };
+      }
+
+      function agentHoverAction(snapshot, agent) {
+        const event = agent && agent.activityEvent;
+        if (!event || !["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch"].includes(event.type)) {
+          return "";
+        }
+        const title = normalizeDisplayText(snapshot.projectRoot, event.title || event.command || event.path || "");
+        if (!title) {
+          return "";
+        }
+        const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail || "");
+        const latest = latestAgentMessage(snapshot.projectRoot, agent);
+        const isHermes = agent.source === "hermes" || agent.provenance === "hermes";
+        if (title === latest || (!isHermes && title === detail)) {
+          return "";
+        }
+        const label =
+          event.type === "commandExecution" ? "Command"
+          : event.type === "fileChange" ? "File"
+          : event.type === "webSearch" ? "Search"
+          : event.type === "collabAgentToolCall" ? "Delegate"
+          : "Tool";
+        return label + ": " + title;
       }
 
       function notificationLabel(event) {
@@ -264,6 +356,23 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           default:
             return options.isCommand ? null : eventIconUrlForThreadItemType(type);
         }
+      }
+
+      function eventIconUrlForDashboardEvent(event) {
+        if (!event) {
+          return null;
+        }
+        const itemIconUrl = eventIconUrlForThreadItemType(event.itemType);
+        const methodIconUrl = eventIconUrlForMethod(event.method);
+        if (
+          event.kind === "tool"
+          || event.kind === "subagent"
+          || event.method === "item/tool/call"
+          || event.method === "item/mcpToolCall/progress"
+        ) {
+          return itemIconUrl || methodIconUrl;
+        }
+        return methodIconUrl || itemIconUrl;
       }
 
       function isNeedsUserMarkerAgent(agent) {
@@ -454,6 +563,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         }
         if (
           event.method === "item/tool/call"
+          || event.method === "item/mcpToolCall/progress"
           || (event.method === "item/started" && event.kind === "tool")
         ) {
           return { mode: "tool", label: "TOOL" };
@@ -897,6 +1007,10 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const worktreeHtml = worktreeName
           ? \`<div class="agent-hover-worktree"><img class="worktree-inline-icon" src="\${escapeHtml(worktreeIconUrl())}" alt="" aria-hidden="true" /><span>\${escapeHtml(worktreeName)}</span></div>\`
           : "";
+        const action = agentHoverAction(snapshot, agent);
+        const actionHtml = action
+          ? \`<div class="agent-hover-action">\${escapeHtml(action)}</div>\`
+          : "";
         const metaParts = [
           \`<span>\${escapeHtml(titleCaseWords(agentKindLabel(snapshot, agent)))}</span>\`,
           \`<span>\${escapeHtml(agentHoverSourceLabel(agent, summary.source))}</span>\`,
@@ -908,7 +1022,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         ].filter(Boolean);
         const meta = metaParts.join('<span class="agent-hover-separator"> · </span>');
 
-        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(hoverTitle)}</strong></div>\${worktreeHtml}<div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div><div class="agent-hover-meta">\${meta}</div></div>\`;
+        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(hoverTitle)}</strong></div>\${worktreeHtml}<div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div>\${actionHtml}<div class="agent-hover-meta">\${meta}</div></div>\`;
       }
 
       function threadHistoryEntryTimeMs(entry) {
@@ -1087,7 +1201,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
               body,
               createdAt: event.createdAt,
               title: event.title || "",
-              iconUrl: eventIconUrlForMethod(event.method) || eventIconUrlForThreadItemType(event.itemType) || threadHistoryIconUrl({ tone: tone.tone })
+              iconUrl: eventIconUrlForDashboardEvent(event) || threadHistoryIconUrl({ tone: tone.tone })
             });
           });
         const latestMessage = latestAgentMessage(snapshot.projectRoot, agent);

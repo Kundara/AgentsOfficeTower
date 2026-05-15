@@ -54,6 +54,8 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       const loadedOfficeAssetUrls = new Set();
       const loadedOfficeAssetImages = new Map();
       const officeSceneRenderers = new Map();
+      let latestOfficeMapProjects = [];
+      let officeSceneViewportSyncQueued = false;
       const NOTIFICATION_TTL_MS = 2400;
       const MESSAGE_NOTIFICATION_TTL_MS = 4600;
       const TEXT_MESSAGE_NOTIFICATION_EXTRA_TTL_MS = 1000;
@@ -78,6 +80,7 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       const recentLeadDisplayMemory = new Map();
       const activeRecentLeadReservations = new Map();
       const recSlotMemory = new Map();
+      const wallDashboardLeaderboardMemory = new Map();
       const baselineProjectHydrationAt = new Map();
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));

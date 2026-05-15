@@ -52,6 +52,9 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
         if (!agent || agent.source === "cloud" || agent.source === "presence") {
           return false;
         }
+        if (agent.source === "hermes" && agent.sourceKind === "hermes:roaming") {
+          return false;
+        }
         if (agent.source === "local") {
           if (hasReplyThreadWorkIntent(agent)) {
             return true;
@@ -111,6 +114,9 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
       }
 
       function isFinishedLeadForRec(agent) {
+        if (agent && agent.source === "hermes" && agent.sourceKind === "hermes:roaming") {
+          return false;
+        }
         return isRecentLeadCandidate(agent)
           && agent.isCurrent !== true
           && agent.isOngoing !== true

@@ -221,7 +221,13 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         if (!agent || !agent.threadId) {
           return null;
         }
-        if (agent.network || agent.provenance !== "codex" || agent.source !== "local") {
+        if (agent.network) {
+          return null;
+        }
+        if (agent.source === "hermes" || agent.provenance === "hermes") {
+          return agent.sourceProjectRoot || snapshot.projectRoot;
+        }
+        if (agent.provenance !== "codex" || agent.source !== "local") {
           return null;
         }
         const preferredRoot = agent.sourceProjectRoot || snapshot.projectRoot;
@@ -1516,7 +1522,10 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
       if (!screenshotMode) {
         window.addEventListener("online", () => setConnection("reconnecting"));
         window.addEventListener("offline", () => setConnection("offline"));
-        window.addEventListener("scroll", syncSkyParallax, { passive: true });
+        window.addEventListener("scroll", () => {
+          syncSkyParallax();
+          scheduleOfficeSceneViewportSync();
+        }, { passive: true });
       }
       document.addEventListener("keydown", (event) => {
         if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey) {
@@ -1588,7 +1597,11 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         syncSkyParallax();
         fitScenes();
         renderNotifications();
+        scheduleOfficeSceneViewportSync();
       });
+      window.setInterval(() => {
+        syncOfficeWallDashboardHeat();
+      }, 1000);
 
       refreshFleet()
         .then(() => {

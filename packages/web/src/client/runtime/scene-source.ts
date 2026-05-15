@@ -107,6 +107,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         );
       }
 
+      function isFloatingHermesAgent(agent) {
+        return agent
+          && agent.source === "hermes"
+          && agent.sourceKind === "hermes:roaming";
+      }
+
       function chairSpriteForAgent(agent) {
         return pixelOffice.chairs[stableHash(agent.id) % pixelOffice.chairs.length];
       }
@@ -123,6 +129,128 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           y: walkwayY + (compact ? 2 : 4) + row * stepY + (column % 2 === 0 ? 0 : 2),
           flip: (index + row) % 2 === 1
         };
+      }
+
+      function floatingHermesSlotAt(index, compact, roomPixelWidth, wallHeight) {
+        const columns = compact ? 3 : 4;
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        const stepX = compact ? 24 : 30;
+        const stepY = compact ? 13 : 15;
+        const startX = Math.max(compact ? 40 : 56, roomPixelWidth - (compact ? 126 : 158));
+        return {
+          x: Math.min(roomPixelWidth - (compact ? 62 : 76), startX + column * stepX),
+          y: Math.max(6, Math.min(wallHeight - (compact ? 34 : 42), (compact ? 9 : 11) + row * stepY + (column % 2 === 0 ? 0 : 2))),
+          flip: (index + row) % 2 === 0
+        };
+      }
+
+      const OFFICE_WALL_HEAT_HALF_LIFE_MS = 3 * 60 * 1000;
+
+      function officeWallGeneratedAtMs(snapshot) {
+        const activityGeneratedAt = Date.parse(snapshot && snapshot.activity && snapshot.activity.generatedAt || "");
+        if (Number.isFinite(activityGeneratedAt)) {
+          return activityGeneratedAt;
+        }
+        const snapshotGeneratedAt = Date.parse(snapshot && snapshot.generatedAt || "");
+        return Number.isFinite(snapshotGeneratedAt) ? snapshotGeneratedAt : Date.now();
+      }
+
+      function officeWallDecayedHeat(snapshot, entry) {
+        const ageMs = Math.max(0, Date.now() - officeWallGeneratedAtMs(snapshot));
+        const decay = Math.pow(0.5, ageMs / OFFICE_WALL_HEAT_HALF_LIFE_MS);
+        const score = Number(entry && entry.score);
+        const rawHeat = Number.isFinite(score)
+          ? score * decay * 4
+          : (Number(entry && entry.heat) || 0) * decay;
+        const clamped = Math.max(1, Math.min(100, rawHeat));
+        return Math.round(clamped * 10) / 10;
+      }
+
+      function buildOfficeWallDashboardData(snapshot) {
+        const counts = countsForSnapshot(snapshot);
+        const activity = activityWallSnapshot(snapshot);
+        const hotChanges = activity.hotChanges;
+        const hotGrid = [];
+        const columns = ["script", "doc", "media"];
+
+        columns.forEach((column) => {
+          hotChanges
+            .filter((entry) => (entry && entry.fileType) === column)
+            .slice(0, 3)
+            .forEach((entry, index) => {
+              const label = activityWallItemName(entry.label || entry.path, activityWallPath(snapshot, entry.path));
+              hotGrid.push({
+                kind: "file",
+                column,
+                label,
+                path: entry.path || "",
+                displayPath: activityWallPath(snapshot, entry.path),
+                branch: entry.branch || null,
+                branches: Array.isArray(entry.branches) ? entry.branches : [],
+                users: Array.isArray(entry.users) ? entry.users : [],
+                updatedAt: entry.lastChangedAt || "",
+                tone: column,
+                heat: officeWallDecayedHeat(snapshot, entry),
+                score: Number(entry.score) || 0,
+                generatedAtMs: officeWallGeneratedAtMs(snapshot),
+                colorIndex: index
+              });
+            });
+        });
+
+        return {
+          title: "Hot",
+          counts,
+          generatedAtMs: officeWallGeneratedAtMs(snapshot),
+          fileCount: hotChanges.length,
+          hotGrid
+        };
+      }
+
+      function buildOfficeWallDashboardModel(snapshot, room, roomX, roomY, roomPixelWidth, wallHeight, entrance, tile, compact) {
+        const leftEdge = roomX + Math.round(tile * 0.75);
+        const rightEdge = roomX + Math.round(entrance.centerDoorX - tile * 0.6);
+        const availableWidth = Math.max(0, rightEdge - leftEdge);
+        if (availableWidth < tile * 5) {
+          return null;
+        }
+        const width = Math.min(availableWidth, compact ? tile * 8 : tile * 9);
+        const height = Math.min(compact ? 34 : 38, Math.max(32, wallHeight - 16));
+        const x = leftEdge + Math.max(0, Math.round((availableWidth - width) / 2));
+        const y = roomY + Math.max(5, Math.round((wallHeight - height) / 2));
+        return {
+          id: room.id + "::wall-dashboard",
+          roomId: room.id,
+          x,
+          y,
+          width,
+          height,
+          ...buildOfficeWallDashboardData(snapshot)
+        };
+      }
+
+      function officeWallDashboardSceneToken(snapshot) {
+        const data = buildOfficeWallDashboardData(snapshot);
+        return JSON.stringify({
+          title: data.title,
+          counts: data.counts,
+          fileCount: data.fileCount,
+          hotGrid: data.hotGrid.map((row) => ({
+            kind: row.kind,
+            column: row.column,
+            label: row.label,
+            path: row.path,
+            displayPath: row.displayPath,
+            branch: row.branch,
+            branches: row.branches,
+            users: row.users,
+            updatedAt: row.updatedAt,
+            tone: row.tone,
+            score: row.score,
+            colorIndex: row.colorIndex
+          }))
+        });
       }
 
       function isUtilityRoom(room) {
@@ -154,6 +282,213 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const primaryRoomId = visibleRooms.find((room) => room.path === "." || room.id === "root")?.id || visibleRooms[0]?.id || null;
         visibleRooms.sort((left, right) => (right.width * right.height) - (left.width * left.height));
         return { visibleRooms, roomAlias, primaryRoomId };
+      }
+
+      const OFFICE_WALL_FILE_MAX_AGE_MS = 10 * 60 * 1000;
+      const OFFICE_WALL_COMMAND_MAX_AGE_MS = 12 * 60 * 1000;
+      const OFFICE_WALL_FILE_LIMIT = 3;
+      const OFFICE_WALL_COMMAND_LIMIT = 2;
+
+      function officeWallEventTimeMs(event) {
+        const createdAtMs = Date.parse(event && event.createdAt || "");
+        return Number.isFinite(createdAtMs) ? createdAtMs : 0;
+      }
+
+      function officeWallShortText(value, maxLength = 32) {
+        const normalized = String(value || "").replace(/\\s+/g, " ").trim();
+        const limit = Math.max(8, Number(maxLength) || 32);
+        if (normalized.length <= limit) {
+          return normalized;
+        }
+        return normalized.slice(0, limit - 3).trimEnd() + "...";
+      }
+
+      function officeWallPathRoomId(snapshot, location, rooms, primaryRoomId) {
+        const clean = relativeLocation(snapshot && snapshot.projectRoot, String(location || ""));
+        if (!clean || clean === ".") {
+          return primaryRoomId;
+        }
+        let bestRoomId = primaryRoomId;
+        let bestScore = -1;
+        for (const room of rooms || []) {
+          const roomPath = String(room && room.path || ".");
+          if (roomPath === ".") {
+            continue;
+          }
+          if (clean === roomPath || clean.startsWith(roomPath + "/")) {
+            const score = roomPath.length;
+            if (score > bestScore) {
+              bestRoomId = room.id;
+              bestScore = score;
+            }
+          }
+        }
+        return bestRoomId;
+      }
+
+      function officeWallEventRoomId(snapshot, event, agentsByThreadId, rooms, roomAlias, primaryRoomId) {
+        const agent = event && event.threadId ? agentsByThreadId.get(event.threadId) : null;
+        if (agent && agent.roomId) {
+          return roomAlias.get(agent.roomId) || agent.roomId || primaryRoomId;
+        }
+        return officeWallPathRoomId(snapshot, event && (event.path || event.cwd || event.grantRoot), rooms, primaryRoomId);
+      }
+
+      function officeWallFileEntry(snapshot, event, createdAtMs) {
+        const path = event && event.path ? event.path : null;
+        const fallback = event && (event.detail || event.title) ? (event.detail || event.title) : "Files";
+        const label = notificationFileName(snapshot.projectRoot, path || fallback, fallback) || "files";
+        const deltas = [];
+        if (Number.isFinite(event && event.linesAdded) && Number(event.linesAdded) > 0) {
+          deltas.push("+" + Math.max(0, Number(event.linesAdded)));
+        }
+        if (Number.isFinite(event && event.linesRemoved) && Number(event.linesRemoved) > 0) {
+          deltas.push("-" + Math.max(0, Number(event.linesRemoved)));
+        }
+        return {
+          key: "file::" + (path || event.itemId || event.id || label),
+          text: officeWallShortText(label, 28),
+          meta: deltas.join(" "),
+          at: createdAtMs
+        };
+      }
+
+      function officeWallCommandEntry(snapshot, key, text, createdAtMs, active = false) {
+        const normalized = normalizeDisplayText(snapshot.projectRoot, text || "Command") || "Command";
+        return {
+          key,
+          text: officeWallShortText(normalized, 34),
+          meta: active ? "now" : "",
+          at: createdAtMs
+        };
+      }
+
+      function buildOfficeWallActivity(snapshot, roomId, rooms, roomAlias, primaryRoomId) {
+        const now = Date.now();
+        const agentsByThreadId = new Map(
+          (snapshot.agents || [])
+            .filter((agent) => agent && agent.threadId)
+            .map((agent) => [agent.threadId, agent])
+        );
+        const filesByKey = new Map();
+        const commandGroups = new Map();
+
+        for (const event of snapshot.events || []) {
+          if (!event) {
+            continue;
+          }
+          const createdAtMs = officeWallEventTimeMs(event);
+          const ageMs = now - createdAtMs;
+          const eventRoomId = officeWallEventRoomId(snapshot, event, agentsByThreadId, rooms, roomAlias, primaryRoomId);
+          if (eventRoomId !== roomId) {
+            continue;
+          }
+          if ((event.kind === "fileChange" || event.method === "turn/diff/updated") && ageMs >= 0 && ageMs <= OFFICE_WALL_FILE_MAX_AGE_MS) {
+            const entry = officeWallFileEntry(snapshot, event, createdAtMs);
+            const previous = filesByKey.get(entry.key);
+            if (!previous || entry.at > previous.at) {
+              filesByKey.set(entry.key, entry);
+            }
+          }
+          if (event.kind === "command" && ageMs >= 0 && ageMs <= OFFICE_WALL_COMMAND_MAX_AGE_MS) {
+            const groupKey = event.itemId || event.threadId || event.id;
+            const previous = commandGroups.get(groupKey) || {
+              key: "cmd::" + groupKey,
+              text: "",
+              at: 0,
+              latestPhase: "started"
+            };
+            const text = event.command || event.detail || event.title || previous.text || "Command";
+            if (createdAtMs >= previous.at) {
+              commandGroups.set(groupKey, {
+                key: previous.key,
+                text,
+                at: createdAtMs,
+                latestPhase: event.phase || "updated"
+              });
+            } else if (!previous.text && text) {
+              previous.text = text;
+            }
+          }
+        }
+
+        const commandsByKey = new Map();
+        for (const agent of snapshot.agents || []) {
+          if (!agent || !agent.roomId) {
+            continue;
+          }
+          const agentRoomId = roomAlias.get(agent.roomId) || agent.roomId;
+          if (agentRoomId !== roomId) {
+            continue;
+          }
+          const isCommandAgent = agent.activityEvent && agent.activityEvent.type === "commandExecution";
+          if (!isCommandAgent && agent.state !== "running" && agent.state !== "validating") {
+            continue;
+          }
+          if (agent.isCurrent !== true && agent.isOngoing !== true) {
+            continue;
+          }
+          const updatedAtMs = Date.parse(agent.updatedAt || "");
+          const text = (agent.activityEvent && agent.activityEvent.title) || agent.detail || "Command";
+          const entry = officeWallCommandEntry(snapshot, "agent::" + agent.id, text, Number.isFinite(updatedAtMs) ? updatedAtMs : now, true);
+          commandsByKey.set(entry.key, entry);
+        }
+
+        for (const group of commandGroups.values()) {
+          if (["completed", "failed", "interrupted"].includes(group.latestPhase)) {
+            continue;
+          }
+          const entry = officeWallCommandEntry(snapshot, group.key, group.text, group.at, false);
+          const duplicate = Array.from(commandsByKey.values()).some((current) => current.text === entry.text);
+          if (!duplicate) {
+            commandsByKey.set(entry.key, entry);
+          }
+        }
+
+        return {
+          files: Array.from(filesByKey.values())
+            .sort((left, right) => right.at - left.at)
+            .slice(0, OFFICE_WALL_FILE_LIMIT),
+          commands: Array.from(commandsByKey.values())
+            .sort((left, right) => right.at - left.at)
+            .slice(0, OFFICE_WALL_COMMAND_LIMIT)
+        };
+      }
+
+      function officeWallSceneToken(snapshot) {
+        const now = Date.now();
+        const eventTokens = (snapshot.events || [])
+          .filter((event) => {
+            const createdAtMs = officeWallEventTimeMs(event);
+            const ageMs = now - createdAtMs;
+            if (!Number.isFinite(createdAtMs) || ageMs < 0) {
+              return false;
+            }
+            if (event.kind === "fileChange" || event.method === "turn/diff/updated") {
+              return ageMs <= OFFICE_WALL_FILE_MAX_AGE_MS;
+            }
+            if (event.kind === "command") {
+              return ageMs <= OFFICE_WALL_COMMAND_MAX_AGE_MS;
+            }
+            return false;
+          })
+          .slice(0, 48)
+          .map(eventSnapshotToken);
+        const commandAgentTokens = (snapshot.agents || [])
+          .filter((agent) =>
+            agent
+            && (agent.state === "running" || agent.state === "validating" || (agent.activityEvent && agent.activityEvent.type === "commandExecution"))
+            && (agent.isCurrent === true || agent.isOngoing === true)
+          )
+          .map((agent) => [
+            agent.id,
+            agent.roomId || "",
+            agent.state || "",
+            agent.updatedAt || "",
+            agent.detail || "",
+            agent.activityEvent && agent.activityEvent.title || ""
+          ].join(":"));
+        return eventTokens.concat(commandAgentTokens).join("||");
       }
 
       function renderTerminalSnapshot(snapshot) {
@@ -294,8 +629,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const maxY = Math.max(...rooms.map((room) => room.y + room.height), 16);
         const waitingAgents = sortAgentsStably(
           \`\${snapshot.projectRoot}::\${compact ? "compact-waiting" : "waiting"}\`,
-          snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !shouldSeatAtWorkstation(agent))
+          snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !isFloatingHermesAgent(agent) && !shouldSeatAtWorkstation(agent))
         );
+        const floatingHermesAgents = sortAgentsStably(
+          \`\${snapshot.projectRoot}::\${compact ? "compact-floating-hermes" : "floating-hermes"}\`,
+          snapshot.agents.filter(isFloatingHermesAgent)
+        ).slice(0, 4);
         const allRestingAgents = restingAgentsFor(snapshot, compact);
         const restingAgents = allRestingAgents
           .filter((agent) =>
@@ -304,7 +643,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             && Boolean(agent.threadId || agent.taskId || agent.url || agent.source === "claude")
           )
           .slice(0, 4);
-        const offDeskAgentIds = new Set([...waitingAgents, ...allRestingAgents].map((agent) => agent.id));
+        const offDeskAgentIds = new Set([...waitingAgents, ...allRestingAgents, ...floatingHermesAgents].map((agent) => agent.id));
         const model = {
           projectRoot: snapshot.projectRoot,
           compact,
@@ -313,6 +652,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           height: maxY * tile,
           rooms: [],
           roomDoors: [],
+          wallDashboards: [],
           tileObjects: [],
           furniture: [],
           facilities: [],
@@ -418,6 +758,22 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             backdropWidth,
             backdropHeight
           });
+          if (isPrimaryRoom) {
+            const wallDashboard = buildOfficeWallDashboardModel(
+              snapshot,
+              room,
+              roomX,
+              roomY,
+              roomPixelWidth,
+              layoutConfig.deskTopY,
+              entrance,
+              tile,
+              compact
+            );
+            if (wallDashboard) {
+              model.wallDashboards.push(wallDashboard);
+            }
+          }
           model.tileObjects.push(
             buildSceneTileObject(room.id + "::clock", room.id, pixelOffice.props.clock, centerColumn - 2, -2, 1, 1, 3, { anchor: "wall" })
           );
@@ -653,8 +1009,63 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           });
 
           if (isPrimaryRoom) {
+            const floatingHermesAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "floating-hermes", floatingHermesAgents, 4);
             const waitingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "waiting", waitingAgents);
             const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents, 4);
+            floatingHermesAssignments.forEach(({ agent, slotIndex }) => {
+              const slot = floatingHermesSlotAt(slotIndex, compact, roomPixelWidth, layoutConfig.deskTopY);
+              const stagedOffset = openThreadStageOffset(agent);
+              const avatarX = roomX + slot.x + stagedOffset.x;
+              const avatarY = roomY + slot.y + stagedOffset.y;
+              const anchorX = avatarX + Math.round(tile * 0.4);
+              const anchorY = avatarY + Math.round(tile * 0.55);
+              const avatarSize = avatarVisualSizeForAgent(agent, compact ? 0.92 : 1);
+              model.recAgents.push({
+                id: agent.id,
+                key: agentKey(snapshot.projectRoot, agent),
+                roomId: room.id,
+                kind: "floating",
+                label: agent.label,
+                state: agent.state,
+                role: agentRole(agent),
+                focusKey: focusAgentKey(snapshot, agent),
+                focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                appearance: agent.appearance,
+                hatId: effectiveHatIdForAgent(agent),
+                needsUser: agent.needsUser || null,
+                turnSignal: recentTurnSignalForAgent(snapshot, agent),
+                activityCue: recentActivityCueForAgent(snapshot, agent),
+                statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
+                sprite: avatarSize.avatar.url,
+                x: avatarX,
+                y: avatarY,
+                width: avatarSize.width,
+                height: avatarSize.height,
+                depthBaseY: room.floorTop,
+                z: 18,
+                bubble: agent.isOngoing === true ? "..." : null,
+                flip: slot.flip
+              });
+              agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
+              registerThreadPanel(agent);
+              model.anchors.push({
+                id: "agent::" + agentKey(snapshot.projectRoot, agent),
+                type: "agent",
+                key: agentKey(snapshot.projectRoot, agent),
+                x: anchorX,
+                y: anchorY,
+                left: avatarX,
+                top: avatarY,
+                width: avatarSize.width,
+                height: avatarSize.height,
+                threadId: agent.threadId || "",
+                replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
+                focusKey: focusAgentKey(snapshot, agent),
+                focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
+                threadOpen: Boolean(sceneThreadPanelState(agent))
+              });
+            });
             waitingAssignments.forEach(({ agent, slotIndex }) => {
               const slot = wallsideWaitingSlotAt(slotIndex, compact, roomPixelWidth, layoutConfig.recAreaWalkwayGridY);
               const stagedOffset = openThreadStageOffset(agent);
@@ -796,15 +1207,24 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         if (!renderer) {
           return;
         }
+        if (renderer.destroyed) {
+          return;
+        }
+        renderer.destroyed = true;
         try {
           if (renderer.resizeObserver) {
             renderer.resizeObserver.disconnect();
+            renderer.resizeObserver = null;
           }
           if (renderer.app && renderer.animateTick) {
             renderer.app.ticker.remove(renderer.animateTick);
+            renderer.animateTick = null;
           }
           if (renderer.app) {
             renderer.app.destroy(true, { children: true });
+          }
+          if (renderer.canvasContainer instanceof HTMLElement) {
+            renderer.canvasContainer.innerHTML = "";
           }
         } catch {}
       }
@@ -840,6 +1260,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           anchorLayer,
           threadLayer: threadLayer instanceof HTMLElement ? threadLayer : null,
           app: new window.PIXI.Application(),
+          destroyed: false,
+          initError: null,
           root: null,
           model: null,
           ready: null,
@@ -864,6 +1286,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           resolution: Math.max(1, Number(window.devicePixelRatio || 1)),
           roundPixels: true
         }).then(() => {
+          if (renderer.destroyed) {
+            try {
+              renderer.app.destroy(true, { children: true });
+            } catch {}
+            return;
+          }
           if (window.PIXI.TextureStyle && window.PIXI.SCALE_MODES) {
             window.PIXI.TextureStyle.defaultOptions.scaleMode = window.PIXI.SCALE_MODES.NEAREST;
           }
@@ -880,7 +1308,19 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             const now = performance.now();
             const deltaMs = renderer.app?.ticker?.deltaMS || 16;
             renderer.animatedSprites.forEach((entry) => {
-              if (!entry || (!entry.sprite && entry.kind !== "blink")) {
+              if (!entry || (!entry.sprite && entry.kind !== "blink" && entry.kind !== "wall-dashboard-row")) {
+                return;
+              }
+              if (entry.kind === "wall-dashboard-row") {
+                if (!entry.node || !entry.node.parent) {
+                  return;
+                }
+                const duration = Math.max(120, Number(entry.durationMs) || 420);
+                const elapsed = Math.max(0, now - Number(entry.startedAt || now));
+                const progress = Math.min(1, elapsed / duration);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                entry.node.y = pixelSnap((Number(entry.fromY) || 0) + ((Number(entry.toY) || 0) - (Number(entry.fromY) || 0)) * eased);
+                entry.node.alpha = Math.min(1, 0.62 + eased * 0.38);
                 return;
               }
               if (entry.kind === "motion") {
@@ -1414,6 +1854,16 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 }
                 return !done;
               }
+              if (entry.kind === "wall-dashboard-row") {
+                const done = !entry.node
+                  || !entry.node.parent
+                  || now - Number(entry.startedAt || now) >= Number(entry.durationMs || 420);
+                if (done && entry.node) {
+                  entry.node.y = pixelSnap(Number(entry.toY) || 0);
+                  entry.node.alpha = 1;
+                }
+                return !done;
+              }
               if (entry.kind === "thrown-item") {
                 const done = now - Number(entry.startedAt || now) >= Number(entry.durationMs || 700);
                 if (done && entry.sprite && entry.sprite.parent) {
@@ -1479,9 +1929,21 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             }
           });
           renderer.resizeObserver.observe(host);
+        }).catch((error) => {
+          renderer.initError = error;
+          destroyOfficeRenderer(renderer);
         });
         officeSceneRenderers.set(key, renderer);
         await renderer.ready;
+        if (renderer.destroyed || renderer.initError) {
+          if (officeSceneRenderers.get(key) === renderer) {
+            officeSceneRenderers.delete(key);
+          }
+          if (renderer.initError) {
+            console.error("office scene renderer init failed", renderer.initError);
+          }
+          return null;
+        }
         return renderer;
       }
 

@@ -2,7 +2,7 @@ import { env, exit } from "node:process";
 
 interface WebQueryCliOptions {
   repo: string;
-  command: "recent" | "last";
+  command: "recent" | "last" | "gist";
   scope: "local" | "team";
   values: Record<string, string | number>;
   json: boolean;
@@ -115,10 +115,10 @@ function parseWebQueryCliArgs(args: string[]): WebQueryCliOptions {
 
   const [repo, command, ...extras] = positionals;
   if (!repo || !command) {
-    throw new Error("web query requires <repo> and <recent|last>");
+    throw new Error("web query requires <repo> and <gist|recent|last>");
   }
-  if (command !== "recent" && command !== "last") {
-    throw new Error("web query command must be recent or last");
+  if (command !== "gist" && command !== "recent" && command !== "last") {
+    throw new Error("web query command must be gist, recent, or last");
   }
 
   for (const extra of extras) {
@@ -183,6 +183,60 @@ function formatWebQueryItem(item: Record<string, unknown>): string {
   return `  - ${timestamp} [event/${kind}/${phase}] ${label}${detail}`;
 }
 
+function formatGistFileChange(change: Record<string, unknown>): string {
+  const label = typeof change.label === "string" && change.label.length > 0 ? change.label : String(change.path || "(unknown)");
+  const heat = typeof change.heat === "number" && Number.isFinite(change.heat) ? ` heat ${Math.round(change.heat)}` : "";
+  const count = typeof change.changeCount === "number" && Number.isFinite(change.changeCount) ? ` x${change.changeCount}` : "";
+  const branch =
+    typeof change.branch === "string" && change.branch.length > 0
+      ? ` [${change.branch}]`
+      : "";
+  const users = Array.isArray(change.users)
+    ? change.users.filter((user): user is string => typeof user === "string" && user.length > 0)
+    : [];
+  const user = users.length > 0 ? ` @ ${users.join(", ")}` : "";
+  const path = typeof change.path === "string" && change.path.length > 0 ? ` - ${change.path}` : "";
+  return `  - ${label}${branch}${user}${heat}${count}${path}`;
+}
+
+function formatGistAgent(agent: Record<string, unknown>): string {
+  const label = typeof agent.label === "string" ? agent.label : "(unknown)";
+  const state = typeof agent.state === "string" ? agent.state : "unknown";
+  const source = typeof agent.source === "string" ? agent.source : "unknown";
+  const message = typeof agent.lastMessage === "string" && agent.lastMessage.length > 0 ? ` - ${agent.lastMessage}` : "";
+  const peer = typeof agent.peerLabel === "string" && agent.peerLabel.length > 0 ? ` @ ${agent.peerLabel}` : "";
+  const lastFile = agent.lastFileChange && typeof agent.lastFileChange === "object"
+    ? agent.lastFileChange as Record<string, unknown>
+    : null;
+  const file = lastFile
+    ? ` | file ${String(lastFile.label || lastFile.path || "(unknown)")}`
+    : "";
+  return `  - [${source}/${state}] ${label}${peer}${message}${file}`;
+}
+
+function printWebQueryGist(payload: Record<string, unknown>): boolean {
+  const gist = payload.gist && typeof payload.gist === "object" ? payload.gist as Record<string, unknown> : null;
+  if (!gist) {
+    return false;
+  }
+  const hotChanges = Array.isArray(gist.hotChanges) ? gist.hotChanges as Record<string, unknown>[] : [];
+  const activeAgents = Array.isArray(gist.activeAgents) ? gist.activeAgents as Record<string, unknown>[] : [];
+  console.log(`Gist: ${typeof gist.summary === "string" ? gist.summary : "state sync"}`);
+  console.log("Hot changes:");
+  if (hotChanges.length === 0) {
+    console.log("  (none)");
+  } else {
+    hotChanges.forEach((change) => console.log(formatGistFileChange(change)));
+  }
+  console.log("Active agents:");
+  if (activeAgents.length === 0) {
+    console.log("  (none)");
+  } else {
+    activeAgents.forEach((agent) => console.log(formatGistAgent(agent)));
+  }
+  return true;
+}
+
 function printWebQueryResponse(payload: Record<string, unknown>): void {
   const project = payload.matchedProject && typeof payload.matchedProject === "object"
     ? payload.matchedProject as Record<string, unknown>
@@ -197,6 +251,9 @@ function printWebQueryResponse(payload: Record<string, unknown>): void {
   console.log(`Repo: ${String(project.repoName || project.projectLabel || payload.repo)}`);
   console.log(`Project: ${String(project.projectLabel || "(unknown)")}`);
   console.log(`Query: ${String(payload.scope)} ${String(payload.command)} (${String(payload.dataSource)}${teamNote})`);
+  if (printWebQueryGist(payload)) {
+    return;
+  }
   if (items.length === 0) {
     console.log("  (no matching data)");
     return;
