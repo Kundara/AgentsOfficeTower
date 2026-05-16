@@ -139,6 +139,57 @@ function upsertThreadTurn(thread: CodexThread, turn: CodexThread["turns"][number
   };
 }
 
+const NON_FINAL_WORK_ITEM_TYPES = new Set([
+  "agentMessage",
+  "plan",
+  "reasoning",
+  "commandExecution",
+  "fileChange",
+  "mcpToolCall",
+  "dynamicToolCall",
+  "collabToolCall",
+  "collabAgentToolCall",
+  "webSearch",
+  "imageView",
+  "enteredReviewMode",
+  "exitedReviewMode",
+  "contextCompaction"
+]);
+
+function turnHasFinalAnswer(turn: CodexThread["turns"][number]): boolean {
+  return turn.items.some((item) => {
+    const record = asRecord(item);
+    return asString(record?.type) === "agentMessage" && asString(record?.phase) === "final_answer";
+  });
+}
+
+function turnHasNonFinalWorkSignal(turn: CodexThread["turns"][number]): boolean {
+  return turn.items.some((item) => {
+    const record = asRecord(item);
+    const type = asString(record?.type);
+    if (!type || !NON_FINAL_WORK_ITEM_TYPES.has(type)) {
+      return false;
+    }
+    return type !== "agentMessage" || asString(record?.phase) !== "final_answer";
+  });
+}
+
+function threadStillAwaitsFinalAnswer(thread: CodexThread): boolean {
+  if (thread.status.type === "systemError") {
+    return false;
+  }
+  const lastTurn = thread.turns.at(-1);
+  if (!lastTurn || lastTurn.status === "failed" || turnHasFinalAnswer(lastTurn)) {
+    return false;
+  }
+  return lastTurn.status === "inProgress" || turnHasNonFinalWorkSignal(lastTurn);
+}
+
+function isFreshEnoughToPromoteAwaitingFinalAnswer(thread: CodexThread): boolean {
+  const updatedAtMs = thread.updatedAt * 1000;
+  return Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs <= ACTIVE_SUBSCRIPTION_WINDOW_MS;
+}
+
 export interface ProjectLiveMonitorOptions {
   projectRoot: string;
   localLimit?: number;
@@ -951,6 +1002,9 @@ export class ProjectLiveMonitor extends EventEmitter {
       const wasHydrated = this.hydratedThreadIds.has(threadId);
       const hasLiveSubscription = this.subscribedThreadIds.has(threadId);
       const previousThread = this.threads.get(threadId) ?? null;
+      const wasOngoing =
+        this.ongoingThreadIds.has(threadId)
+        || (previousThread ? isOngoingThread(previousThread) : false);
       const readThread = await this.client.readThread(threadId);
       const thread = listedThread
         ? {
@@ -962,9 +1016,17 @@ export class ProjectLiveMonitor extends EventEmitter {
         : readThread;
       this.clearMatchingNote(`Thread refresh failed (${threadId.slice(0, 8)}):`);
       this.threads.set(threadId, thread);
-      if (isOngoingThread(thread)) {
+      const awaitingFinalAnswer = threadStillAwaitsFinalAnswer(thread);
+      const shouldPromoteAwaitingFinalAnswer =
+        awaitingFinalAnswer
+        && (
+          hasLiveSubscription
+          || wasOngoing
+          || isFreshEnoughToPromoteAwaitingFinalAnswer(thread)
+        );
+      if (isOngoingThread(thread) || shouldPromoteAwaitingFinalAnswer) {
         this.markThreadLive(threadId);
-      } else if (previousThread && isOngoingThread(previousThread)) {
+      } else if (wasOngoing) {
         const nextMessage = latestThreadAgentMessage(thread);
         const hasFinalAnswer = nextMessage?.phase === "final_answer";
         const pendingNotLoadedStop =

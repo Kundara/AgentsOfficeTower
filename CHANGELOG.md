@@ -129,6 +129,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed desktop reread fallback messages so an older missed final answer is not replayed as fresh desk activity after a newer user prompt starts the next turn.
 - Fixed active Codex workstation release so `thread/closed`, non-final `turn/completed`, and non-final `turn/interrupted` no longer send an active desktop session back to the rec area between assistant progress updates.
 - Fixed monitor-tracked Codex sessions so stale `notLoaded` rereads without a final answer no longer clear ongoing workstation occupancy or let the browser rec-room path claim the agent while the thread is still in progress.
+- Fixed resumed/subscribed Codex desktop threads so a hydrated latest turn with non-final work but no `final_answer` is promoted into explicit ongoing desk occupancy instead of cooling into the rec area after the freshness fallback expires.
 - Fixed desktop `notLoaded` prompt handling so fresh unhydrated rows reserve a desk for about 8 seconds after the user types, while stale finished fallback rows use the 3-second cooldown instead of keeping completed threads looking active for about a minute.
 - Fixed Codex request parsing so MCP elicitation requests, permission-profile approval requests, and legacy approval request names surface as typed waiting or blocked work instead of disappearing from the durable queue.
 - Fixed Windows Codex runtime candidate ordering so a native `codex.cmd` on `PATH` is tried before WSL fallbacks, matching the documented CLI-first behavior.

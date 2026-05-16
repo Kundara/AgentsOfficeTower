@@ -3775,6 +3775,8 @@ test("initial discovery waits for resumed live thread hydration before the first
   assert.equal(agent.liveSubscription, "subscribed");
   assert.equal(agent.state, "thinking");
   assert.equal(agent.isCurrent, true);
+  assert.equal(agent.isOngoing, true);
+  assert.equal(monitor.ongoingThreadIds.has(listedThread.id), true);
 });
 
 test("initial discovery still subscribes active older threads before their first new update", async () => {
