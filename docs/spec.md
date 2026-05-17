@@ -203,6 +203,7 @@ Current browser settings surfaces are:
 - Quiet local desk-live work now gets a longer about-3-minute stay-on-desk fallback after its last update when it has recent non-final activity, is still subscribed, or is sitting in a transient `notLoaded` state; once the live monitor has observed the thread as ongoing, `isOngoing` is stronger than that fallback window and keeps the desk until final answer or hard terminal state.
 - Workstation release should be conservative. Ordinary poll jitter, UI rerenders, debug toggles, or temporary freshness gaps must not pull a still-working agent off a desk.
 - A workstation should only be released when the thread has actually settled into a resting/finished state according to the browser placement rules, with the explicit post-stop cooldown described below.
+- Stale local Codex subagent rows that still report `status.type = "active"` but have no in-progress turn and no fresh update for about 20 minutes should not keep desks alive or inflate active counts.
 - The rec area should keep at most the 4 most recent lead sessions visible;
   it may show fewer while one of those visible resting leads is back at work.
 - If one of those visible resting leads becomes active again, older hidden leads should not pop back into the rec area just to fill that seat for a moment.
@@ -239,8 +240,8 @@ Current browser settings surfaces are:
 - Agent movement in the retained browser scene should follow walkable tile paths instead of straight-line tween resets.
 - Tile pathfinding should avoid occupied cells from furniture, workstation footprints, and already-seated agents.
 - Visual-only updates such as debug overlays, text-scale changes, or scene host rerenders must not be treated as a new placement instruction.
-- A newly visible active agent should enter from the room door and walk to its assigned workstation.
-- That same door-entry behavior applies to subagents, not just top-level leads.
+- A newly visible top-level active agent should enter from the room door and walk to its assigned workstation.
+- A newly visible subagent should use that same room-door entry path; parent/child relationship arrows should communicate delegation without making children spawn out of the parent avatar.
 - If a resting lead becomes active again, it should leave its rec-area seat and walk to its newly assigned workstation instead of despawning and respawning.
 - When an agent truly leaves the visible scene, it should walk back out through the room door.
 - Each room door should render as a two-part sliding door with a dark recess behind it.

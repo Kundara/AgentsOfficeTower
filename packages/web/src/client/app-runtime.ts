@@ -3292,15 +3292,37 @@ export function startClientApp(): void {
 
       function countsForSnapshot(snapshot) {
         const counters = { total: 0, active: 0, waiting: 0, blocked: 0, cloud: 0 };
+        const agentsById = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
+        const countedFamilies = new Map();
         for (const agent of snapshot.agents) {
           if (!isBusyAgent(agent)) {
             continue;
           }
+          let familyAgent = agent;
+          const visited = new Set([agent.id]);
+          while (
+            familyAgent.parentThreadId
+            && agentsById.has(familyAgent.parentThreadId)
+            && !visited.has(familyAgent.parentThreadId)
+          ) {
+            familyAgent = agentsById.get(familyAgent.parentThreadId);
+            visited.add(familyAgent.id);
+          }
+          const familyKey = familyAgent.id || agent.id;
+          const existing = countedFamilies.get(familyKey) || { cloud: false, blocked: false, waiting: false, active: false };
+          countedFamilies.set(familyKey, {
+            cloud: existing.cloud || agent.source === "cloud" || agent.state === "cloud",
+            blocked: existing.blocked || agent.state === "blocked",
+            waiting: existing.waiting || agent.state === "waiting",
+            active: existing.active || (agent.state !== "done" && agent.state !== "idle" && agent.state !== "cloud")
+          });
+        }
+        for (const family of countedFamilies.values()) {
           counters.total += 1;
-          if (agent.state === "waiting") counters.waiting += 1;
-          else if (agent.state === "blocked") counters.blocked += 1;
-          else if (agent.state === "cloud") counters.cloud += 1;
-          else if (agent.state !== "done" && agent.state !== "idle") counters.active += 1;
+          if (family.blocked) counters.blocked += 1;
+          else if (family.waiting) counters.waiting += 1;
+          else if (family.cloud) counters.cloud += 1;
+          else if (family.active) counters.active += 1;
         }
         return counters;
       }
@@ -4410,11 +4432,27 @@ export function startClientApp(): void {
       const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;
       const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
       const QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS = 3 * 60 * 1000;
+      const ACTIVE_SUBAGENT_WORKSTATION_WINDOW_MS = 20 * 60 * 1000;
+
+      function isStaleRuntimeActiveSubagent(agent) {
+        if (
+          !agent
+          || agent.source !== "local"
+          || !agent.parentThreadId
+          || agent.statusText !== "active"
+          || agent.needsUser !== null
+        ) {
+          return false;
+        }
+        const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
+        return Number.isFinite(updatedAt) && Date.now() - updatedAt > ACTIVE_SUBAGENT_WORKSTATION_WINDOW_MS;
+      }
 
       function isRuntimeActiveLocalAgent(agent) {
         return agent
           && agent.source === "local"
-          && agent.statusText === "active";
+          && agent.statusText === "active"
+          && !isStaleRuntimeActiveSubagent(agent);
       }
 
       function workstationDoneGraceMs(agent) {
@@ -7225,6 +7263,7 @@ export function startClientApp(): void {
                 pod.agents.push({
                   id: agent.id,
                   key: agentKey(snapshot.projectRoot, agent),
+                  parentThreadId: agent.parentThreadId || null,
                   roomId: room.id,
                   label: agent.label,
                   state: agent.state,
@@ -7316,6 +7355,7 @@ export function startClientApp(): void {
                 ? {
                     id: entry.agent.id,
                     key: agentKey(snapshot.projectRoot, entry.agent),
+                    parentThreadId: entry.agent.parentThreadId || null,
                     roomId: room.id,
                     label: entry.agent.label,
                     state: entry.agent.state,

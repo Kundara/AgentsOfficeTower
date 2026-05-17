@@ -6,6 +6,7 @@ const ACTIVE_PRESENCE_WINDOW_MS = 3 * 60 * 1000;
 const ACTIVE_CLOUD_WINDOW_MS = 8 * 60 * 60 * 1000;
 const ACTIVE_FRESH_LOCAL_WINDOW_MS = 30 * 1000;
 const QUIET_LIVE_LOCAL_WINDOW_MS = 3 * 60 * 1000;
+const ACTIVE_SUBAGENT_WINDOW_MS = 20 * 60 * 1000;
 export const RECENT_DONE_GRACE_MS = 3 * 1000;
 // Read-only notLoaded fallback is only a bridge for the final toast/readability cooldown.
 const RECENT_NOT_LOADED_RECOVERY_WINDOW_MS = RECENT_DONE_GRACE_MS;
@@ -50,6 +51,10 @@ function isLiveLocalState(state: string): boolean {
   ].includes(state);
 }
 
+function isTerminalLocalState(agent: Pick<DashboardAgent, "state" | "needsUser">): boolean {
+  return agent.needsUser === null && (agent.state === "done" || agent.state === "idle");
+}
+
 function hasMeaningfulAgentReply(agent: Pick<DashboardAgent, "latestMessage" | "activityEvent">): boolean {
   if (typeof agent.latestMessage === "string" && agent.latestMessage.trim().length > 0) {
     return true;
@@ -92,6 +97,19 @@ function shouldBridgeRecentTopLevelNotLoadedReply(agent: DashboardAgent, now: nu
   }
   const updatedAtAgeMs = ageSince(parseUpdatedAt(agent.updatedAt), now);
   return Number.isFinite(updatedAtAgeMs) && updatedAtAgeMs <= RECENT_NOT_LOADED_RECOVERY_WINDOW_MS;
+}
+
+function isStaleActiveLocalSubagent(agent: DashboardAgent, now: number): boolean {
+  if (
+    agent.source !== "local"
+    || !agent.parentThreadId
+    || agent.statusText !== "active"
+    || agent.needsUser !== null
+  ) {
+    return false;
+  }
+  const updatedAtAgeMs = ageSince(parseUpdatedAt(agent.updatedAt), now);
+  return Number.isFinite(updatedAtAgeMs) && updatedAtAgeMs > ACTIVE_SUBAGENT_WINDOW_MS;
 }
 
 function settleDormantLocalState(
@@ -153,6 +171,17 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
   }
 
   if (agent.source === "local") {
+    if (isStaleActiveLocalSubagent(agent, now)) {
+      return false;
+    }
+    const stoppedAtAgeMs = ageSince(parseUpdatedAt(agent.stoppedAt ?? ""), now);
+    const updatedAtAgeMs = ageSince(parseUpdatedAt(agent.updatedAt), now);
+    if (agent.statusText === "active" && isTerminalLocalState(agent)) {
+      if (Number.isFinite(stoppedAtAgeMs)) {
+        return stoppedAtAgeMs <= doneGraceMs;
+      }
+      return Number.isFinite(updatedAtAgeMs) && updatedAtAgeMs <= doneGraceMs;
+    }
     if (
       agent.isOngoing
       || agent.statusText === "active"
@@ -161,7 +190,6 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
       return true;
     }
 
-    const updatedAtAgeMs = ageSince(parseUpdatedAt(agent.updatedAt), now);
     if (
       !Number.isFinite(updatedAtAgeMs)
       && agent.activityEvent?.type === "userMessage"
@@ -171,7 +199,6 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
     if (!Number.isFinite(updatedAtAgeMs)) {
       return false;
     }
-    const stoppedAtAgeMs = ageSince(parseUpdatedAt(agent.stoppedAt ?? ""), now);
     if (Number.isFinite(stoppedAtAgeMs)) {
       return stoppedAtAgeMs <= doneGraceMs;
     }

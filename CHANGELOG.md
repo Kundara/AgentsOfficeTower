@@ -69,6 +69,9 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed the in-scene Ops Wall into a smaller minimal hot-stuff board with a 3x2 file/tool grid, heat bars, a slim command-status list, and blank empty sections instead of "no changes" placeholders.
 - Changed shared-room fleet payloads so each peer now broadcasts its selected `hatId`, letting merged remote agents keep their own hat styling instead of collapsing to the viewer's local cosmetic choice.
 - Changed office avatar rendering so spawned subagents display at 75% per nesting depth while retaining the same workstation, depth, hat, and hover-hit behavior, including nested multi-agent v2 descendant trees.
+- Changed local Codex thread selection so tracked parent sessions also retain listed subagent descendants, keeping spawned workers visible even when they would otherwise fall outside the local thread slice.
+- Changed browser active summary counters to group subagents under their lead session so spawned workers do not inflate floor, tab, or hero active counts.
+- Changed subagent scene motion so newly visible child workers use the same room-door entry path as lead sessions; finished children still cool down and exit through the door.
 - Changed avatar rendering so hats are now attached to the same Pixi motion/depth pipeline as the base avatar sprite, keeping hats aligned through seating, walking, fading, and workstation occlusion.
 - Changed Codex scene thread panels to read-only history only, removing browser Send fields and local resume/launch/copy controls from the in-scene agent chat.
 - Changed Hermes activity mapping so a Hermes session is treated as the stable agent and can move project floors based on the latest project-bearing hook or DB activity, preferring tool/payload paths over Hermes' own process cwd.
@@ -84,6 +87,10 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed Codex subagent parsing for direct `subAgentThreadSpawn` source shapes and top-level parent metadata, restoring child visibility when the app-server does not nest the spawn payload under `subAgent.thread_spawn`.
+- Fixed stale active Codex subagent rows so child workers without an in-progress turn or fresh update stop counting as live work after the stale window instead of inflating active totals.
+- Fixed fleet project discovery so transient autodiscovery misses retain recently discovered project floors briefly instead of dropping and re-adding floors every poll.
+- Fixed Windows Codex app-server launch selection so the resolved Codex app bundle wins over stale PATH shims unless `CODEX_CLI_PATH` explicitly overrides it.
 - Fixed the Pixi workstation reveal blink so newly appearing desks toggle visibility at half the previous speed.
 - Fixed in-scene hot-stuff board labels so the clipped edge fade applies to overflowing text at the row end instead of cutting into the first characters.
 - Fixed hot-stuff heat refreshes so the one-second decay tick updates the existing tooltip overlay instead of invalidating and rebuilding the whole office scene.

@@ -18,6 +18,7 @@ import {
   buildDashboardSnapshotFromState,
   filterProjectCloudTasks,
   isOngoingThread,
+  isStaleActiveSubagentThread,
   parentThreadIdForThread,
   parseThreadSourceMeta
 } from "./snapshot";
@@ -123,6 +124,20 @@ function notificationTurn(params: unknown): CodexThread["turns"][number] | null 
     error: asRecord(turn?.error) as CodexThread["turns"][number]["error"],
     items: Array.isArray(turn?.items) ? turn.items as CodexThread["turns"][number]["items"] : []
   };
+}
+
+function childThreadsByParent(threads: CodexThread[]): Map<string, CodexThread[]> {
+  const byParent = new Map<string, CodexThread[]>();
+  for (const thread of threads) {
+    const parentThreadId = parentThreadIdForThread(thread);
+    if (!parentThreadId) {
+      continue;
+    }
+    const children = byParent.get(parentThreadId) ?? [];
+    children.push(thread);
+    byParent.set(parentThreadId, children);
+  }
+  return byParent;
 }
 
 function upsertThreadTurn(thread: CodexThread, turn: CodexThread["turns"][number]): CodexThread {
@@ -517,6 +532,8 @@ export class ProjectLiveMonitor extends EventEmitter {
         query.trackedThreads
           .map((thread) => [thread.id, thread])
       );
+      const listedThreadsById = new Map(query.allThreads.map((thread) => [thread.id, thread]));
+      const listedChildrenByParent = childThreadsByParent(query.allThreads);
       const loadedThreadIds = await this.client.listLoadedThreads().catch(() => []);
       for (const threadId of loadedThreadIds) {
         if (projectThreadsById.has(threadId) || trackedThreads.has(threadId)) {
@@ -537,31 +554,42 @@ export class ProjectLiveMonitor extends EventEmitter {
         }
         projectThreadsById.set(loadedThread.id, loadedThread);
         trackedThreads.set(loadedThread.id, loadedThread);
+        listedThreadsById.set(loadedThread.id, loadedThread);
       }
-      const pendingAncestors = [...trackedThreads.values()];
-      while (pendingAncestors.length > 0) {
-        const thread = pendingAncestors.shift();
+      const pendingRelatedThreads = [...trackedThreads.values()];
+      while (pendingRelatedThreads.length > 0) {
+        const thread = pendingRelatedThreads.shift();
         if (!thread) {
           continue;
         }
         const parentThreadId = parentThreadIdForThread(thread);
-        if (!parentThreadId || trackedThreads.has(parentThreadId)) {
-          continue;
-        }
-        let parentThread = projectThreadsById.get(parentThreadId) ?? this.threads.get(parentThreadId) ?? null;
-        if (!parentThread) {
-          try {
-            parentThread = await readCodexThreadWithTimeout(this.client, parentThreadId);
-          } catch {
-            parentThread = null;
+        if (parentThreadId && !trackedThreads.has(parentThreadId)) {
+          let parentThread = projectThreadsById.get(parentThreadId)
+            ?? listedThreadsById.get(parentThreadId)
+            ?? this.threads.get(parentThreadId)
+            ?? null;
+          if (!parentThread) {
+            try {
+              parentThread = await readCodexThreadWithTimeout(this.client, parentThreadId);
+            } catch {
+              parentThread = null;
+            }
+          }
+          if (parentThread) {
+            projectThreadsById.set(parentThread.id, parentThread);
+            trackedThreads.set(parentThread.id, parentThread);
+            pendingRelatedThreads.push(parentThread);
           }
         }
-        if (!parentThread) {
-          continue;
+
+        for (const childThread of listedChildrenByParent.get(thread.id) ?? []) {
+          if (trackedThreads.has(childThread.id)) {
+            continue;
+          }
+          projectThreadsById.set(childThread.id, childThread);
+          trackedThreads.set(childThread.id, childThread);
+          pendingRelatedThreads.push(childThread);
         }
-        projectThreadsById.set(parentThread.id, parentThread);
-        trackedThreads.set(parentThread.id, parentThread);
-        pendingAncestors.push(parentThread);
       }
       for (const threadId of Array.from(this.threads.keys())) {
         if (trackedThreads.has(threadId)) {
@@ -581,15 +609,18 @@ export class ProjectLiveMonitor extends EventEmitter {
             return;
           }
 
-          if (listedThread.status.type === "active") {
-            this.markThreadLive(listedThread.id);
-          }
-          this.threads.set(listedThread.id, {
+          const mergedThread = {
             ...known,
             status: listedThread.status,
             updatedAt: listedThread.updatedAt,
             path: listedThread.path ?? known.path
-          });
+          };
+          if (isOngoingThread(mergedThread)) {
+            this.markThreadLive(listedThread.id);
+          } else if (this.ongoingThreadIds.has(listedThread.id)) {
+            this.markThreadStopped(listedThread.id);
+          }
+          this.threads.set(listedThread.id, mergedThread);
           this.ensureThreadWatcher(listedThread.id, listedThread.path ?? known.path);
         })
       );
@@ -648,14 +679,14 @@ export class ProjectLiveMonitor extends EventEmitter {
         !this.stoppedAtByThreadId.has(thread.id)
         && (
           this.ongoingThreadIds.has(thread.id)
-          || thread.status.type === "active"
+          || (thread.status.type === "active" && !isStaleActiveSubagentThread(thread, now))
           || isOngoingThread(thread)
           || (now - thread.updatedAt * 1000) <= ACTIVE_SUBSCRIPTION_WINDOW_MS
         )
       ))
       .sort((left, right) => {
-        const leftActive = left.status.type === "active" || this.ongoingThreadIds.has(left.id) ? 1 : 0;
-        const rightActive = right.status.type === "active" || this.ongoingThreadIds.has(right.id) ? 1 : 0;
+        const leftActive = (left.status.type === "active" && !isStaleActiveSubagentThread(left, now)) || this.ongoingThreadIds.has(left.id) ? 1 : 0;
+        const rightActive = (right.status.type === "active" && !isStaleActiveSubagentThread(right, now)) || this.ongoingThreadIds.has(right.id) ? 1 : 0;
         return rightActive - leftActive || right.updatedAt - left.updatedAt;
       })
       .slice(0, MAX_SUBSCRIBED_THREADS);
@@ -1033,6 +1064,8 @@ export class ProjectLiveMonitor extends EventEmitter {
           thread.status.type === "notLoaded" && this.pendingNotLoadedStopTimers.has(threadId);
         if (pendingNotLoadedStop) {
           // Wait for the scheduled reread confirmation before releasing a desk.
+        } else if (isStaleActiveSubagentThread(thread)) {
+          this.markThreadStopped(threadId);
         } else if (thread.status.type === "systemError" || hasFinalAnswer) {
           this.markThreadStopped(threadId);
         } else {

@@ -169,7 +169,7 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
           statusText: thread.status.type,
           role: resolvedRole,
           nickname: thread.agentNickname ?? sourceMeta.agentNickname,
-          isSubagent: Boolean(resolvedRole),
+          isSubagent: Boolean(sourceMeta.parentThreadId || sourceMeta.sourceKind.startsWith("subAgent")),
           state: syncedMessageSummary.summary.state,
           detail: syncedMessageSummary.summary.detail,
           cwd: thread.cwd,

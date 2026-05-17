@@ -35,24 +35,24 @@ test("macOS candidates include the app bundle after PATH", () => {
   );
 });
 
-test("Windows app bundle candidate is included after PATH", () => {
+test("Windows app bundle candidate is preferred before PATH", () => {
   assert.deepEqual(
     buildCodexCommandCandidates({
       platform: "win32",
       windowsAppPath: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe"
     }),
     [
-      { command: "codex.cmd", label: "Codex CLI cmd shim on PATH" },
-      { command: "codex.exe", label: "Codex CLI executable on PATH" },
       {
         command: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe",
         label: "Codex Windows app bundle"
-      }
+      },
+      { command: "codex.cmd", label: "Codex CLI cmd shim on PATH" },
+      { command: "codex.exe", label: "Codex CLI executable on PATH" }
     ]
   );
 });
 
-test("Windows candidates include a WSL Codex fallback before the app bundle", () => {
+test("Windows candidates prefer the app bundle before WSL and PATH fallbacks", () => {
   assert.deepEqual(
     buildCodexCommandCandidates({
       platform: "win32",
@@ -60,14 +60,14 @@ test("Windows candidates include a WSL Codex fallback before the app bundle", ()
       windowsAppPath: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe"
     }),
     [
-      { command: "codex.cmd", label: "Codex CLI cmd shim on PATH" },
-      { command: "codex.exe", label: "Codex CLI executable on PATH" },
-      { command: "wsl.exe", label: "Codex CLI via WSL", argsPrefix: ["--exec", "codex"] },
-      { command: "C:\\Windows\\System32\\wsl.exe", label: "Codex CLI via WSL", argsPrefix: ["--exec", "codex"] },
       {
         command: "C:\\Users\\test\\AppData\\Local\\CodexAgentsOffice\\cache\\windows-store\\1.2.3\\resources\\codex.exe",
         label: "Codex Windows app bundle"
-      }
+      },
+      { command: "codex.cmd", label: "Codex CLI cmd shim on PATH" },
+      { command: "codex.exe", label: "Codex CLI executable on PATH" },
+      { command: "wsl.exe", label: "Codex CLI via WSL", argsPrefix: ["--exec", "codex"] },
+      { command: "C:\\Windows\\System32\\wsl.exe", label: "Codex CLI via WSL", argsPrefix: ["--exec", "codex"] }
     ]
   );
 });

@@ -69,6 +69,7 @@ export function mergeDiscoveredProjectRootsWithSeeds(
 export class FleetLiveService {
   private static readonly PROJECT_DISCOVERY_LIMIT = 200;
   private static readonly PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
+  private static readonly PROJECT_DISCOVERY_RETENTION_MS = 2 * 60 * 1000;
   private static readonly CLOUD_REFRESH_INTERVAL_MS = 30000;
   private static readonly CLOUD_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
   private readonly monitors = new Map<string, ProjectLiveMonitor>();
@@ -81,6 +82,7 @@ export class FleetLiveService {
   private cloudTimer: NodeJS.Timeout | null = null;
   private cloudBackoffUntil = 0;
   private coordinatedTeamFleet: WebCliTeamFleetCache | null = null;
+  private readonly recentlyDiscoveredProjects = new Map<string, { root: string; lastSeenAt: number }>();
 
   constructor(
     private readonly seedProjects: ProjectDescriptor[],
@@ -367,6 +369,7 @@ export class FleetLiveService {
   }
 
   private async refreshProjectSet(): Promise<void> {
+    const now = Date.now();
     const rawDiscoveredProjects = this.explicitProjects
       ? []
       : await discoverProjects(FleetLiveService.PROJECT_DISCOVERY_LIMIT).catch(() => []);
@@ -389,11 +392,23 @@ export class FleetLiveService {
         return preferredRootsByIdentity.get(identityKey) ?? project.root;
       })
       .filter((root): root is string => Boolean(root));
+    for (const root of discoveredRoots) {
+      const identityKey = projectPathIdentityKey(root);
+      if (identityKey) {
+        this.recentlyDiscoveredProjects.set(identityKey, { root, lastSeenAt: now });
+      }
+    }
+    for (const [identityKey, project] of Array.from(this.recentlyDiscoveredProjects.entries())) {
+      if (now - project.lastSeenAt > FleetLiveService.PROJECT_DISCOVERY_RETENTION_MS) {
+        this.recentlyDiscoveredProjects.delete(identityKey);
+      }
+    }
+    const retainedRoots = Array.from(this.recentlyDiscoveredProjects.values()).map((project) => project.root);
     const seedRoots = normalizedSeeds.map((project) => project.root);
     const nextProjectRoots = this.explicitProjects
       ? seedRoots
       : mergeDiscoveredProjectRootsWithSeeds(
-        rawDiscoveredProjects.length > 0 ? discoveredRoots : [],
+        [...discoveredRoots, ...retainedRoots],
         seedRoots
       );
     const nextProjects = buildProjectDescriptors(nextProjectRoots);

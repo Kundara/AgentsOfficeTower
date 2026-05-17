@@ -17,6 +17,8 @@ const {
   applyRecentActivityEvent,
   buildDashboardSnapshotFromState,
   inferThreadAgentRole,
+  isOngoingThread,
+  isStaleActiveSubagentThread,
   parentThreadIdForThread,
   parseThreadSourceMeta,
   pickThreadLabel,
@@ -2239,6 +2241,45 @@ test("subagent source metadata tolerates lowercase schema key", () => {
   assert.equal(inferThreadAgentRole(thread, "subAgent"), "explorer");
 });
 
+test("subagent source metadata accepts direct thread-spawn source shapes", () => {
+  const thread = {
+    ...sampleThread(),
+    source: {
+      type: "subAgentThreadSpawn",
+      parentThreadId: "thr_parent",
+      depth: 1,
+      agentNickname: "Morgan",
+      agentType: "worker"
+    },
+    agentNickname: null,
+    agentRole: null
+  };
+
+  assert.deepEqual(parseThreadSourceMeta(thread), {
+    sourceKind: "subAgent",
+    parentThreadId: "thr_parent",
+    depth: 1,
+    agentNickname: "Morgan",
+    agentRole: "worker"
+  });
+  assert.equal(parentThreadIdForThread(thread), "thr_parent");
+  assert.equal(pickThreadLabel(thread), "Morgan");
+});
+
+test("subagent source metadata accepts top-level parent fields for string source kinds", () => {
+  const thread = {
+    ...sampleThread(),
+    source: "subAgentThreadSpawn",
+    parent_thread_id: "thr_parent",
+    depth: 2,
+    agent_path: "/root/qa_probe"
+  };
+
+  assert.equal(parentThreadIdForThread(thread), "thr_parent");
+  assert.equal(parseThreadSourceMeta(thread).depth, 2);
+  assert.equal(pickThreadLabel(thread), "qa_probe");
+});
+
 test("collab agent tool calls summarize parent sessions as delegating", () => {
   const thread = {
     ...sampleThread(),
@@ -2722,6 +2763,76 @@ test("recently finished subagents leave current workload faster than top-level t
   assert.equal(isCurrentWorkloadAgent(subagent, now), false);
 });
 
+test("stale active subagent thread without an in-progress turn is not kept as live work", () => {
+  const now = Date.parse("2026-03-24T00:30:00.000Z");
+  const thread = {
+    ...sampleThread(),
+    id: "thr_stale_child",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    status: { type: "active", activeFlags: [] },
+    updatedAt: Math.floor(Date.parse("2026-03-24T00:00:00.000Z") / 1000),
+    turns: [
+      {
+        id: "turn_done",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_done",
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+  const agent = {
+    id: "thr_stale_child",
+    label: "Old child worker",
+    source: "local",
+    sourceKind: "subAgent",
+    parentThreadId: "thr_parent",
+    depth: 1,
+    isCurrent: false,
+    isOngoing: true,
+    statusText: "active",
+    role: "worker",
+    nickname: null,
+    isSubagent: true,
+    state: "planning",
+    detail: "No turns yet",
+    cwd: "/tmp/CodexAgentsOffice",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-24T00:00:00.000Z",
+    stoppedAt: null,
+    paths: ["/tmp/CodexAgentsOffice"],
+    activityEvent: null,
+    latestMessage: null,
+    threadId: "thr_stale_child",
+    taskId: null,
+    resumeCommand: "codex resume thr_stale_child",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly"
+  };
+
+  assert.equal(isStaleActiveSubagentThread(thread, now), true);
+  assert.equal(isOngoingThread(thread), false);
+  assert.equal(isCurrentWorkloadAgent(agent, now), false);
+});
+
 test("stale local blocked threads do not stay current forever without ongoing state", () => {
   const now = Date.parse("2026-03-25T12:00:00.000Z");
   const blockedAgent = {
@@ -2937,6 +3048,45 @@ test("codex local adapter keeps recursive subagent ancestors for nested v2 trees
   );
 
   assert.deepEqual(selected.map((thread) => thread.id), ["thr_child", "thr_parent", "thr_grandparent"]);
+});
+
+test("codex local adapter keeps listed subagent children for tracked parents beyond the local slice", () => {
+  const parentThread = {
+    ...sampleThread(),
+    id: "thr_parent",
+    cwd: "/tmp/CodexAgentsOffice",
+    status: { type: "active", activeFlags: [] },
+    turns: []
+  };
+  const unrelatedThread = {
+    ...sampleThread(),
+    id: "thr_unrelated",
+    cwd: "/tmp/CodexAgentsOffice",
+    status: { type: "idle" },
+    turns: []
+  };
+  const childThread = {
+    ...sampleThread(),
+    id: "thr_child",
+    cwd: "/tmp/CodexAgentsOffice",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    turns: []
+  };
+
+  const selected = selectProjectThreadsWithParents(
+    "/tmp/CodexAgentsOffice",
+    [parentThread, unrelatedThread, childThread],
+    1
+  );
+
+  assert.deepEqual(selected.map((thread) => thread.id), ["thr_parent", "thr_child"]);
 });
 
 test("codex local adapter keeps active threads selected even when a newer idle thread would fill the limit", () => {

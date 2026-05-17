@@ -425,6 +425,7 @@ What we read from Codex:
 - `subAgent.thread_spawn.depth`
 - `subAgent.thread_spawn.agent_nickname`
 - `subAgent.thread_spawn.agent_role`
+- direct app-server subagent spawn shapes such as `source.type = "subAgentThreadSpawn"` plus `parentThreadId` / `parent_thread_id`
 - top-level `thread.agentNickname`
 - `thread.agentRole`
 - role hints from prompt text and user message text as a legacy fallback
@@ -435,6 +436,8 @@ How we use it:
 
 - identify spawned subagents
 - link them to parent threads
+- retain listed descendant subagent threads when their parent session is already tracked, in addition to retaining ancestor parents for tracked children
+- ignore stale active subagent rows after an about-20-minute no-progress window so app-server leftovers do not appear as live workers
 - refresh newly referenced receiver threads promptly from v2 collab notifications instead of waiting for the next broad `thread/list` poll
 - attach role-based grouping to workstations
 - show parent/child linkage in the session panel

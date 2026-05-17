@@ -352,15 +352,37 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
 
       function countsForSnapshot(snapshot) {
         const counters = { total: 0, active: 0, waiting: 0, blocked: 0, cloud: 0 };
+        const agentsById = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
+        const countedFamilies = new Map();
         for (const agent of snapshot.agents) {
           if (!isBusyAgent(agent)) {
             continue;
           }
+          let familyAgent = agent;
+          const visited = new Set([agent.id]);
+          while (
+            familyAgent.parentThreadId
+            && agentsById.has(familyAgent.parentThreadId)
+            && !visited.has(familyAgent.parentThreadId)
+          ) {
+            familyAgent = agentsById.get(familyAgent.parentThreadId);
+            visited.add(familyAgent.id);
+          }
+          const familyKey = familyAgent.id || agent.id;
+          const existing = countedFamilies.get(familyKey) || { cloud: false, blocked: false, waiting: false, active: false };
+          countedFamilies.set(familyKey, {
+            cloud: existing.cloud || agent.source === "cloud" || agent.state === "cloud",
+            blocked: existing.blocked || agent.state === "blocked",
+            waiting: existing.waiting || agent.state === "waiting",
+            active: existing.active || (agent.state !== "done" && agent.state !== "idle" && agent.state !== "cloud")
+          });
+        }
+        for (const family of countedFamilies.values()) {
           counters.total += 1;
-          if (agent.state === "waiting") counters.waiting += 1;
-          else if (agent.state === "blocked") counters.blocked += 1;
-          else if (agent.state === "cloud") counters.cloud += 1;
-          else if (agent.state !== "done" && agent.state !== "idle") counters.active += 1;
+          if (family.blocked) counters.blocked += 1;
+          else if (family.waiting) counters.waiting += 1;
+          else if (family.cloud) counters.cloud += 1;
+          else if (family.active) counters.active += 1;
         }
         return counters;
       }

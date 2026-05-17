@@ -868,6 +868,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 pod.agents.push({
                   id: agent.id,
                   key: agentKey(snapshot.projectRoot, agent),
+                  parentThreadId: agent.parentThreadId || null,
                   roomId: room.id,
                   label: agent.label,
                   state: agent.state,
@@ -959,6 +960,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 ? {
                     id: entry.agent.id,
                     key: agentKey(snapshot.projectRoot, entry.agent),
+                    parentThreadId: entry.agent.parentThreadId || null,
                     roomId: room.id,
                     label: entry.agent.label,
                     state: entry.agent.state,

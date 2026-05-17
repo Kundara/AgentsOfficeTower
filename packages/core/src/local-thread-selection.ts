@@ -1,34 +1,6 @@
 import { filterThreadsForProject } from "./project-paths";
+import { parentThreadIdForThread } from "./snapshot-lib/thread-summary";
 import type { CodexThread } from "./types";
-
-function subAgentSourceForThread(thread: CodexThread): unknown {
-  if (typeof thread.source !== "object" || !thread.source) {
-    return null;
-  }
-
-  const source = thread.source as Record<string, unknown>;
-  return source.subAgent ?? source.subagent ?? source.sub_agent ?? null;
-}
-
-function parentThreadIdForThread(thread: CodexThread): string | null {
-  const subAgentSource = subAgentSourceForThread(thread);
-  const threadSpawn =
-    typeof subAgentSource === "object" && subAgentSource
-      ? (subAgentSource as Record<string, unknown>).thread_spawn
-        ?? (subAgentSource as Record<string, unknown>).threadSpawn
-      : null;
-
-  return typeof threadSpawn === "object" && threadSpawn
-    && (
-      typeof (threadSpawn as Record<string, unknown>).parent_thread_id === "string"
-      || typeof (threadSpawn as Record<string, unknown>).parentThreadId === "string"
-    )
-    ? (
-      ((threadSpawn as Record<string, unknown>).parent_thread_id
-        ?? (threadSpawn as Record<string, unknown>).parentThreadId) as string
-    )
-    : null;
-}
 
 function prioritizedProjectThreads(projectThreads: CodexThread[], localLimit: number): CodexThread[] {
   const activeThreads = projectThreads.filter((thread) => thread.status.type === "active");
@@ -41,6 +13,20 @@ function prioritizedProjectThreads(projectThreads: CodexThread[], localLimit: nu
   ];
 }
 
+function childThreadsByParent(threads: CodexThread[]): Map<string, CodexThread[]> {
+  const byParent = new Map<string, CodexThread[]>();
+  for (const thread of threads) {
+    const parentThreadId = parentThreadIdForThread(thread);
+    if (!parentThreadId) {
+      continue;
+    }
+    const children = byParent.get(parentThreadId) ?? [];
+    children.push(thread);
+    byParent.set(parentThreadId, children);
+  }
+  return byParent;
+}
+
 export function selectProjectThreadsWithParents(
   projectRoot: string,
   allThreads: CodexThread[],
@@ -48,26 +34,35 @@ export function selectProjectThreadsWithParents(
 ): CodexThread[] {
   const projectThreads = filterThreadsForProject(projectRoot, allThreads);
   const availableThreadsById = new Map(allThreads.map((thread) => [thread.id, thread]));
+  const availableChildrenByParent = childThreadsByParent(allThreads);
   const trackedThreads = new Map(
     prioritizedProjectThreads(projectThreads, localLimit).map((thread) => [thread.id, thread])
   );
-  const pendingParents = [...trackedThreads.values()];
+  const pendingRelatedThreads = [...trackedThreads.values()];
 
-  while (pendingParents.length > 0) {
-    const thread = pendingParents.shift();
+  while (pendingRelatedThreads.length > 0) {
+    const thread = pendingRelatedThreads.shift();
     if (!thread) {
       continue;
     }
+
     const parentThreadId = parentThreadIdForThread(thread);
-    if (!parentThreadId || trackedThreads.has(parentThreadId)) {
-      continue;
+    if (parentThreadId && !trackedThreads.has(parentThreadId)) {
+      const parentThread = availableThreadsById.get(parentThreadId);
+      if (parentThread) {
+        trackedThreads.set(parentThread.id, parentThread);
+        pendingRelatedThreads.push(parentThread);
+      }
     }
-    const parentThread = availableThreadsById.get(parentThreadId);
-    if (!parentThread) {
-      continue;
+
+    const childThreads = availableChildrenByParent.get(thread.id) ?? [];
+    for (const childThread of childThreads) {
+      if (trackedThreads.has(childThread.id)) {
+        continue;
+      }
+      trackedThreads.set(childThread.id, childThread);
+      pendingRelatedThreads.push(childThread);
     }
-    trackedThreads.set(parentThread.id, parentThread);
-    pendingParents.push(parentThread);
   }
 
   return [...trackedThreads.values()];

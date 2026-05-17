@@ -3,11 +3,34 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
       const SUBAGENT_DONE_WORKSTATION_GRACE_MS = 7000;
       const CURRENT_LOCAL_LIVE_WORKSTATION_GRACE_MS = 8000;
       const QUIET_LIVE_LOCAL_WORKSTATION_GRACE_MS = 3 * 60 * 1000;
+      const ACTIVE_SUBAGENT_WORKSTATION_WINDOW_MS = 20 * 60 * 1000;
+
+      function isStaleRuntimeActiveSubagent(agent) {
+        if (
+          !agent
+          || agent.source !== "local"
+          || !agent.parentThreadId
+          || agent.statusText !== "active"
+          || agent.needsUser !== null
+        ) {
+          return false;
+        }
+        const updatedAt = parseAgentUpdatedAt(agent.updatedAt);
+        return Number.isFinite(updatedAt) && Date.now() - updatedAt > ACTIVE_SUBAGENT_WORKSTATION_WINDOW_MS;
+      }
+
+      function isTerminalRuntimeLocalAgent(agent) {
+        return agent
+          && agent.needsUser === null
+          && (agent.state === "done" || agent.state === "idle");
+      }
 
       function isRuntimeActiveLocalAgent(agent) {
         return agent
           && agent.source === "local"
-          && agent.statusText === "active";
+          && agent.statusText === "active"
+          && !isTerminalRuntimeLocalAgent(agent)
+          && !isStaleRuntimeActiveSubagent(agent);
       }
 
       function workstationDoneGraceMs(agent) {

@@ -156,8 +156,12 @@ Sources:
 - once a top-level thread actually stops, it keeps its workstation for a short 3-second cooldown so the final reply remains readable before it cools into rec-area visibility
 - stale local `notLoaded` sessions no longer occupy desks just because they are still recent; workstation seating now requires true ongoing work or the explicit stop cooldown
 - after that grace window, only recent top-level lead sessions cool down into the rec area; finished subagents despawn instead of idling there
+- stale local Codex subagent rows that still report `status.type = "active"` are dropped out of current workload after about 20 minutes without an in-progress turn or fresh update, so abandoned child rows do not inflate active counts
 - lead sessions with active subagents now move into a compact stacked left-side boss-office column, with each boss workstation rendered inside its own small office shell
 - spawned subagents render at 75% of their parent depth's avatar size while sharing the same workstation placement, depth sorting, hats, and hover anchors as ordinary desk agents; a depth-2 subagent renders at `0.75 * 0.75` of a lead avatar, and deeper multi-agent v2 trees continue that scale by depth
+- local Codex thread selection keeps both ancestor parents and listed descendant subagents for tracked parents, so a visible lead session does not lose child workers just because the child is outside the local display slice
+- browser active summary counters group spawned subagents under their lead session; the scene still renders child agents individually, but floor/tab counts describe active lead-session groups
+- newly visible subagents use the same room-door entry path as other arrivals; parent/child relationship lines communicate delegation without making children spawn from the parent avatar
 - session panel includes a durable cross-project "needs you" queue for approval/input waits
   these entries now come from typed request hooks, not from regexes over session detail
   - session cards expose provenance/confidence so Codex-native, Claude transcript, Claude hook-backed, and Cursor API-backed state stay distinguishable
@@ -375,7 +379,7 @@ The active office view currently favors an open station language over enclosed c
 - avatars themselves no longer flash on enter or exit; only the workstation reveal animates, and removals disappear immediately once the thread leaves current workload
 - left and right seats face opposite directions inside each pod
 - seated agents flip with the workstation direction and align to the desk/chair reach point
-- lead-session arrivals, subagent arrivals, and all departures use the center-top room entrance as the path anchor so workers visibly enter and leave through the doorway
+- lead-session and subagent arrivals plus all departures use the center-top room entrance as the path anchor; parent/child relationship lines communicate delegation without making children spawn from the parent avatar
 - ordinary refreshes now reuse a settled same-slot target when the layout delta is only a tiny no-op drift, so polling does not look like an unnecessary seat shuffle
 - finished subagents now keep a longer readable desk cooldown before they walk back out through that doorway instead of vanishing immediately
 - lead sessions with active subagents move into a dedicated left-side boss-office column; the column starts one floor tile below the floor start and uses contiguous 3-tile-tall office slots so four bosses can stack in a standard room while still reading as offices instead of rounded placeholder frames

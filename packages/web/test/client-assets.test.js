@@ -195,6 +195,30 @@ test("client runtime seats current local workload even when its latest item summ
   );
 });
 
+test("client runtime active counters group subagents under their lead session", () => {
+  const layoutSource = readRuntimeSource("layout-source.ts");
+
+  assert.ok(layoutSource.includes("const countedFamilies = new Map();"));
+  assert.ok(layoutSource.includes("while ("));
+  assert.ok(layoutSource.includes("familyAgent.parentThreadId"));
+  assert.ok(layoutSource.includes("const familyKey = familyAgent.id || agent.id;"));
+  assert.ok(layoutSource.includes("for (const family of countedFamilies.values())"));
+});
+
+test("client runtime does not keep stale active local subagents busy forever", () => {
+  const seatingSource = readRuntimeSource("seating-source.ts");
+
+  assert.match(seatingSource, /const ACTIVE_SUBAGENT_WORKSTATION_WINDOW_MS = 20 \* 60 \* 1000;/);
+  assert.match(
+    seatingSource,
+    /function isStaleRuntimeActiveSubagent\(agent\) \{[\s\S]*agent\.source !== "local"[\s\S]*!agent\.parentThreadId[\s\S]*agent\.statusText !== "active"[\s\S]*agent\.needsUser !== null[\s\S]*Date\.now\(\) - updatedAt > ACTIVE_SUBAGENT_WORKSTATION_WINDOW_MS;/
+  );
+  assert.match(
+    seatingSource,
+    /function isRuntimeActiveLocalAgent\(agent\) \{[\s\S]*agent\.statusText === "active"\n\s+&& !isStaleRuntimeActiveSubagent\(agent\);/
+  );
+});
+
 test("client runtime gives finished subagents a longer workstation cooldown than leads", () => {
   const seatingSource = readRuntimeSource("seating-source.ts");
 
@@ -1032,6 +1056,18 @@ test("runtime source animates sliding room doors and autonomous resting-item tri
   assert.ok(navigationSource.includes("doorState.doorPulseUntil = performance.now() + sceneDoorConfig().holdOpenMs;"));
 });
 
+test("runtime source starts new subagent arrivals from the room door", () => {
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+
+  assert.ok(sceneSource.includes("parentThreadId: agent.parentThreadId || null"));
+  assert.ok(!sceneSource.includes("parentKey: agent.parentThreadId"));
+  assert.ok(!navigationSource.includes("function parentSpawnPointForAgent(agent, parentState)"));
+  assert.ok(!navigationSource.includes("enteringFromParent"));
+  assert.ok(navigationSource.includes("const enteringFromDoor = !previousMotionState"));
+  assert.ok(navigationSource.includes("nearestWalkableTile(nav, roomDoorTile(room, model.tile))"));
+});
+
 test("runtime source avoids doorway arrival animations for first-load historical sessions", () => {
   const uiSource = readRuntimeSource("ui-source.ts");
 
@@ -1286,7 +1322,7 @@ test("boss relationship arrows are hover-only curved overlays with arrowheads", 
   );
 });
 
-test("spec defines door-based arrivals and departures for visible agents", () => {
+test("spec defines room-door subagent arrivals and door departures", () => {
   const specSource = readFileSync(
     join(__dirname, "../../../docs/spec.md"),
     "utf8"
@@ -1294,7 +1330,11 @@ test("spec defines door-based arrivals and departures for visible agents", () =>
 
   assert.match(
     specSource,
-    /A newly visible active agent should enter from the room door and walk to its assigned workstation\./,
+    /A newly visible top-level active agent should enter from the room door and walk to its assigned workstation\./,
+  );
+  assert.match(
+    specSource,
+    /A newly visible subagent should use that same room-door entry path; parent\/child relationship arrows should communicate delegation without making children spawn out of the parent avatar\./,
   );
   assert.match(
     specSource,

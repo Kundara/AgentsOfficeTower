@@ -60,32 +60,85 @@ function threadTurns(thread: CodexThread): CodexTurn[] {
   return Array.isArray(thread.turns) ? thread.turns : [];
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value ? value as Record<string, unknown> : null;
+}
+
 function sourceRecord(thread: CodexThread): Record<string, unknown> | null {
-  return typeof thread.source === "object" && thread.source
-    ? thread.source as Record<string, unknown>
-    : null;
-}
-
-function subAgentSourceForThread(thread: CodexThread): unknown {
-  const source = sourceRecord(thread);
-  return source ? source.subAgent ?? source.subagent ?? source.sub_agent ?? null : null;
-}
-
-function threadSpawnSourceForThread(thread: CodexThread): Record<string, unknown> | null {
-  const subAgentSource = subAgentSourceForThread(thread);
-  const threadSpawn =
-    typeof subAgentSource === "object" && subAgentSource
-      ? (subAgentSource as Record<string, unknown>).thread_spawn
-        ?? (subAgentSource as Record<string, unknown>).threadSpawn
-      : null;
-  return typeof threadSpawn === "object" && threadSpawn
-    ? threadSpawn as Record<string, unknown>
-    : null;
+  return asRecord(thread.source);
 }
 
 function sourceStringValue(record: Record<string, unknown> | null, key: string): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function sourceKindForThread(thread: CodexThread): string {
+  if (typeof thread.source === "string") {
+    return thread.source;
+  }
+  const source = sourceRecord(thread);
+  return sourceStringValue(source, "sourceKind")
+    ?? sourceStringValue(source, "source_kind")
+    ?? sourceStringValue(source, "kind")
+    ?? sourceStringValue(source, "type")
+    ?? "unknown";
+}
+
+function subAgentSourceForThread(thread: CodexThread): unknown {
+  const source = sourceRecord(thread);
+  return source
+    ? source.subAgent
+      ?? source.subagent
+      ?? source.sub_agent
+      ?? source.subAgentThreadSpawn
+      ?? source.subagentThreadSpawn
+      ?? source.sub_agent_thread_spawn
+      ?? null
+    : null;
+}
+
+function recordHasThreadSpawnMetadata(record: Record<string, unknown> | null): boolean {
+  return Boolean(
+    record
+    && (
+      sourceStringValue(record, "parent_thread_id")
+      || sourceStringValue(record, "parentThreadId")
+      || sourceStringValue(record, "agent_nickname")
+      || sourceStringValue(record, "agentNickname")
+      || sourceStringValue(record, "agent_path")
+      || sourceStringValue(record, "agentPath")
+      || sourceStringValue(record, "agent_role")
+      || sourceStringValue(record, "agentRole")
+      || sourceStringValue(record, "agent_type")
+      || sourceStringValue(record, "agentType")
+      || typeof record.depth === "number"
+    )
+  );
+}
+
+function threadSpawnSourceForThread(thread: CodexThread): Record<string, unknown> | null {
+  const source = sourceRecord(thread);
+  const sourceThreadSpawn = asRecord(source?.thread_spawn) ?? asRecord(source?.threadSpawn);
+  if (sourceThreadSpawn) {
+    return sourceThreadSpawn;
+  }
+  if (recordHasThreadSpawnMetadata(source)) {
+    return source;
+  }
+
+  const subAgentSource = subAgentSourceForThread(thread);
+  const subAgentRecord = asRecord(subAgentSource);
+  const threadSpawn = asRecord(subAgentRecord?.thread_spawn) ?? asRecord(subAgentRecord?.threadSpawn);
+  if (threadSpawn) {
+    return threadSpawn;
+  }
+  if (recordHasThreadSpawnMetadata(subAgentRecord)) {
+    return subAgentRecord;
+  }
+
+  const threadRecord = thread as unknown as Record<string, unknown>;
+  return recordHasThreadSpawnMetadata(threadRecord) ? threadRecord : null;
 }
 
 function sourceAgentNickname(thread: CodexThread): string | null {
@@ -410,18 +463,9 @@ export function parseThreadSourceMeta(thread: CodexThread): {
   agentNickname: string | null;
   agentRole: string | null;
 } {
-  if (typeof thread.source === "string") {
-    return {
-      sourceKind: thread.source,
-      parentThreadId: null,
-      depth: 0,
-      agentNickname: null,
-      agentRole: null
-    };
-  }
-
   const subAgentSource = subAgentSourceForThread(thread);
   const threadSpawn = threadSpawnSourceForThread(thread);
+  const sourceKind = sourceKindForThread(thread);
 
   if (typeof threadSpawn === "object" && threadSpawn) {
     return {
@@ -438,6 +482,16 @@ export function parseThreadSourceMeta(thread: CodexThread): {
           : 1,
       agentNickname: sourceAgentNickname(thread),
       agentRole: sourceAgentRole(thread)
+    };
+  }
+
+  if (typeof thread.source === "string") {
+    return {
+      sourceKind,
+      parentThreadId: null,
+      depth: sourceKind.startsWith("subAgent") ? 1 : 0,
+      agentNickname: null,
+      agentRole: null
     };
   }
 
@@ -462,7 +516,7 @@ export function parseThreadSourceMeta(thread: CodexThread): {
   }
 
   return {
-    sourceKind: "unknown",
+    sourceKind,
     parentThreadId: null,
     depth: 0,
     agentNickname: null,
@@ -472,6 +526,19 @@ export function parseThreadSourceMeta(thread: CodexThread): {
 
 export function parentThreadIdForThread(thread: CodexThread): string | null {
   return parseThreadSourceMeta(thread).parentThreadId;
+}
+
+const ACTIVE_SUBAGENT_THREAD_WINDOW_MS = 20 * 60 * 1000;
+
+export function isStaleActiveSubagentThread(thread: CodexThread, nowMs = Date.now()): boolean {
+  if (thread.status.type !== "active" || !parentThreadIdForThread(thread)) {
+    return false;
+  }
+  if (threadTurns(thread).some((turn) => turn.status === "inProgress")) {
+    return false;
+  }
+  const updatedAtMs = thread.updatedAt * 1000;
+  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs > ACTIVE_SUBAGENT_THREAD_WINDOW_MS;
 }
 
 export function inferThreadAgentRole(thread: CodexThread, sourceKind: string): string | null {
@@ -536,7 +603,11 @@ function isFreshNotLoadedUnhydratedThread(thread: CodexThread): boolean {
 
 export function isOngoingThread(thread: CodexThread): boolean {
   if (thread.status.type === "active") {
-    return true;
+    const lastTurn = threadTurns(thread).at(-1);
+    if (lastTurn && turnHasFinalAnswer(lastTurn)) {
+      return false;
+    }
+    return !isStaleActiveSubagentThread(thread);
   }
   if (isFreshSpawnedDetachedThread(thread) || isFreshNotLoadedUnhydratedThread(thread)) {
     return true;

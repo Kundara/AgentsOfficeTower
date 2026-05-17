@@ -49,6 +49,9 @@ export function buildCodexCommandCandidates(input: {
 
   pushCandidate(input.codexCliPath, "CODEX_CLI_PATH override");
   if (input.platform === "win32") {
+    pushCandidate(input.windowsAppPath, "Codex Windows app bundle");
+  }
+  if (input.platform === "win32") {
     pushCandidate("codex.cmd", "Codex CLI cmd shim on PATH");
     pushCandidate("codex.exe", "Codex CLI executable on PATH");
   } else {
@@ -73,8 +76,6 @@ export function buildCodexCommandCandidates(input: {
       pushCandidate(bundlePath, "Codex app bundle");
     }
   }
-
-  pushCandidate(input.windowsAppPath, "Codex Windows app bundle");
 
   return candidates;
 }

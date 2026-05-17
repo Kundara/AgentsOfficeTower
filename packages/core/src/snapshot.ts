@@ -3,6 +3,7 @@ export {
   buildActivityEventFromDashboardEvent,
   inferThreadAgentRole,
   isOngoingThread,
+  isStaleActiveSubagentThread,
   latestAgentMessageForThread,
   parentThreadIdForThread,
   parseThreadSourceMeta,
