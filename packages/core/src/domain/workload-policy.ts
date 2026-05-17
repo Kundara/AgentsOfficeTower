@@ -183,11 +183,26 @@ export function isCurrentWorkloadAgent(agent: DashboardAgent, now = Date.now()):
       return Number.isFinite(updatedAtAgeMs) && updatedAtAgeMs <= doneGraceMs;
     }
     if (
+      agent.parentThreadId
+      && (agent.state === "done" || agent.state === "idle")
+      && agent.statusText !== "active"
+      && !Number.isFinite(stoppedAtAgeMs)
+    ) {
+      return false;
+    }
+    if (
       agent.isOngoing
       || agent.statusText === "active"
       || agent.needsUser !== null
     ) {
       return true;
+    }
+    if (
+      agent.parentThreadId
+      && agent.statusText === "notLoaded"
+      && !Number.isFinite(stoppedAtAgeMs)
+    ) {
+      return false;
     }
 
     if (

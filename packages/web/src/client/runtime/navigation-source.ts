@@ -2827,6 +2827,27 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           };
         }
 
+        function parentSpawnPointForAgent(agent, parentState) {
+          if (!agent || !parentState || parentState.roomId !== agent.roomId) {
+            return null;
+          }
+          const x = Number.isFinite(parentState.currentX)
+            ? parentState.currentX
+            : Number.isFinite(parentState.avatarX)
+              ? parentState.avatarX
+              : Number.isFinite(parentState.targetX)
+                ? parentState.targetX
+                : Number.NaN;
+          const y = Number.isFinite(parentState.currentY)
+            ? parentState.currentY
+            : Number.isFinite(parentState.avatarY)
+              ? parentState.avatarY
+              : Number.isFinite(parentState.targetY)
+                ? parentState.targetY
+                : Number.NaN;
+          return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+        }
+
         function registerAgentMotion(agent, avatarVisual, roomNavigation, reservations, previousMotionState = null, options = {}) {
           if (!agent || !avatarVisual || !avatarVisual.avatar) {
             return avatarVisual.nodes;
@@ -2838,13 +2859,20 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           const previousRoomState = previousMotionState && previousMotionState.roomId !== agent.roomId
             ? previousMotionState
             : null;
-          const enteringFromDoor = !previousMotionState
-            ? enteringAgentKeys.has(agent.key || agent.id)
-            : previousRoomState !== null;
           const autonomousResting = isAutonomousRestingAgent(agent);
           const previousState = previousMotionState && previousMotionState.roomId === agent.roomId
             ? previousMotionState
             : null;
+          const parentState = agent.parentKey
+            ? (previousMotionStates.get(agent.parentKey) || renderer.motionStates.get(agent.parentKey) || renderedAgentSceneState.get(agent.parentKey) || null)
+            : null;
+          const parentSpawnPoint = parentSpawnPointForAgent(agent, parentState);
+          const enteringFromParent = !previousState && !previousRoomState && enteringAgentKeys.has(agent.key || agent.id) && Boolean(parentSpawnPoint);
+          const enteringFromDoor = enteringFromParent
+            ? false
+            : (!previousMotionState
+              ? enteringAgentKeys.has(agent.key || agent.id)
+              : previousRoomState !== null);
           if (previousRoomState && previousRoomState.exiting !== true) {
             const transitionGhostKey = agentKey + "::transition-exit::" + previousRoomState.roomId;
             const transitionGhost = buildExitGhostMotion(transitionGhostKey, previousRoomState, roomNavigation, reservations);
@@ -2982,6 +3010,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           }
           const startTile = previousState
             ? nearestWalkableTile(nav, officeAvatarFootTile(room, model.tile, previousState.currentX, previousState.currentY, previousState.width, previousState.height))
+            : enteringFromParent && parentSpawnPoint
+              ? nearestWalkableTile(nav, officeAvatarFootTile(room, model.tile, parentSpawnPoint.x, parentSpawnPoint.y, agent.width, agent.height))
             : enteringFromDoor
               ? nearestWalkableTile(nav, roomDoorTile(room, model.tile))
               : targetTile;
@@ -2997,6 +3027,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
               { x: agent.x, y: agent.y }
             )
             : [{ x: agent.x, y: agent.y }];
+          if (enteringFromParent && parentSpawnPoint && route.length > 0) {
+            route[0] = { x: parentSpawnPoint.x, y: parentSpawnPoint.y };
+          }
           const isMoving = route.length > 1 || options.exiting === true;
           const movingDepthFootY = isMoving ? null : avatarVisual.depthFootY;
           const movingDepthBias = isMoving ? null : avatarVisual.depthBias;

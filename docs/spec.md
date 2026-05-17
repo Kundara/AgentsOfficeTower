@@ -241,7 +241,8 @@ Current browser settings surfaces are:
 - Tile pathfinding should avoid occupied cells from furniture, workstation footprints, and already-seated agents.
 - Visual-only updates such as debug overlays, text-scale changes, or scene host rerenders must not be treated as a new placement instruction.
 - A newly visible top-level active agent should enter from the room door and walk to its assigned workstation.
-- A newly visible subagent should use that same room-door entry path; parent/child relationship arrows should communicate delegation without making children spawn out of the parent avatar.
+- A newly visible subagent should start from its parent agent's current scene position, then move to its assigned workstation.
+- Parent/child relationship arrows should communicate delegation while arrivals make the spawned-worker relationship visible.
 - If a resting lead becomes active again, it should leave its rec-area seat and walk to its newly assigned workstation instead of despawning and respawning.
 - When an agent truly leaves the visible scene, it should walk back out through the room door.
 - Each room door should render as a two-part sliding door with a dark recess behind it.

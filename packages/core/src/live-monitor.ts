@@ -20,7 +20,8 @@ import {
   isOngoingThread,
   isStaleActiveSubagentThread,
   parentThreadIdForThread,
-  parseThreadSourceMeta
+  parseThreadSourceMeta,
+  summariseThread
 } from "./snapshot";
 import type {
   CloudTask,
@@ -189,6 +190,24 @@ function turnHasNonFinalWorkSignal(turn: CodexThread["turns"][number]): boolean 
   });
 }
 
+function turnHasOpenWorkSignal(turn: CodexThread["turns"][number]): boolean {
+  if (turn.status === "inProgress") {
+    return true;
+  }
+  return turn.items.some((item) => {
+    const record = asRecord(item);
+    const type = asString(record?.type);
+    if (!type || !NON_FINAL_WORK_ITEM_TYPES.has(type)) {
+      return false;
+    }
+    if (type === "agentMessage") {
+      return false;
+    }
+    const status = asString(record?.status);
+    return status !== "completed" && status !== "failed" && status !== "declined";
+  });
+}
+
 function threadStillAwaitsFinalAnswer(thread: CodexThread): boolean {
   if (thread.status.type === "systemError") {
     return false;
@@ -198,6 +217,24 @@ function threadStillAwaitsFinalAnswer(thread: CodexThread): boolean {
     return false;
   }
   return lastTurn.status === "inProgress" || turnHasNonFinalWorkSignal(lastTurn);
+}
+
+function isSettledDormantSubagentThread(thread: CodexThread): boolean {
+  if (!parentThreadIdForThread(thread)) {
+    return false;
+  }
+  if (thread.status.type !== "idle" && thread.status.type !== "notLoaded") {
+    return false;
+  }
+  const lastTurn = thread.turns.at(-1);
+  if (!lastTurn || lastTurn.status === "inProgress") {
+    return false;
+  }
+  if (thread.status.type === "notLoaded" && !turnHasOpenWorkSignal(lastTurn)) {
+    return true;
+  }
+  const summary = summariseThread(thread);
+  return summary.state === "done" || summary.state === "idle";
 }
 
 function isFreshEnoughToPromoteAwaitingFinalAnswer(thread: CodexThread): boolean {
@@ -1047,7 +1084,8 @@ export class ProjectLiveMonitor extends EventEmitter {
         : readThread;
       this.clearMatchingNote(`Thread refresh failed (${threadId.slice(0, 8)}):`);
       this.threads.set(threadId, thread);
-      const awaitingFinalAnswer = threadStillAwaitsFinalAnswer(thread);
+      const settledDormantSubagent = isSettledDormantSubagentThread(thread);
+      const awaitingFinalAnswer = !settledDormantSubagent && threadStillAwaitsFinalAnswer(thread);
       const shouldPromoteAwaitingFinalAnswer =
         awaitingFinalAnswer
         && (
@@ -1065,6 +1103,8 @@ export class ProjectLiveMonitor extends EventEmitter {
         if (pendingNotLoadedStop) {
           // Wait for the scheduled reread confirmation before releasing a desk.
         } else if (isStaleActiveSubagentThread(thread)) {
+          this.markThreadStopped(threadId);
+        } else if (settledDormantSubagent) {
           this.markThreadStopped(threadId);
         } else if (thread.status.type === "systemError" || hasFinalAnswer) {
           this.markThreadStopped(threadId);
@@ -1278,7 +1318,7 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
 
     const latestMessage = latestThreadAgentMessage(thread);
-    if (latestMessage?.phase === "final_answer") {
+    if (isSettledDormantSubagentThread(thread) || latestMessage?.phase === "final_answer") {
       this.markThreadStopped(threadId);
     } else {
       this.markThreadLive(threadId);

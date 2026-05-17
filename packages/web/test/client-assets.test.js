@@ -215,7 +215,7 @@ test("client runtime does not keep stale active local subagents busy forever", (
   );
   assert.match(
     seatingSource,
-    /function isRuntimeActiveLocalAgent\(agent\) \{[\s\S]*agent\.statusText === "active"\n\s+&& !isStaleRuntimeActiveSubagent\(agent\);/
+    /function isRuntimeActiveLocalAgent\(agent\) \{[\s\S]*agent\.statusText === "active"\n\s+&& !isTerminalRuntimeLocalAgent\(agent\)\n\s+&& !isStaleRuntimeActiveSubagent\(agent\);/
   );
 });
 
@@ -1056,15 +1056,15 @@ test("runtime source animates sliding room doors and autonomous resting-item tri
   assert.ok(navigationSource.includes("doorState.doorPulseUntil = performance.now() + sceneDoorConfig().holdOpenMs;"));
 });
 
-test("runtime source starts new subagent arrivals from the room door", () => {
+test("runtime source starts new subagent arrivals from their parent", () => {
   const sceneSource = readRuntimeSource("scene-source.ts");
   const navigationSource = readRuntimeSource("navigation-source.ts");
 
   assert.ok(sceneSource.includes("parentThreadId: agent.parentThreadId || null"));
-  assert.ok(!sceneSource.includes("parentKey: agent.parentThreadId"));
-  assert.ok(!navigationSource.includes("function parentSpawnPointForAgent(agent, parentState)"));
-  assert.ok(!navigationSource.includes("enteringFromParent"));
-  assert.ok(navigationSource.includes("const enteringFromDoor = !previousMotionState"));
+  assert.ok(sceneSource.includes("parentKey: agent.parentThreadId"));
+  assert.ok(navigationSource.includes("function parentSpawnPointForAgent(agent, parentState)"));
+  assert.ok(navigationSource.includes("const enteringFromParent = !previousState && !previousRoomState && enteringAgentKeys.has(agent.key || agent.id) && Boolean(parentSpawnPoint);"));
+  assert.ok(navigationSource.includes("const enteringFromDoor = enteringFromParent"));
   assert.ok(navigationSource.includes("nearestWalkableTile(nav, roomDoorTile(room, model.tile))"));
 });
 
@@ -1322,7 +1322,7 @@ test("boss relationship arrows are hover-only curved overlays with arrowheads", 
   );
 });
 
-test("spec defines room-door subagent arrivals and door departures", () => {
+test("spec defines parent-spawn subagent arrivals and door departures", () => {
   const specSource = readFileSync(
     join(__dirname, "../../../docs/spec.md"),
     "utf8"
@@ -1334,7 +1334,7 @@ test("spec defines room-door subagent arrivals and door departures", () => {
   );
   assert.match(
     specSource,
-    /A newly visible subagent should use that same room-door entry path; parent\/child relationship arrows should communicate delegation without making children spawn out of the parent avatar\./,
+    /A newly visible subagent should start from its parent agent's current scene position, then move to its assigned workstation\./,
   );
   assert.match(
     specSource,
@@ -1380,7 +1380,7 @@ test("runtime source turns room changes into old-room exits plus new-room door e
   assert.ok(navigationSource.includes("const distance = motionTargetDistance(previousState, agent);"));
   assert.ok(navigationSource.includes("if (sameSlotAssignment(previousState, agent)) {"));
   assert.ok(navigationSource.includes("const previousRoomState = previousMotionState && previousMotionState.roomId !== agent.roomId"));
-  assert.ok(navigationSource.includes("const enteringFromDoor = !previousMotionState"));
+  assert.ok(navigationSource.includes("const enteringFromDoor = enteringFromParent"));
   assert.ok(navigationSource.includes("const transitionGhostKey = agentKey + \"::transition-exit::\" + previousRoomState.roomId;"));
   assert.ok(navigationSource.includes("const transitionGhost = buildExitGhostMotion(transitionGhostKey, previousRoomState, roomNavigation, reservations);"));
 });

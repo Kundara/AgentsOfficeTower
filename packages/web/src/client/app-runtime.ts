@@ -4448,10 +4448,17 @@ export function startClientApp(): void {
         return Number.isFinite(updatedAt) && Date.now() - updatedAt > ACTIVE_SUBAGENT_WORKSTATION_WINDOW_MS;
       }
 
+      function isTerminalRuntimeLocalAgent(agent) {
+        return agent
+          && agent.needsUser === null
+          && (agent.state === "done" || agent.state === "idle");
+      }
+
       function isRuntimeActiveLocalAgent(agent) {
         return agent
           && agent.source === "local"
           && agent.statusText === "active"
+          && !isTerminalRuntimeLocalAgent(agent)
           && !isStaleRuntimeActiveSubagent(agent);
       }
 
@@ -7264,6 +7271,7 @@ export function startClientApp(): void {
                   id: agent.id,
                   key: agentKey(snapshot.projectRoot, agent),
                   parentThreadId: agent.parentThreadId || null,
+                  parentKey: agent.parentThreadId ? agentKey(snapshot.projectRoot, { id: agent.parentThreadId }) : null,
                   roomId: room.id,
                   label: agent.label,
                   state: agent.state,
@@ -7356,6 +7364,7 @@ export function startClientApp(): void {
                     id: entry.agent.id,
                     key: agentKey(snapshot.projectRoot, entry.agent),
                     parentThreadId: entry.agent.parentThreadId || null,
+                    parentKey: entry.agent.parentThreadId ? agentKey(snapshot.projectRoot, { id: entry.agent.parentThreadId }) : null,
                     roomId: room.id,
                     label: entry.agent.label,
                     state: entry.agent.state,
@@ -11384,6 +11393,27 @@ const stableAgentTileReservations = new Map();
           };
         }
 
+        function parentSpawnPointForAgent(agent, parentState) {
+          if (!agent || !parentState || parentState.roomId !== agent.roomId) {
+            return null;
+          }
+          const x = Number.isFinite(parentState.currentX)
+            ? parentState.currentX
+            : Number.isFinite(parentState.avatarX)
+              ? parentState.avatarX
+              : Number.isFinite(parentState.targetX)
+                ? parentState.targetX
+                : Number.NaN;
+          const y = Number.isFinite(parentState.currentY)
+            ? parentState.currentY
+            : Number.isFinite(parentState.avatarY)
+              ? parentState.avatarY
+              : Number.isFinite(parentState.targetY)
+                ? parentState.targetY
+                : Number.NaN;
+          return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+        }
+
         function registerAgentMotion(agent, avatarVisual, roomNavigation, reservations, previousMotionState = null, options = {}) {
           if (!agent || !avatarVisual || !avatarVisual.avatar) {
             return avatarVisual.nodes;
@@ -11395,13 +11425,20 @@ const stableAgentTileReservations = new Map();
           const previousRoomState = previousMotionState && previousMotionState.roomId !== agent.roomId
             ? previousMotionState
             : null;
-          const enteringFromDoor = !previousMotionState
-            ? enteringAgentKeys.has(agent.key || agent.id)
-            : previousRoomState !== null;
           const autonomousResting = isAutonomousRestingAgent(agent);
           const previousState = previousMotionState && previousMotionState.roomId === agent.roomId
             ? previousMotionState
             : null;
+          const parentState = agent.parentKey
+            ? (previousMotionStates.get(agent.parentKey) || renderer.motionStates.get(agent.parentKey) || renderedAgentSceneState.get(agent.parentKey) || null)
+            : null;
+          const parentSpawnPoint = parentSpawnPointForAgent(agent, parentState);
+          const enteringFromParent = !previousState && !previousRoomState && enteringAgentKeys.has(agent.key || agent.id) && Boolean(parentSpawnPoint);
+          const enteringFromDoor = enteringFromParent
+            ? false
+            : (!previousMotionState
+              ? enteringAgentKeys.has(agent.key || agent.id)
+              : previousRoomState !== null);
           if (previousRoomState && previousRoomState.exiting !== true) {
             const transitionGhostKey = agentKey + "::transition-exit::" + previousRoomState.roomId;
             const transitionGhost = buildExitGhostMotion(transitionGhostKey, previousRoomState, roomNavigation, reservations);
@@ -11539,6 +11576,8 @@ const stableAgentTileReservations = new Map();
           }
           const startTile = previousState
             ? nearestWalkableTile(nav, officeAvatarFootTile(room, model.tile, previousState.currentX, previousState.currentY, previousState.width, previousState.height))
+            : enteringFromParent && parentSpawnPoint
+              ? nearestWalkableTile(nav, officeAvatarFootTile(room, model.tile, parentSpawnPoint.x, parentSpawnPoint.y, agent.width, agent.height))
             : enteringFromDoor
               ? nearestWalkableTile(nav, roomDoorTile(room, model.tile))
               : targetTile;
@@ -11554,6 +11593,9 @@ const stableAgentTileReservations = new Map();
               { x: agent.x, y: agent.y }
             )
             : [{ x: agent.x, y: agent.y }];
+          if (enteringFromParent && parentSpawnPoint && route.length > 0) {
+            route[0] = { x: parentSpawnPoint.x, y: parentSpawnPoint.y };
+          }
           const isMoving = route.length > 1 || options.exiting === true;
           const movingDepthFootY = isMoving ? null : avatarVisual.depthFootY;
           const movingDepthBias = isMoving ? null : avatarVisual.depthBias;

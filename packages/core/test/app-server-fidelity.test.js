@@ -1223,6 +1223,109 @@ test("completed non-final turns keep the monitored thread live until final answe
   assert.equal(monitor.stoppedAtByThreadId.has(thread.id), false);
 });
 
+test("settled idle subagents stop even when no final-answer phase is present", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const thread = {
+    ...sampleThread(),
+    id: "thr_child",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    status: { type: "active" },
+    updatedAt: Math.floor(Date.now() / 1000)
+  };
+  const settledChildThread = {
+    ...thread,
+    status: { type: "idle" },
+    turns: [
+      {
+        id: "turn_child",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_cmd",
+            type: "commandExecution",
+            command: "git status --short",
+            cwd: "/tmp/CodexAgentsOffice",
+            status: "completed"
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(thread.id, thread);
+  monitor.markThreadLive(thread.id);
+  monitor.client = {
+    readThread: async () => settledChildThread
+  };
+
+  await monitor.refreshThread(thread.id);
+
+  assert.equal(monitor.ongoingThreadIds.has(thread.id), false);
+  assert.equal(monitor.stoppedAtByThreadId.has(thread.id), true);
+});
+
+test("confirmed dormant notLoaded subagents stop without a final-answer phase", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const thread = {
+    ...sampleThread(),
+    id: "thr_child_notloaded",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    status: { type: "active" },
+    updatedAt: Math.floor(Date.now() / 1000)
+  };
+  const dormantNotLoadedChild = {
+    ...thread,
+    status: { type: "notLoaded" },
+    turns: [
+      {
+        id: "turn_child",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            id: "item_tool",
+            type: "mcpToolCall",
+            tool: "js",
+            status: "completed"
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(thread.id, thread);
+  monitor.markThreadLive(thread.id);
+  monitor.client = {
+    readThread: async () => dormantNotLoadedChild
+  };
+
+  await monitor.confirmDormantNotLoadedThread(thread.id);
+
+  assert.equal(monitor.ongoingThreadIds.has(thread.id), false);
+  assert.equal(monitor.stoppedAtByThreadId.has(thread.id), true);
+});
+
 test("read-only Codex hydration preserves fresh list timestamps for current workload seating", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
@@ -2831,6 +2934,169 @@ test("stale active subagent thread without an in-progress turn is not kept as li
   assert.equal(isStaleActiveSubagentThread(thread, now), true);
   assert.equal(isOngoingThread(thread), false);
   assert.equal(isCurrentWorkloadAgent(agent, now), false);
+});
+
+test("active loaded subagent with final answer does not stay ongoing", () => {
+  const thread = {
+    ...sampleThread(),
+    id: "thr_finished_loaded_child",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    status: { type: "active", activeFlags: [] },
+    updatedAt: Math.floor(Date.parse("2026-03-24T00:00:00.000Z") / 1000),
+    turns: [
+      {
+        id: "turn_done",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_done",
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  assert.equal(isOngoingThread(thread), false);
+});
+
+test("done active-status local subagent only stays current for the exit grace", () => {
+  const now = Date.parse("2026-03-24T00:00:05.000Z");
+  const finishedChild = {
+    id: "thr_done_active_child",
+    label: "Done child",
+    source: "local",
+    sourceKind: "subAgent",
+    parentThreadId: "thr_parent",
+    depth: 1,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "active",
+    role: "worker",
+    nickname: null,
+    isSubagent: true,
+    state: "done",
+    detail: "Done.",
+    cwd: "/tmp/CodexAgentsOffice",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-24T00:00:00.000Z",
+    stoppedAt: "2026-03-24T00:00:00.000Z",
+    paths: ["/tmp/CodexAgentsOffice"],
+    activityEvent: null,
+    latestMessage: "Done.",
+    threadId: "thr_done_active_child",
+    taskId: null,
+    resumeCommand: "codex resume thr_done_active_child",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "subscribed"
+  };
+
+  assert.equal(isCurrentWorkloadAgent(finishedChild, now), false);
+});
+
+test("done idle local subagent without an explicit stop is not kept current by freshness", () => {
+  const now = Date.parse("2026-03-24T00:00:01.000Z");
+  const finishedChild = {
+    id: "thr_done_idle_child",
+    label: "Done child",
+    source: "local",
+    sourceKind: "subAgent",
+    parentThreadId: "thr_parent",
+    depth: 1,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "idle",
+    role: "worker",
+    nickname: null,
+    isSubagent: true,
+    state: "done",
+    detail: "Edited packages/core/src/live-monitor.ts",
+    cwd: "/tmp/CodexAgentsOffice",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-24T00:00:00.500Z",
+    stoppedAt: null,
+    paths: ["/tmp/CodexAgentsOffice/packages/core/src/live-monitor.ts"],
+    activityEvent: {
+      type: "fileChange",
+      action: "edited",
+      path: "/tmp/CodexAgentsOffice/packages/core/src/live-monitor.ts",
+      title: "Edited packages/core/src/live-monitor.ts",
+      isImage: false
+    },
+    latestMessage: "Done.",
+    threadId: "thr_done_idle_child",
+    taskId: null,
+    resumeCommand: "codex resume thr_done_idle_child",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "subscribed"
+  };
+
+  assert.equal(isCurrentWorkloadAgent(finishedChild, now), false);
+});
+
+test("non-ongoing notLoaded subagent is not kept current by fresh work activity", () => {
+  const now = Date.parse("2026-03-24T00:00:01.000Z");
+  const dormantChild = {
+    id: "thr_notloaded_child",
+    label: "Dormant child",
+    source: "local",
+    sourceKind: "subAgent",
+    parentThreadId: "thr_parent",
+    depth: 1,
+    isCurrent: false,
+    isOngoing: false,
+    statusText: "notLoaded",
+    role: "worker",
+    nickname: null,
+    isSubagent: true,
+    state: "editing",
+    detail: "Edited packages/core/src/live-monitor.ts",
+    cwd: "/tmp/CodexAgentsOffice",
+    roomId: "root",
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: "2026-03-24T00:00:00.500Z",
+    stoppedAt: null,
+    paths: ["/tmp/CodexAgentsOffice/packages/core/src/live-monitor.ts"],
+    activityEvent: {
+      type: "fileChange",
+      action: "edited",
+      path: "/tmp/CodexAgentsOffice/packages/core/src/live-monitor.ts",
+      title: "Edited packages/core/src/live-monitor.ts",
+      isImage: false
+    },
+    latestMessage: null,
+    threadId: "thr_notloaded_child",
+    taskId: null,
+    resumeCommand: "codex resume thr_notloaded_child",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly"
+  };
+
+  assert.equal(isCurrentWorkloadAgent(dormantChild, now), false);
 });
 
 test("stale local blocked threads do not stay current forever without ongoing state", () => {
