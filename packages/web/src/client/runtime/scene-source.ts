@@ -21,6 +21,71 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
       }
 
       const stableSceneOrderMemory = new Map();
+      const OFFICE_MOTION_DEFAULT_DELTA_MS = 16;
+      const OFFICE_MOTION_MAX_DELTA_MS = 50;
+      const OFFICE_MOTION_REBUILD_DELTA_CLAMP_MS = 120;
+      const OFFICE_MOTION_SAMPLE_LIMIT = 90;
+      const OFFICE_MOTION_WARN_SPEED_MULTIPLIER = 1.8;
+      const OFFICE_MOTION_WARN_ABSOLUTE_SPEED = 360;
+
+      function officeMotionFrameDeltaMs(renderer, now) {
+        const rawDeltaMs = Number(renderer && renderer.app && renderer.app.ticker && renderer.app.ticker.deltaMS);
+        const clampedDeltaMs = Number.isFinite(rawDeltaMs) && rawDeltaMs > 0
+          ? Math.min(rawDeltaMs, OFFICE_MOTION_MAX_DELTA_MS)
+          : OFFICE_MOTION_DEFAULT_DELTA_MS;
+        const clampUntil = Number(renderer && renderer.motionDeltaClampUntil) || 0;
+        if (Number.isFinite(now) && now < clampUntil) {
+          return Math.min(clampedDeltaMs, OFFICE_MOTION_DEFAULT_DELTA_MS);
+        }
+        return clampedDeltaMs;
+      }
+
+      function recordOfficeMotionSample(renderer, entry, mode, beforeX, beforeY, afterX, afterY, deltaMs, expectedSpeed) {
+        const distancePx = Math.hypot(Number(afterX) - Number(beforeX), Number(afterY) - Number(beforeY));
+        if (!renderer || !entry || !Number.isFinite(distancePx) || distancePx <= 0.05) {
+          return;
+        }
+        const safeDeltaMs = Math.max(1, Number(deltaMs) || OFFICE_MOTION_DEFAULT_DELTA_MS);
+        const speedPxPerSec = distancePx * 1000 / safeDeltaMs;
+        const routeLength = Array.isArray(entry.route) ? entry.route.length : 0;
+        const sample = {
+          at: new Date().toISOString(),
+          key: String(entry.key || ""),
+          mode: String(mode || "motion"),
+          distancePx: Math.round(distancePx * 10) / 10,
+          deltaMs: Math.round(safeDeltaMs * 10) / 10,
+          speedPxPerSec: Math.round(speedPxPerSec),
+          expectedSpeed: Math.round(Number(expectedSpeed) || 0),
+          routeIndex: Number.isFinite(entry.routeIndex) ? Number(entry.routeIndex) : 0,
+          routeLength,
+          seatShiftDistancePx: entry.seatShift && Number.isFinite(entry.seatShift.distancePx)
+            ? Math.round(Number(entry.seatShift.distancePx) * 10) / 10
+            : null
+        };
+        const samples = Array.isArray(renderer.motionDebugSamples) ? renderer.motionDebugSamples : [];
+        samples.push(sample);
+        while (samples.length > OFFICE_MOTION_SAMPLE_LIMIT) {
+          samples.shift();
+        }
+        renderer.motionDebugSamples = samples;
+        if (typeof window !== "undefined") {
+          window.__agentsOfficeMotionSamples = samples;
+        }
+        const expected = Math.max(Number(expectedSpeed) || 0, OFFICE_MOTION_WARN_ABSOLUTE_SPEED);
+        const shouldWarn = speedPxPerSec > expected * OFFICE_MOTION_WARN_SPEED_MULTIPLIER;
+        if (!shouldWarn) {
+          return;
+        }
+        const warnKey = String(entry.key || "") + "::" + String(mode || "motion");
+        const nowMs = Date.now();
+        renderer.motionDebugWarnedAt = renderer.motionDebugWarnedAt || new Map();
+        const lastWarnedAt = Number(renderer.motionDebugWarnedAt.get(warnKey) || 0);
+        if (nowMs - lastWarnedAt < 2000) {
+          return;
+        }
+        renderer.motionDebugWarnedAt.set(warnKey, nowMs);
+        console.warn("office avatar motion spike", sample);
+      }
 
       function sortAgentsStably(bucketKey, agents) {
         const cacheKey = String(bucketKey || "default");
@@ -1180,7 +1245,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         });
 
         snapshot.agents.forEach((agent) => {
-          if (!isBossOfficeCandidate(snapshot, agent)) {
+          if (!isRelationshipBossCandidate(snapshot, agent)) {
             return;
           }
           const bossPos = agentPositions.get(agent.id);
@@ -1246,6 +1311,15 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const key = host.dataset.officeMapHost || "";
         const existing = officeSceneRenderers.get(key);
         if (existing && existing.host === host) {
+          if (!existing.root && existing.ready) {
+            await existing.ready;
+          }
+          if (existing.destroyed || existing.initError || !existing.root) {
+            if (officeSceneRenderers.get(key) === existing) {
+              officeSceneRenderers.delete(key);
+            }
+            return null;
+          }
           return existing;
         }
         if (existing) {
@@ -1274,12 +1348,16 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           animatedSprites: [],
           motionStates: new Map(),
           roomDoorStates: new Map(),
+          workstationLayoutStates: new Map(),
           agentHitNodes: new Map(),
           animateTick: null,
           focusables: [],
           roomById: new Map(),
           roomNavigation: new Map(),
           reservedAgentTiles: new Map(),
+          motionDeltaClampUntil: 0,
+          motionDebugSamples: [],
+          motionDebugWarnedAt: new Map(),
           updateAutonomousRestingMotion: null,
           syncHeldItemSprite: null
         };
@@ -1310,9 +1388,9 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           renderer.app.stage.addChild(renderer.root);
           renderer.animateTick = () => {
             const now = performance.now();
-            const deltaMs = renderer.app?.ticker?.deltaMS || 16;
+            const deltaMs = officeMotionFrameDeltaMs(renderer, now);
             renderer.animatedSprites.forEach((entry) => {
-              if (!entry || (!entry.sprite && entry.kind !== "blink" && entry.kind !== "wall-dashboard-row")) {
+              if (!entry || (!entry.sprite && entry.kind !== "blink" && entry.kind !== "wall-dashboard-row" && entry.kind !== "layout-shift")) {
                 return;
               }
               if (entry.kind === "wall-dashboard-row") {
@@ -1327,9 +1405,50 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 entry.node.alpha = Math.min(1, 0.62 + eased * 0.38);
                 return;
               }
+              if (entry.kind === "layout-shift") {
+                const duration = Math.max(120, Number(entry.durationMs) || 420);
+                const elapsed = Math.max(0, now - Number(entry.startedAt || now));
+                const progress = Math.min(1, elapsed / duration);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                (entry.nodes || []).forEach((nodeEntry) => {
+                  if (!nodeEntry || !nodeEntry.node || !nodeEntry.node.parent) {
+                    return;
+                  }
+                  nodeEntry.node.x = pixelSnap((Number(nodeEntry.fromX) || 0) + ((Number(nodeEntry.targetX) || 0) - (Number(nodeEntry.fromX) || 0)) * eased);
+                  nodeEntry.node.y = pixelSnap((Number(nodeEntry.fromY) || 0) + ((Number(nodeEntry.targetY) || 0) - (Number(nodeEntry.fromY) || 0)) * eased);
+                });
+                return;
+              }
               if (entry.kind === "motion") {
+                const motionBeforeX = Number(entry.currentX);
+                const motionBeforeY = Number(entry.currentY);
+                const hadSeatShift = Boolean(entry.seatShift);
                 if (entry.autonomy && !entry.exiting && typeof renderer.updateAutonomousRestingMotion === "function") {
                   renderer.updateAutonomousRestingMotion(entry, now);
+                }
+                if (entry.seatShift) {
+                  const duration = Math.max(120, Number(entry.seatShift.durationMs) || 420);
+                  const elapsed = Math.max(0, now - Number(entry.seatShift.startedAt || now));
+                  const progress = Math.min(1, elapsed / duration);
+                  const eased = 1 - Math.pow(1 - progress, 3);
+                  entry.currentX = pixelSnap((Number(entry.seatShift.fromX) || 0) + ((Number(entry.seatShift.targetX) || 0) - (Number(entry.seatShift.fromX) || 0)) * eased);
+                  entry.currentY = pixelSnap((Number(entry.seatShift.fromY) || 0) + ((Number(entry.seatShift.targetY) || 0) - (Number(entry.seatShift.fromY) || 0)) * eased);
+                  if (progress >= 1) {
+                    entry.currentX = Number(entry.seatShift.targetX) || entry.currentX;
+                    entry.currentY = Number(entry.seatShift.targetY) || entry.currentY;
+                    entry.seatShift = null;
+                  }
+                  if (entry.roomId) {
+                    const currentRoom = renderer.model?.rooms?.find((room) => room.id === entry.roomId) || null;
+                    entry.currentTile = officeAvatarFootTile(
+                      currentRoom,
+                      renderer.model?.tile || 16,
+                      entry.currentX,
+                      entry.currentY,
+                      entry.width,
+                      entry.height
+                    );
+                  }
                 }
                 const route = Array.isArray(entry.route) ? entry.route : [];
                 const speed = Number(entry.speed) || 128;
@@ -1379,6 +1498,17 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 if (entry.routeIndex >= route.length && typeof entry.targetFlipX === "boolean") {
                   entry.flipX = entry.targetFlipX;
                 }
+                recordOfficeMotionSample(
+                  renderer,
+                  entry,
+                  hadSeatShift ? "seat-shift" : (entry.autonomy ? "autonomy-route" : "route"),
+                  motionBeforeX,
+                  motionBeforeY,
+                  Number(entry.currentX),
+                  Number(entry.currentY),
+                  deltaMs,
+                  speed
+                );
                 const renderOffsetX = Number.isFinite(entry.renderOffsetX) ? Number(entry.renderOffsetX) : 0;
                 const renderOffsetY = Number.isFinite(entry.renderOffsetY) ? Number(entry.renderOffsetY) : 0;
                 const renderWidth = Number.isFinite(entry.renderWidth) ? Number(entry.renderWidth) : pixelSnap(entry.width, 1);
@@ -1868,6 +1998,21 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 }
                 return !done;
               }
+              if (entry.kind === "layout-shift") {
+                const done = !Array.isArray(entry.nodes)
+                  || entry.nodes.length === 0
+                  || now - Number(entry.startedAt || now) >= Number(entry.durationMs || 420);
+                if (done) {
+                  (entry.nodes || []).forEach((nodeEntry) => {
+                    if (!nodeEntry || !nodeEntry.node || !nodeEntry.node.parent) {
+                      return;
+                    }
+                    nodeEntry.node.x = pixelSnap(Number(nodeEntry.targetX) || 0);
+                    nodeEntry.node.y = pixelSnap(Number(nodeEntry.targetY) || 0);
+                  });
+                }
+                return !done;
+              }
               if (entry.kind === "thrown-item") {
                 const done = now - Number(entry.startedAt || now) >= Number(entry.durationMs || 700);
                 if (done && entry.sprite && entry.sprite.parent) {
@@ -1928,9 +2073,18 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           };
           renderer.app.ticker.add(renderer.animateTick);
           renderer.resizeObserver = new ResizeObserver(() => {
-            if (renderer.model) {
-              syncOfficeRendererScene(renderer, renderer.model);
+            if (renderer.resizeSyncQueued) {
+              return;
             }
+            renderer.resizeSyncQueued = true;
+            window.requestAnimationFrame(() => {
+              renderer.resizeSyncQueued = false;
+              if (renderer.destroyed || !renderer.model) {
+                return;
+              }
+              syncOfficeRendererViewport(renderer, renderer.model);
+              syncOfficeAnchors(renderer, renderer.model, renderer.scale || 1);
+            });
           });
           renderer.resizeObserver.observe(host);
         }).catch((error) => {

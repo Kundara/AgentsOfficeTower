@@ -604,6 +604,95 @@ test("runtime source lets scene-agent clicks open a stable thread history card",
   assert.ok(stylesSource.includes(".office-map-thread-history {"));
 });
 
+test("client runtime does not rebuild the Pixi room scene for resize-only updates", () => {
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+
+  assert.ok(navigationSource.includes("function syncOfficeRendererViewport(renderer, model) {"));
+  assert.ok(navigationSource.includes("setPixelStyleIfChanged(renderer.host, \"height\", scaledHeight + \"px\");"));
+  assert.ok(navigationSource.includes("if (renderer.renderWidth !== scaledWidth || renderer.renderHeight !== scaledHeight) {"));
+  assert.ok(navigationSource.includes("renderer.app.renderer.resize(scaledWidth, scaledHeight);"));
+  assert.ok(navigationSource.includes("function commitOfficeRendererRoot(renderer, previousRoot, nextRoot) {"));
+  assert.ok(navigationSource.includes("const previousRoot = renderer.root;"));
+  assert.ok(navigationSource.includes("const nextRoot = new window.PIXI.Container();"));
+  assert.ok(navigationSource.includes("commitOfficeRendererRoot(renderer, previousRoot, nextRoot);"));
+  assert.doesNotMatch(navigationSource, /renderer\.root\.removeChildren\(\);/);
+  assert.ok(navigationSource.includes("return false;"));
+  assert.ok(navigationSource.includes("if (syncOfficeRendererScene(renderer, model)) {"));
+  assert.ok(sceneSource.includes("if (!existing.root && existing.ready) {"));
+  assert.ok(sceneSource.includes("await existing.ready;"));
+  assert.ok(sceneSource.includes("renderer.resizeSyncQueued = true;"));
+  assert.ok(sceneSource.includes("window.requestAnimationFrame(() => {"));
+  assert.ok(sceneSource.includes("syncOfficeRendererViewport(renderer, renderer.model);"));
+  assert.ok(sceneSource.includes("syncOfficeAnchors(renderer, renderer.model, renderer.scale || 1);"));
+  assert.doesNotMatch(
+    sceneSource,
+    /resizeObserver = new ResizeObserver\(\(\) => \{[\s\S]*?syncOfficeRendererScene\(renderer, renderer\.model\);[\s\S]*?\}\);/
+  );
+});
+
+test("client runtime tweens workstation shell and same-seat moves across layout refreshes", () => {
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+
+  assert.ok(navigationSource.includes("const WORKSTATION_LAYOUT_TWEEN_MS = 520;"));
+  assert.ok(navigationSource.includes("const MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX = 8;"));
+  assert.ok(navigationSource.includes("const previousWorkstationLayoutStates = new Map(renderer.workstationLayoutStates || []);"));
+  assert.ok(navigationSource.includes("function animateWorkstationLayoutNodes(kind, item, nodes) {"));
+  assert.ok(navigationSource.includes('renderer.animatedSprites.push({\n            kind: "layout-shift",'));
+  assert.ok(navigationSource.includes('animateWorkstationLayoutNodes("desk", desk, deskNodes);'));
+  assert.ok(navigationSource.includes('animateWorkstationLayoutNodes("office", office, officeNodes);'));
+  assert.ok(navigationSource.includes("function startSeatedLayoutShift(motionState, agent) {"));
+  assert.ok(navigationSource.includes("motionState.seatShift = {"));
+  assert.ok(navigationSource.includes("return Number.isFinite(distance) && distance <= MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX;"));
+  assert.ok(navigationSource.includes("if (!Number.isFinite(shiftDistance) || shiftDistance > MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX) {"));
+  assert.ok(navigationSource.includes("distancePx: shiftDistance,"));
+  assert.ok(navigationSource.includes("const seatedLayoutShifting = startSeatedLayoutShift(previousState, agent);"));
+  assert.ok(navigationSource.includes("if (autonomousResting || seatedLayoutShifting) {"));
+  assert.ok(sceneSource.includes('entry.kind !== "layout-shift"'));
+  assert.ok(sceneSource.includes('if (entry.kind === "layout-shift") {'));
+  assert.ok(sceneSource.includes("if (entry.seatShift) {"));
+  assert.ok(sceneSource.includes("workstationLayoutStates: new Map(),"));
+});
+
+test("client runtime keeps workspace floor order stable across activity refreshes", () => {
+  const layoutSource = readRuntimeSource("layout-source.ts");
+  const settingsSource = readRuntimeSource("settings-source.ts");
+
+  assert.ok(settingsSource.includes("const configuredProjectOrder = new Map(configuredProjects.map((project, index) => [project.root, index]));"));
+  assert.ok(settingsSource.includes("const dynamicProjectOrder = new Map();"));
+  assert.ok(layoutSource.includes("function projectDisplayOrderValue(project) {"));
+  assert.ok(layoutSource.includes("if (configuredProjectOrder.has(root)) {"));
+  assert.ok(layoutSource.includes("dynamicProjectOrder.set(root, nextDynamicProjectOrder);"));
+  assert.match(
+    layoutSource,
+    /function visibleProjects\(fleet\) \{\n\s+const projects = \[\.\.\.\(Array\.isArray\(fleet && fleet\.projects\) \? fleet\.projects : \[\]\)\];\n\s+projects\.forEach\(\(project\) => projectDisplayOrderValue\(project\)\);\n\s+return projects\.sort\(\(left, right\) => \{/
+  );
+  assert.ok(layoutSource.includes("const orderDelta = projectDisplayOrderValue(left) - projectDisplayOrderValue(right);"));
+});
+
+test("client runtime clamps avatar walking delta after scene rebuilds", () => {
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+
+  assert.ok(sceneSource.includes("const OFFICE_MOTION_DEFAULT_DELTA_MS = 16;"));
+  assert.ok(sceneSource.includes("const OFFICE_MOTION_MAX_DELTA_MS = 50;"));
+  assert.ok(sceneSource.includes("const OFFICE_MOTION_REBUILD_DELTA_CLAMP_MS = 120;"));
+  assert.ok(sceneSource.includes("const OFFICE_MOTION_SAMPLE_LIMIT = 90;"));
+  assert.ok(sceneSource.includes("function officeMotionFrameDeltaMs(renderer, now) {"));
+  assert.ok(sceneSource.includes("function recordOfficeMotionSample(renderer, entry, mode, beforeX, beforeY, afterX, afterY, deltaMs, expectedSpeed) {"));
+  assert.ok(sceneSource.includes("Math.min(rawDeltaMs, OFFICE_MOTION_MAX_DELTA_MS)"));
+  assert.ok(sceneSource.includes("return Math.min(clampedDeltaMs, OFFICE_MOTION_DEFAULT_DELTA_MS);"));
+  assert.ok(sceneSource.includes("const deltaMs = officeMotionFrameDeltaMs(renderer, now);"));
+  assert.ok(sceneSource.includes("const motionBeforeX = Number(entry.currentX);"));
+  assert.ok(sceneSource.includes('window.__agentsOfficeMotionSamples = samples;'));
+  assert.ok(sceneSource.includes('console.warn("office avatar motion spike", sample);'));
+  assert.ok(sceneSource.includes("motionDeltaClampUntil: 0,"));
+  assert.ok(sceneSource.includes("motionDebugSamples: [],"));
+  assert.ok(navigationSource.includes("renderer.motionDeltaClampUntil = performance.now() + OFFICE_MOTION_REBUILD_DELTA_CLAMP_MS;"));
+  assert.doesNotMatch(sceneSource, /const deltaMs = renderer\.app\?\.ticker\?\.deltaMS \|\| 16;/);
+});
+
 test("runtime source adds stronger state-specific animation for waiting, blocked, and validating work", () => {
   const renderSource = readRuntimeSource("render-source.ts");
   const navigationSource = readRuntimeSource("navigation-source.ts");
@@ -917,6 +1006,30 @@ test("runtime source sanitizes path-heavy labels and latest messages with the pr
   assert.ok(uiSource.includes("latestAgentMessage(snapshot.projectRoot, agent)"));
 });
 
+test("agent hover names use source brand color classes", () => {
+  const renderSource = readRuntimeSource("render-source.ts");
+  const stylesSource = readClientSource("styles-source.ts");
+  const servedStyles = readClientSource("styles.css");
+
+  assert.ok(renderSource.includes("function agentBrandClass(agent) {"));
+  assert.ok(renderSource.includes('return "agent-hover-brand agent-hover-brand-codex";'));
+  assert.ok(renderSource.includes('return "agent-hover-brand agent-hover-brand-claude";'));
+  assert.ok(renderSource.includes('return "agent-hover-brand agent-hover-brand-hermes";'));
+  assert.ok(renderSource.includes('return "agent-hover-brand agent-hover-brand-cursor";'));
+  assert.ok(renderSource.includes('return "agent-hover-brand agent-hover-brand-openclaw";'));
+  assert.ok(renderSource.includes("<strong\\${titleClassAttr}>"));
+  for (const className of [
+    "agent-hover-brand-codex",
+    "agent-hover-brand-claude",
+    "agent-hover-brand-hermes",
+    "agent-hover-brand-cursor",
+    "agent-hover-brand-openclaw"
+  ]) {
+    assert.ok(stylesSource.includes(`.agent-hover-title strong.${className}`));
+    assert.ok(servedStyles.includes(`.agent-hover-title strong.${className}`));
+  }
+});
+
 test("runtime source only keeps finished subagents in recent sessions during the child grace window", () => {
   const layoutSource = readRuntimeSource("layout-source.ts");
   const settingsSource = readRuntimeSource("settings-source.ts");
@@ -1194,6 +1307,10 @@ test("tool dashboard events prefer semantic thread-item icon overrides", () => {
     "script edit icon should be exposed through the thread-item icon map"
   );
   assert.ok(
+    pixelOfficeSource.includes('dynamicToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/mcpToolCall.png`'),
+    "dynamic tool calls should reuse the regular MCP gear icon"
+  );
+  assert.ok(
     renderSource.includes('eventIconUrlForThreadItemType("scriptEdit")'),
     "dashboard-event icon resolver should have a script file-change icon fallback"
   );
@@ -1307,7 +1424,9 @@ test("toast notifications use the merged worktree view so unsplit floors keep ma
 });
 
 test("boss relationship arrows are hover-only curved overlays with arrowheads", () => {
+  const layoutSource = readRuntimeSource("layout-source.ts");
   const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
   const specSource = readFileSync(
     join(__dirname, "../../../docs/spec.md"),
     "utf8"
@@ -1316,9 +1435,16 @@ test("boss relationship arrows are hover-only curved overlays with arrowheads", 
   assert.ok(navigationSource.includes(".bezierCurveTo(control1X, control1Y, control2X, control2Y, line.x2, line.y2)"));
   assert.ok(navigationSource.includes("const arrowHead = new PIXI.Graphics()"));
   assert.ok(navigationSource.includes("state.hoveredRelationshipBossKey"));
+  assert.ok(layoutSource.includes("function isRelationshipBossCandidate(snapshot, agent)"));
+  assert.ok(layoutSource.includes("childAgentsFor(snapshot, agent.id).length > 0"));
+  assert.ok(sceneSource.includes("if (!isRelationshipBossCandidate(snapshot, agent))"));
   assert.match(
     specSource,
     /Boss-to-subagent relationship arrows should only appear when the user is hovering or focusing that boss in the scene;/,
+  );
+  assert.match(
+    specSource,
+    /eligible for boss-to-subagent hover arrows, even if it has only one subagent/,
   );
 });
 

@@ -162,6 +162,27 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return agentProvenanceLabel(agent);
       }
 
+      function agentBrandClass(agent) {
+        const source = String(agent && agent.source || "").toLowerCase();
+        const provenance = String(agent && agent.provenance || "").toLowerCase();
+        if (source === "openclaw" || provenance === "openclaw") {
+          return "agent-hover-brand agent-hover-brand-openclaw";
+        }
+        if (source === "claude" || provenance === "claude") {
+          return "agent-hover-brand agent-hover-brand-claude";
+        }
+        if (source === "hermes" || provenance === "hermes") {
+          return "agent-hover-brand agent-hover-brand-hermes";
+        }
+        if (source === "cursor" || provenance === "cursor") {
+          return "agent-hover-brand agent-hover-brand-cursor";
+        }
+        if (source === "local" || source === "cloud" || provenance === "codex" || provenance === "cloud") {
+          return "agent-hover-brand agent-hover-brand-codex";
+        }
+        return "";
+      }
+
       function latestAgentMessage(projectRoot, agent) {
         const text = normalizeDisplayText(projectRoot, agent && agent.latestMessage ? agent.latestMessage : "");
         return text || "";
@@ -992,6 +1013,8 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const hoverTitle = displayAgentLabel(snapshot, agent);
         const className = options.className || "agent-hover";
         const styleAttr = options.style ? \` style="\${escapeHtml(options.style)}"\` : "";
+        const titleBrandClass = agentBrandClass(agent);
+        const titleClassAttr = titleBrandClass ? \` class="\${escapeHtml(titleBrandClass)}"\` : "";
         const summaryClass =
           summary.emphasis === "error" ? "agent-hover-summary agent-hover-summary-error"
           : summary.source === "user"
@@ -1020,7 +1043,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         ].filter(Boolean);
         const meta = metaParts.join('<span class="agent-hover-separator"> · </span>');
 
-        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong>\${escapeHtml(hoverTitle)}</strong></div>\${worktreeHtml}<div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div>\${actionHtml}<div class="agent-hover-meta">\${meta}</div></div>\`;
+        return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong\${titleClassAttr}>\${escapeHtml(hoverTitle)}</strong></div>\${worktreeHtml}<div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div>\${actionHtml}<div class="agent-hover-meta">\${meta}</div></div>\`;
       }
 
       function threadHistoryEntryTimeMs(entry) {

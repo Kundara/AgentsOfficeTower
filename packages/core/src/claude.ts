@@ -1,18 +1,24 @@
-import { open, readdir } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { open, readdir, readFile, stat } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 import { ensureAgentAppearance } from "./appearance";
 import { getClaudeSdkSessionRecords, listClaudeSdkSessions, resolveReadableClaudeHooksFilePath } from "./claude-agent-sdk";
-import type { DiscoveredProject } from "./project-paths";
+import { sameProjectPath, type DiscoveredProject } from "./project-paths";
 import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
+const CLAUDE_TEAMS_DIR = join(homedir(), ".claude", "teams");
+const CLAUDE_COWORK_LOCAL_AGENT_DIR_NAME = "local-agent-mode-sessions";
 const LOG_HEAD_BYTES = 4096;
 const LOG_TAIL_BYTES = 65536;
 const RECENT_CLAUDE_HOOK_ACTIVE_WINDOW_MS = 2 * 60 * 1000;
 const RECENT_MESSAGE_WINDOW_MS = 5 * 60 * 1000;
 const RECENT_DONE_WINDOW_MS = 15 * 60 * 1000;
+const RECENT_CLAUDE_TEAM_DISCOVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ACTIVE_CLAUDE_TEAM_DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const RECENT_CLAUDE_COWORK_DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const CLAUDE_COWORK_SCAN_FILE_LIMIT = 200;
 
 interface ClaudeProjectDir {
   root: string;
@@ -44,6 +50,69 @@ interface ClaudeLoadedSession {
   records: Array<Record<string, unknown>>;
   hookRecords: Array<Record<string, unknown>>;
   summary: ClaudeActivitySummary;
+}
+
+export interface ClaudeTeamMember {
+  agentId: string;
+  name: string;
+  agentType: string | null;
+  model: string | null;
+  prompt: string | null;
+  color: string | null;
+  joinedAt: number | null;
+  tmuxPaneId: string | null;
+  cwd: string;
+  worktreePath: string | null;
+  sessionId: string | null;
+  subscriptions: string[];
+  backendType: string | null;
+  isActive: boolean;
+  mode: string | null;
+}
+
+export interface ClaudeTeamSnapshot {
+  name: string;
+  description: string | null;
+  leadAgentId: string | null;
+  leadSessionId: string | null;
+  updatedAt: number;
+  members: ClaudeTeamMember[];
+}
+
+interface ClaudeTeamMemberContext {
+  team: ClaudeTeamSnapshot;
+  member: ClaudeTeamMember;
+  leadSessionId: string | null;
+}
+
+interface ClaudeTeamIndex {
+  bySessionId: Map<string, ClaudeTeamMemberContext>;
+  byLeadAndAgentId: Map<string, ClaudeTeamMemberContext>;
+  contexts: ClaudeTeamMemberContext[];
+}
+
+export interface ClaudeCoworkSpace {
+  id: string | null;
+  name: string;
+  root: string;
+  instructions: string | null;
+  updatedAt: number;
+}
+
+export interface ClaudeCoworkSession {
+  sessionId: string;
+  cliSessionId: string | null;
+  processName: string | null;
+  vmProcessName: string | null;
+  title: string | null;
+  initialMessage: string | null;
+  model: string | null;
+  spaceId: string | null;
+  roots: string[];
+  filePaths: string[];
+  createdAt: number;
+  updatedAt: number;
+  isArchived: boolean;
 }
 
 const CLAUDE_EVENT_WINDOW_MS = 2 * 60 * 1000;
@@ -148,6 +217,89 @@ function claudeCollabActivityEvent(input: {
   };
 }
 
+function claudeLeadAgentId(sessionId: string): string {
+  return `claude:${sessionId}`;
+}
+
+function claudeChildAgentId(sessionId: string, agentId: string): string {
+  return `${claudeLeadAgentId(sessionId)}:agent:${agentId}`;
+}
+
+function claudeTeamFallbackAgentId(teamName: string, agentId: string): string {
+  return `claude:team:${teamName}:agent:${agentId}`;
+}
+
+function claudeTeamMemberContextKey(leadSessionId: string, agentId: string): string {
+  return `${leadSessionId}\u0000${agentId}`;
+}
+
+function claudeTeamAgentId(context: ClaudeTeamMemberContext): string {
+  if (context.member.sessionId) {
+    return claudeLeadAgentId(context.member.sessionId);
+  }
+  if (context.leadSessionId) {
+    return claudeChildAgentId(context.leadSessionId, context.member.agentId);
+  }
+  return claudeTeamFallbackAgentId(context.team.name, context.member.agentId);
+}
+
+function claudeTeamParentAgentId(context: ClaudeTeamMemberContext): string | null {
+  return context.leadSessionId ? claudeLeadAgentId(context.leadSessionId) : null;
+}
+
+function claudeTeamMemberPrimaryCwd(member: ClaudeTeamMember): string {
+  return member.worktreePath ?? member.cwd;
+}
+
+function claudeHookAgentId(record: Record<string, unknown>): string | null {
+  return stringValue(record, "agent_id", "agentId");
+}
+
+function claudeHookAgentType(record: Record<string, unknown>): string | null {
+  return stringValue(record, "agent_type", "agentType");
+}
+
+function claudeHookChildThreadId(input: {
+  sessionId: string;
+  record: Record<string, unknown>;
+  teamIndex?: ClaudeTeamIndex;
+}): string {
+  const agentId = claudeHookAgentId(input.record);
+  if (!agentId) {
+    return input.sessionId;
+  }
+  const context = input.teamIndex?.byLeadAndAgentId.get(claudeTeamMemberContextKey(input.sessionId, agentId));
+  return context?.member.sessionId ?? claudeChildAgentId(input.sessionId, agentId);
+}
+
+function claudeCoworkAgentId(sessionId: string): string {
+  return `claude:cowork:${sessionId}`;
+}
+
+function uniqueCanonicalPaths(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => canonicalizeProjectPath(value))
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+}
+
+function appDataClaudeDirs(): string[] {
+  const candidates = [
+    process.env.APPDATA ? join(process.env.APPDATA, "Claude") : null,
+    join(homedir(), "AppData", "Roaming", "Claude"),
+    join(homedir(), "Library", "Application Support", "Claude"),
+    join(homedir(), ".config", "Claude")
+  ];
+  return Array.from(new Set(candidates.filter((candidate): candidate is string => Boolean(candidate))));
+}
+
+function claudeCoworkLocalAgentDirs(): string[] {
+  return appDataClaudeDirs().map((dir) => join(dir, CLAUDE_COWORK_LOCAL_AGENT_DIR_NAME));
+}
+
 function titleCaseIdentifier(value: string): string {
   return value
     .replace(/[_-]+/g, " ")
@@ -231,7 +383,7 @@ function parseClaudeElicitationQuestions(record: Record<string, unknown>): Needs
 }
 
 function claudeEventFromSummary(input: {
-  sessionId: string;
+  threadId: string;
   createdAt: string;
   summary: ClaudeActivitySummary;
   confidence: AgentConfidence;
@@ -251,7 +403,7 @@ function claudeEventFromSummary(input: {
     id: input.id,
     source: "claude",
     confidence: input.confidence,
-    threadId: input.sessionId,
+    threadId: input.threadId,
     createdAt: input.createdAt,
     method:
       event?.type === "fileChange" ? "claude/fileChange"
@@ -289,6 +441,7 @@ function buildClaudeSessionEvents(input: {
   records: Array<Record<string, unknown>>;
   fallbackUpdatedAt: number;
   hookRecords: Array<Record<string, unknown>>;
+  teamIndex?: ClaudeTeamIndex;
 }): DashboardEvent[] {
   const events = new Map<string, DashboardEvent>();
 
@@ -305,8 +458,13 @@ function buildClaudeSessionEvents(input: {
       continue;
     }
     const createdAt = new Date(recordTimestampMs(record, input.fallbackUpdatedAt)).toISOString();
-    const event = claudeEventFromSummary({
+    const threadId = claudeHookChildThreadId({
       sessionId: input.sessionId,
+      record,
+      teamIndex: input.teamIndex
+    });
+    const event = claudeEventFromSummary({
+      threadId,
       createdAt,
       summary,
       confidence: "typed",
@@ -362,7 +520,7 @@ function buildClaudeSessionEvents(input: {
     }
     const createdAt = new Date(createdAtMs).toISOString();
     const event = claudeEventFromSummary({
-      sessionId: input.sessionId,
+      threadId: input.sessionId,
       createdAt,
       summary,
       confidence: "inferred",
@@ -382,6 +540,7 @@ export function buildClaudeSessionEventsForTest(input: {
   records: Array<Record<string, unknown>>;
   fallbackUpdatedAt: number;
   hookRecords: Array<Record<string, unknown>>;
+  teamIndex?: ClaudeTeamIndex;
 }): DashboardEvent[] {
   return buildClaudeSessionEvents(input);
 }
@@ -744,6 +903,425 @@ function stringValue(record: Record<string, unknown>, ...keys: string[]): string
     }
   }
   return null;
+}
+
+function numberValue(record: Record<string, unknown>, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+      continue;
+    }
+    return candidate < 10_000_000_000 ? candidate * 1000 : candidate;
+  }
+  return null;
+}
+
+function booleanValue(record: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  return typeof record[key] === "boolean" ? record[key] : fallback;
+}
+
+function normalizeClaudeTeamMember(value: unknown): ClaudeTeamMember | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const agentId = stringValue(record, "agentId", "agent_id");
+  const name = stringValue(record, "name");
+  const cwd = canonicalizeProjectPath(stringValue(record, "cwd"));
+  if (!agentId || !name || !cwd) {
+    return null;
+  }
+
+  return {
+    agentId,
+    name,
+    agentType: stringValue(record, "agentType", "agent_type"),
+    model: stringValue(record, "model"),
+    prompt: stringValue(record, "prompt"),
+    color: stringValue(record, "color"),
+    joinedAt: numberValue(record, "joinedAt", "joined_at"),
+    tmuxPaneId: stringValue(record, "tmuxPaneId", "tmux_pane_id"),
+    cwd,
+    worktreePath: canonicalizeProjectPath(stringValue(record, "worktreePath", "worktree_path")),
+    sessionId: stringValue(record, "sessionId", "session_id"),
+    subscriptions: stringArray(record.subscriptions),
+    backendType: stringValue(record, "backendType", "backend_type"),
+    isActive: booleanValue(record, "isActive", true),
+    mode: stringValue(record, "mode")
+  };
+}
+
+async function findClaudeCoworkFiles(input: {
+  fileNamePattern: RegExp;
+  limit?: number;
+}): Promise<string[]> {
+  const limit = input.limit ?? CLAUDE_COWORK_SCAN_FILE_LIMIT;
+  const results: string[] = [];
+  const roots = claudeCoworkLocalAgentDirs();
+
+  for (const root of roots) {
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
+    while (queue.length > 0 && results.length < limit) {
+      const current = queue.shift();
+      if (!current) {
+        break;
+      }
+
+      const entries = await readdir(current.dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const path = join(current.dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === "skills-plugin") {
+            continue;
+          }
+          if (current.depth < 4) {
+            queue.push({ dir: path, depth: current.depth + 1 });
+          }
+          continue;
+        }
+        if (!entry.isFile() || !input.fileNamePattern.test(entry.name)) {
+          continue;
+        }
+        results.push(path);
+        if (results.length >= limit) {
+          break;
+        }
+      }
+    }
+  }
+
+  return Array.from(new Set(results));
+}
+
+function normalizeClaudeCoworkFolderPaths(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const paths = values.flatMap((entry) => {
+    if (typeof entry === "string") {
+      return [entry];
+    }
+    const record = asRecord(entry);
+    if (!record) {
+      return [];
+    }
+    return [
+      stringValue(record, "path", "root", "rootPath", "hostPath"),
+      stringValue(record, "folder", "folderPath")
+    ];
+  });
+  return uniqueCanonicalPaths(paths);
+}
+
+function normalizeClaudeCoworkSpaces(value: unknown, fallbackUpdatedAt: number): ClaudeCoworkSpace[] {
+  const record = asRecord(value);
+  const rawSpaces = Array.isArray(record?.spaces) ? record.spaces : [];
+  const spaces: ClaudeCoworkSpace[] = [];
+
+  for (const rawSpace of rawSpaces) {
+    const space = asRecord(rawSpace);
+    if (!space) {
+      continue;
+    }
+    const roots = uniqueCanonicalPaths([
+      ...normalizeClaudeCoworkFolderPaths(space.folders),
+      ...normalizeClaudeCoworkFolderPaths(space.projects)
+    ]);
+    if (roots.length === 0) {
+      continue;
+    }
+
+    const name = stringValue(space, "name") ?? "Claude Cowork";
+    const updatedAt = Math.max(
+      fallbackUpdatedAt,
+      numberValue(space, "updatedAt", "updated_at") ?? 0,
+      numberValue(space, "createdAt", "created_at") ?? 0
+    );
+    for (const root of roots) {
+      spaces.push({
+        id: stringValue(space, "id"),
+        name,
+        root,
+        instructions: stringValue(space, "instructions"),
+        updatedAt
+      });
+    }
+  }
+
+  return spaces;
+}
+
+async function readClaudeCoworkSpaces(limit = 50): Promise<ClaudeCoworkSpace[]> {
+  const files = await findClaudeCoworkFiles({
+    fileNamePattern: /^spaces\.json$/i,
+    limit: Math.max(limit * 4, 20)
+  });
+  const spaces = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const [content, fileStats] = await Promise.all([
+          readFile(file, "utf8"),
+          stat(file)
+        ]);
+        return normalizeClaudeCoworkSpaces(JSON.parse(content) as unknown, fileStats.mtimeMs);
+      } catch {
+        return [];
+      }
+    })
+  );
+  const now = Date.now();
+  return spaces
+    .flat()
+    .filter((space) => now - space.updatedAt <= RECENT_CLAUDE_COWORK_DISCOVERY_WINDOW_MS)
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, limit);
+}
+
+function normalizeClaudeCoworkSession(value: unknown, fallbackUpdatedAt: number): ClaudeCoworkSession | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const sessionId = stringValue(record, "sessionId", "session_id");
+  if (!sessionId) {
+    return null;
+  }
+
+  const selectedRoots = normalizeClaudeCoworkFolderPaths(record.userSelectedFolders);
+  const detectedFiles = Array.isArray(record.fsDetectedFiles)
+    ? record.fsDetectedFiles
+    : record.fsDetectedFiles ? [record.fsDetectedFiles] : [];
+  const filePaths = uniqueCanonicalPaths(detectedFiles.flatMap((entry) => {
+    const file = asRecord(entry);
+    return file ? [stringValue(file, "hostPath", "path", "filePath")] : [];
+  }));
+  const fileRoots = uniqueCanonicalPaths(filePaths.map((path) => path ? dirname(path) : null));
+  const roots = uniqueCanonicalPaths([
+    ...selectedRoots,
+    ...fileRoots
+  ]);
+  if (roots.length === 0) {
+    return null;
+  }
+
+  const createdAt = numberValue(record, "createdAt", "created_at") ?? fallbackUpdatedAt;
+  const updatedAt = Math.max(
+    fallbackUpdatedAt,
+    numberValue(record, "lastActivityAt", "last_activity_at") ?? 0,
+    numberValue(record, "updatedAt", "updated_at") ?? 0,
+    createdAt
+  );
+
+  return {
+    sessionId,
+    cliSessionId: stringValue(record, "cliSessionId", "cli_session_id"),
+    processName: stringValue(record, "processName", "process_name"),
+    vmProcessName: stringValue(record, "vmProcessName", "vm_process_name"),
+    title: stringValue(record, "title"),
+    initialMessage: stringValue(record, "initialMessage", "initial_message"),
+    model: stringValue(record, "model"),
+    spaceId: stringValue(record, "spaceId", "space_id"),
+    roots,
+    filePaths,
+    createdAt,
+    updatedAt,
+    isArchived: booleanValue(record, "isArchived", false)
+  };
+}
+
+async function readClaudeCoworkSessions(limit = 50): Promise<ClaudeCoworkSession[]> {
+  const files = await findClaudeCoworkFiles({
+    fileNamePattern: /^local_[^.]+\.json$/i,
+    limit: Math.max(limit * 4, 20)
+  });
+  const sessions = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const [content, fileStats] = await Promise.all([
+          readFile(file, "utf8"),
+          stat(file)
+        ]);
+        return normalizeClaudeCoworkSession(JSON.parse(content) as unknown, fileStats.mtimeMs);
+      } catch {
+        return null;
+      }
+    })
+  );
+  const now = Date.now();
+  return sessions
+    .filter((session): session is ClaudeCoworkSession => Boolean(session))
+    .filter((session) => now - session.updatedAt <= RECENT_CLAUDE_COWORK_DISCOVERY_WINDOW_MS)
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, limit);
+}
+
+function normalizeClaudeTeamSnapshot(value: unknown, fallbackName: string, updatedAt: number): ClaudeTeamSnapshot | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const name = stringValue(record, "name") ?? fallbackName;
+  const members = (Array.isArray(record.members) ? record.members : [])
+    .map(normalizeClaudeTeamMember)
+    .filter((member): member is ClaudeTeamMember => Boolean(member));
+  if (members.length === 0) {
+    return null;
+  }
+
+  const memberUpdatedAt = Math.max(0, ...members.map((member) => member.joinedAt ?? 0));
+  return {
+    name,
+    description: stringValue(record, "description"),
+    leadAgentId: stringValue(record, "leadAgentId", "lead_agent_id"),
+    leadSessionId: stringValue(record, "leadSessionId", "lead_session_id"),
+    updatedAt: Math.max(updatedAt, numberValue(record, "createdAt", "created_at") ?? 0, memberUpdatedAt),
+    members
+  };
+}
+
+function isVisibleClaudeTeam(team: ClaudeTeamSnapshot, now = Date.now()): boolean {
+  const ageMs = now - team.updatedAt;
+  if (ageMs <= RECENT_CLAUDE_TEAM_DISCOVERY_WINDOW_MS) {
+    return true;
+  }
+  return ageMs <= ACTIVE_CLAUDE_TEAM_DISCOVERY_WINDOW_MS
+    && team.members.some((member) => member.name !== "team-lead" && member.isActive);
+}
+
+async function readClaudeTeamSnapshotsFromDir(teamsDir: string, limit = 50): Promise<ClaudeTeamSnapshot[]> {
+  const entries = await readdir(teamsDir, { withFileTypes: true }).catch(() => []);
+  const teams = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const configPath = join(teamsDir, entry.name, "config.json");
+        try {
+          const [content, fileStats] = await Promise.all([
+            readFile(configPath, "utf8"),
+            stat(configPath)
+          ]);
+          return normalizeClaudeTeamSnapshot(JSON.parse(content) as unknown, entry.name, fileStats.mtimeMs);
+        } catch {
+          return null;
+        }
+      })
+  );
+
+  return teams
+    .filter((team): team is ClaudeTeamSnapshot => Boolean(team))
+    .filter((team) => isVisibleClaudeTeam(team))
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, limit);
+}
+
+async function readClaudeTeamSnapshots(limit = 50): Promise<ClaudeTeamSnapshot[]> {
+  return readClaudeTeamSnapshotsFromDir(CLAUDE_TEAMS_DIR, limit);
+}
+
+function inferClaudeTeamLeadSessionIds(teams: ClaudeTeamSnapshot[], sessions: ClaudeLoadedSession[]): Map<string, string> {
+  const inferred = new Map<string, { sessionId: string; updatedAt: number }>();
+  for (const team of teams) {
+    if (team.leadSessionId) {
+      inferred.set(team.name, { sessionId: team.leadSessionId, updatedAt: team.updatedAt });
+      continue;
+    }
+
+    for (const session of sessions) {
+      for (const record of session.hookRecords) {
+        if (stringValue(record, "team_name", "teamName") !== team.name) {
+          continue;
+        }
+        const updatedAt = recordTimestampMs(record, session.updatedAt);
+        const existing = inferred.get(team.name);
+        if (!existing || updatedAt > existing.updatedAt) {
+          inferred.set(team.name, { sessionId: session.sessionId, updatedAt });
+        }
+      }
+    }
+  }
+  return new Map([...inferred.entries()].map(([teamName, value]) => [teamName, value.sessionId]));
+}
+
+function buildClaudeTeamIndex(teams: ClaudeTeamSnapshot[], inferredLeadSessionIds = new Map<string, string>()): ClaudeTeamIndex {
+  const bySessionId = new Map<string, ClaudeTeamMemberContext>();
+  const byLeadAndAgentId = new Map<string, ClaudeTeamMemberContext>();
+  const contexts: ClaudeTeamMemberContext[] = [];
+
+  for (const team of teams) {
+    const leadSessionId = team.leadSessionId ?? inferredLeadSessionIds.get(team.name) ?? null;
+    for (const member of team.members) {
+      if (member.name === "team-lead") {
+        continue;
+      }
+      const context: ClaudeTeamMemberContext = { team, member, leadSessionId };
+      contexts.push(context);
+      if (member.sessionId) {
+        bySessionId.set(member.sessionId, context);
+      }
+      if (leadSessionId) {
+        byLeadAndAgentId.set(claudeTeamMemberContextKey(leadSessionId, member.agentId), context);
+      }
+    }
+  }
+
+  return { bySessionId, byLeadAndAgentId, contexts };
+}
+
+function claudeProjectsFromTeams(teams: ClaudeTeamSnapshot[], limit = 50): ClaudeSdkProject[] {
+  const grouped = new Map<string, ClaudeSdkProject>();
+  for (const team of teams) {
+    for (const member of team.members) {
+      if (member.name === "team-lead") {
+        continue;
+      }
+      const root = claudeTeamMemberPrimaryCwd(member);
+      if (!root) {
+        continue;
+      }
+      const updatedAt = Math.max(team.updatedAt, member.joinedAt ?? 0);
+      const existing = grouped.get(root);
+      if (existing) {
+        existing.count += 1;
+        existing.updatedAt = Math.max(existing.updatedAt, updatedAt);
+      } else {
+        grouped.set(root, { root, updatedAt, count: 1 });
+      }
+    }
+  }
+
+  return [...grouped.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, limit);
+}
+
+function claudeProjectsFromCowork(input: {
+  spaces: ClaudeCoworkSpace[];
+  sessions: ClaudeCoworkSession[];
+  limit?: number;
+}): ClaudeSdkProject[] {
+  const grouped = new Map<string, ClaudeSdkProject>();
+  const addRoot = (root: string, updatedAt: number) => {
+    const existing = [...grouped.values()].find((candidate) => sameProjectPath(candidate.root, root));
+    if (existing) {
+      existing.count += 1;
+      existing.updatedAt = Math.max(existing.updatedAt, updatedAt);
+      return;
+    }
+    grouped.set(root, { root, updatedAt, count: 1 });
+  };
+
+  for (const space of input.spaces) {
+    addRoot(space.root, space.updatedAt);
+  }
+  for (const session of input.sessions) {
+    for (const root of session.roots) {
+      addRoot(root, session.updatedAt);
+    }
+  }
+
+  return [...grouped.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, input.limit ?? 50);
 }
 
 function claudeToolSummary(input: {
@@ -1125,6 +1703,7 @@ export function summariseClaudeHookRecord(input: {
     const detail =
       typeof input.record.agent_type === "string" ? `${input.record.agent_type} subagent finished`
       : "Subagent finished";
+    const lastAssistantMessage = stringValue(input.record, "last_assistant_message", "message");
     return {
       label: labelFromModel(input.model, input.sessionId),
       sourceKind: sourceKindFromModel(input.model),
@@ -1139,7 +1718,7 @@ export function summariseClaudeHookRecord(input: {
       gitBranch: input.gitBranch,
       confidence: "typed",
       needsUser: null,
-      latestMessage: null,
+      latestMessage: lastAssistantMessage,
       isOngoing: false
     };
   }
@@ -1680,28 +2259,76 @@ async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Pro
   return sessions.filter((entry): entry is ClaudeLoadedSession => Boolean(entry));
 }
 
-function claudeAgentFromLoadedSession(session: ClaudeLoadedSession, appearance: Awaited<ReturnType<typeof ensureAgentAppearance>>): DashboardAgent {
+function mergePathLists(...pathLists: string[][]): string[] {
+  return Array.from(new Set(pathLists.flat().filter(Boolean)));
+}
+
+function maxIsoTimestamp(...timestamps: Array<string | number | null | undefined>): string {
+  const ms = Math.max(
+    0,
+    ...timestamps
+      .map((timestamp) => {
+        if (typeof timestamp === "number") {
+          return timestamp;
+        }
+        if (typeof timestamp === "string") {
+          const parsed = Date.parse(timestamp);
+          return Number.isFinite(parsed) ? parsed : 0;
+        }
+        return 0;
+      })
+  );
+  return new Date(ms || Date.now()).toISOString();
+}
+
+function claudeAgentFromLoadedSession(
+  session: ClaudeLoadedSession,
+  appearance: Awaited<ReturnType<typeof ensureAgentAppearance>>,
+  teamContext: ClaudeTeamMemberContext | null = null
+): DashboardAgent {
+  const parentThreadId = teamContext ? claudeTeamParentAgentId(teamContext) : null;
+  const teamCwd = teamContext ? claudeTeamMemberPrimaryCwd(teamContext.member) : null;
+  const updatedAt = teamContext
+    ? maxIsoTimestamp(session.summary.updatedAt, teamContext.team.updatedAt, teamContext.member.joinedAt)
+    : session.summary.updatedAt;
+  const memberIsActive = teamContext?.member.isActive ?? false;
+  const state =
+    memberIsActive && (session.summary.state === "idle" || session.summary.state === "done")
+      ? "running"
+      : session.summary.state;
+  const isOngoing = session.summary.isOngoing || memberIsActive;
+  const detail =
+    memberIsActive && (session.summary.state === "idle" || session.summary.state === "done")
+      ? `${teamContext?.member.name ?? "Teammate"} active in ${teamContext?.team.name ?? "Claude team"}`
+      : session.summary.detail;
+  const paths = teamContext
+    ? mergePathLists(
+      [teamCwd ?? session.cwd, teamContext.member.cwd],
+      session.summary.paths
+    )
+    : session.summary.paths;
+
   return {
-    id: `claude:${session.sessionId}`,
-    label: session.summary.label,
+    id: claudeLeadAgentId(session.sessionId),
+    label: teamContext?.member.name ?? session.summary.label,
     source: "claude",
-    sourceKind: session.summary.sourceKind,
-    parentThreadId: null,
-    depth: 0,
+    sourceKind: teamContext ? `claude:team:${teamContext.team.name}` : session.summary.sourceKind,
+    parentThreadId,
+    depth: parentThreadId ? 1 : 0,
     isCurrent: false,
-    isOngoing: session.summary.isOngoing,
-    statusText: "claude",
-    role: "claude",
-    nickname: null,
-    isSubagent: false,
-    state: session.summary.state,
-    detail: session.summary.detail,
-    cwd: session.cwd,
+    isOngoing,
+    statusText: teamContext ? (teamContext.member.isActive ? "running" : "idle") : "claude",
+    role: teamContext?.member.agentType ?? "claude",
+    nickname: teamContext?.member.name ?? null,
+    isSubagent: Boolean(teamContext),
+    state,
+    detail,
+    cwd: teamCwd ?? session.cwd,
     roomId: null,
     appearance,
-    updatedAt: session.summary.updatedAt,
-    stoppedAt: null,
-    paths: session.summary.paths,
+    updatedAt,
+    stoppedAt: !isOngoing && parentThreadId ? updatedAt : null,
+    paths,
     activityEvent: session.summary.activityEvent,
     latestMessage: session.summary.latestMessage,
     threadId: session.sessionId,
@@ -1721,6 +2348,398 @@ function claudeAgentFromLoadedSession(session: ClaudeLoadedSession, appearance: 
   };
 }
 
+function mergeClaudeDashboardAgents(existing: DashboardAgent, incoming: DashboardAgent): DashboardAgent {
+  const existingUpdatedAt = Date.parse(existing.updatedAt);
+  const incomingUpdatedAt = Date.parse(incoming.updatedAt);
+  const incomingIsNewer = Number.isFinite(incomingUpdatedAt)
+    && (!Number.isFinite(existingUpdatedAt) || incomingUpdatedAt >= existingUpdatedAt);
+  const primary = incomingIsNewer ? incoming : existing;
+  const secondary = incomingIsNewer ? existing : incoming;
+  const parentThreadId = primary.parentThreadId ?? secondary.parentThreadId;
+  const teamStyled = incoming.sourceKind.startsWith("claude:team") ? incoming : existing.sourceKind.startsWith("claude:team") ? existing : null;
+
+  return {
+    ...primary,
+    label: teamStyled?.nickname ?? teamStyled?.label ?? primary.label,
+    sourceKind: teamStyled?.sourceKind ?? primary.sourceKind,
+    parentThreadId,
+    depth: parentThreadId ? Math.max(1, primary.depth, secondary.depth) : primary.depth,
+    isOngoing: primary.isOngoing || (secondary.isOngoing && !primary.stoppedAt),
+    role: teamStyled?.role ?? primary.role ?? secondary.role,
+    nickname: teamStyled?.nickname ?? primary.nickname ?? secondary.nickname,
+    isSubagent: primary.isSubagent || secondary.isSubagent || Boolean(parentThreadId),
+    cwd: primary.cwd ?? secondary.cwd,
+    paths: mergePathLists(primary.paths, secondary.paths),
+    stoppedAt: primary.isOngoing || secondary.isOngoing ? null : primary.stoppedAt ?? secondary.stoppedAt,
+    threadId: primary.threadId ?? secondary.threadId,
+    confidence: primary.confidence === "typed" || secondary.confidence === "typed" ? "typed" : primary.confidence
+  };
+}
+
+function latestClaudeTeamHookSummary(input: {
+  context: ClaudeTeamMemberContext;
+  sessions: ClaudeLoadedSession[];
+}): { summary: ClaudeActivitySummary; updatedAtMs: number } | null {
+  let latest: { summary: ClaudeActivitySummary; updatedAtMs: number } | null = null;
+
+  for (const session of input.sessions) {
+    if (
+      input.context.leadSessionId
+      && session.sessionId !== input.context.leadSessionId
+      && session.sessionId !== input.context.member.sessionId
+    ) {
+      continue;
+    }
+
+    for (const record of session.hookRecords) {
+      const agentId = claudeHookAgentId(record);
+      const teamName = stringValue(record, "team_name", "teamName");
+      const teammateName = stringValue(record, "teammate_name", "teammateName");
+      const matchesAgent = agentId === input.context.member.agentId;
+      const matchesTeammate = teamName === input.context.team.name && teammateName === input.context.member.name;
+      if (!matchesAgent && !matchesTeammate) {
+        continue;
+      }
+
+      const summary = summariseClaudeHookRecord({
+        sessionId: input.context.member.sessionId ?? session.sessionId,
+        model: input.context.member.model,
+        fallbackCwd: claudeTeamMemberPrimaryCwd(input.context.member),
+        gitBranch: session.gitBranch,
+        record,
+        fallbackUpdatedAt: session.updatedAt
+      });
+      if (!summary) {
+        continue;
+      }
+
+      const updatedAtMs = recordTimestampMs(record, session.updatedAt);
+      if (!latest || updatedAtMs >= latest.updatedAtMs) {
+        latest = { summary: ageClaudeSummary(summary), updatedAtMs };
+      }
+    }
+  }
+
+  return latest;
+}
+
+function claudeTeamMemberSummary(input: {
+  context: ClaudeTeamMemberContext;
+  sessions: ClaudeLoadedSession[];
+}): ClaudeActivitySummary {
+  const primaryCwd = claudeTeamMemberPrimaryCwd(input.context.member);
+  const baseUpdatedAt = Math.max(input.context.team.updatedAt, input.context.member.joinedAt ?? 0);
+  const base: ClaudeActivitySummary = {
+    label: input.context.member.name,
+    sourceKind: `claude:team:${input.context.team.name}`,
+    state: input.context.member.isActive ? "running" : "waiting",
+    detail: input.context.member.isActive
+      ? `${input.context.member.name} active in ${input.context.team.name}`
+      : `${input.context.member.name} idle in ${input.context.team.name}`,
+    updatedAt: new Date(baseUpdatedAt || Date.now()).toISOString(),
+    paths: mergePathLists([primaryCwd], [input.context.member.cwd]),
+    activityEvent: null,
+    gitBranch: null,
+    confidence: "typed",
+    needsUser: null,
+    latestMessage: null,
+    isOngoing: true
+  };
+  const latestHook = latestClaudeTeamHookSummary(input);
+  if (!latestHook) {
+    return base;
+  }
+
+  const hookState =
+    input.context.member.isActive && (latestHook.summary.state === "done" || latestHook.summary.state === "idle")
+      ? "running"
+      : latestHook.summary.state;
+  return {
+    ...base,
+    state: hookState,
+    detail: latestHook.summary.detail,
+    updatedAt: maxIsoTimestamp(base.updatedAt, latestHook.updatedAtMs),
+    paths: mergePathLists(latestHook.summary.paths, base.paths),
+    activityEvent: latestHook.summary.activityEvent,
+    latestMessage: latestHook.summary.latestMessage,
+    needsUser: latestHook.summary.needsUser,
+    isOngoing: input.context.member.isActive || latestHook.summary.isOngoing
+  };
+}
+
+async function claudeAgentFromTeamMemberContext(input: {
+  projectRoot: string;
+  context: ClaudeTeamMemberContext;
+  sessions: ClaudeLoadedSession[];
+}): Promise<DashboardAgent> {
+  const summary = claudeTeamMemberSummary({
+    context: input.context,
+    sessions: input.sessions
+  });
+  const id = claudeTeamAgentId(input.context);
+  const parentThreadId = claudeTeamParentAgentId(input.context);
+  const threadId = input.context.member.sessionId ?? id;
+  const appearance = await ensureAgentAppearance(input.projectRoot, id);
+
+  return {
+    id,
+    label: input.context.member.name,
+    source: "claude",
+    sourceKind: `claude:team:${input.context.team.name}`,
+    parentThreadId,
+    depth: parentThreadId ? 1 : 0,
+    isCurrent: false,
+    isOngoing: summary.isOngoing,
+    statusText: input.context.member.isActive ? "running" : "idle",
+    role: input.context.member.agentType ?? "teammate",
+    nickname: input.context.member.name,
+    isSubagent: true,
+    state: summary.state,
+    detail: summary.detail,
+    cwd: claudeTeamMemberPrimaryCwd(input.context.member),
+    roomId: null,
+    appearance,
+    updatedAt: summary.updatedAt,
+    stoppedAt: summary.isOngoing ? null : summary.updatedAt,
+    paths: summary.paths,
+    activityEvent: summary.activityEvent,
+    latestMessage: summary.latestMessage,
+    threadId,
+    taskId: null,
+    resumeCommand: null,
+    url: null,
+    git: null,
+    provenance: "claude",
+    confidence: "typed",
+    needsUser: summary.needsUser,
+    liveSubscription: "readOnly",
+    network: null
+  };
+}
+
+async function buildClaudeSubagentAgents(input: {
+  projectRoot: string;
+  session: ClaudeLoadedSession;
+  teamIndex: ClaudeTeamIndex;
+}): Promise<DashboardAgent[]> {
+  const latestById = new Map<string, {
+    agentId: string;
+    agentType: string | null;
+    context: ClaudeTeamMemberContext | null;
+    cwd: string;
+    summary: ClaudeActivitySummary;
+    updatedAtMs: number;
+  }>();
+
+  for (const record of input.session.hookRecords) {
+    const agentId = claudeHookAgentId(record);
+    if (!agentId) {
+      continue;
+    }
+    const context = input.teamIndex.byLeadAndAgentId.get(claudeTeamMemberContextKey(input.session.sessionId, agentId)) ?? null;
+    const summary = summariseClaudeHookRecord({
+      sessionId: context?.member.sessionId ?? input.session.sessionId,
+      model: context?.member.model ?? null,
+      fallbackCwd: context ? claudeTeamMemberPrimaryCwd(context.member) : input.session.cwd,
+      gitBranch: input.session.gitBranch,
+      record,
+      fallbackUpdatedAt: input.session.updatedAt
+    });
+    if (!summary) {
+      continue;
+    }
+
+    const id = context ? claudeTeamAgentId(context) : claudeChildAgentId(input.session.sessionId, agentId);
+    const updatedAtMs = recordTimestampMs(record, input.session.updatedAt);
+    const existing = latestById.get(id);
+    if (existing && existing.updatedAtMs > updatedAtMs) {
+      continue;
+    }
+
+    latestById.set(id, {
+      agentId,
+      agentType: claudeHookAgentType(record) ?? existing?.agentType ?? context?.member.agentType ?? null,
+      context,
+      cwd:
+        canonicalizeProjectPath(stringValue(record, "cwd"))
+        ?? (context ? claudeTeamMemberPrimaryCwd(context.member) : input.session.cwd),
+      summary: ageClaudeSummary(summary),
+      updatedAtMs
+    });
+  }
+
+  return Promise.all(
+    [...latestById.entries()].map(async ([id, seed]) => {
+      const parentThreadId = seed.context ? claudeTeamParentAgentId(seed.context) : claudeLeadAgentId(input.session.sessionId);
+      const threadId = seed.context?.member.sessionId ?? id;
+      const appearance = await ensureAgentAppearance(input.projectRoot, id);
+      const label =
+        seed.context?.member.name
+        ?? (seed.agentType ? titleCaseIdentifier(seed.agentType) : `Claude ${seed.agentId.slice(0, 4)}`);
+      const role = seed.context?.member.agentType ?? seed.agentType ?? "subagent";
+      return {
+        id,
+        label,
+        source: "claude" as const,
+        sourceKind: seed.context ? `claude:team:${seed.context.team.name}` : seed.agentType ? `claude:subagent:${seed.agentType}` : "claude:subagent",
+        parentThreadId,
+        depth: parentThreadId ? 1 : 0,
+        isCurrent: false,
+        isOngoing: seed.summary.isOngoing,
+        statusText: seed.summary.isOngoing ? "running" : seed.summary.state,
+        role,
+        nickname: seed.context?.member.name ?? seed.agentId,
+        isSubagent: true,
+        state: seed.summary.state,
+        detail: seed.summary.detail,
+        cwd: seed.cwd,
+        roomId: null,
+        appearance,
+        updatedAt: seed.summary.updatedAt,
+        stoppedAt: seed.summary.isOngoing ? null : seed.summary.updatedAt,
+        paths: seed.summary.paths.length > 0 ? seed.summary.paths : [seed.cwd],
+        activityEvent: seed.summary.activityEvent,
+        latestMessage: seed.summary.latestMessage,
+        threadId,
+        taskId: null,
+        resumeCommand: null,
+        url: null,
+        git: {
+          sha: null,
+          branch: seed.summary.gitBranch ?? input.session.gitBranch,
+          originUrl: null
+        },
+        provenance: "claude" as const,
+        confidence: "typed" as const,
+        needsUser: seed.summary.needsUser,
+        liveSubscription: "readOnly" as const,
+        network: null
+      } satisfies DashboardAgent;
+    })
+  );
+}
+
+async function buildClaudeTeamAgentsForProject(input: {
+  projectRoot: string;
+  sessions: ClaudeLoadedSession[];
+  teamIndex: ClaudeTeamIndex;
+}): Promise<DashboardAgent[]> {
+  const contexts = new Map<string, ClaudeTeamMemberContext>();
+  for (const context of input.teamIndex.contexts) {
+    const primaryCwd = claudeTeamMemberPrimaryCwd(context.member);
+    if (!sameProjectPath(primaryCwd, input.projectRoot)) {
+      continue;
+    }
+    contexts.set(claudeTeamAgentId(context), context);
+  }
+
+  return Promise.all(
+    [...contexts.values()].map((context) =>
+      claudeAgentFromTeamMemberContext({
+        projectRoot: input.projectRoot,
+        context,
+        sessions: input.sessions
+      })
+    )
+  );
+}
+
+function claudeCoworkState(session: ClaudeCoworkSession, now = Date.now()): ActivityState {
+  if (session.isArchived) {
+    return "idle";
+  }
+  const ageMs = now - session.updatedAt;
+  if (ageMs <= RECENT_CLAUDE_HOOK_ACTIVE_WINDOW_MS) {
+    return "thinking";
+  }
+  if (ageMs <= RECENT_DONE_WINDOW_MS) {
+    return "done";
+  }
+  return "idle";
+}
+
+function claudeCoworkDetail(session: ClaudeCoworkSession): string {
+  return shorten(session.title ?? session.initialMessage ?? "Claude Cowork session", 88);
+}
+
+function claudeCoworkActivityEvent(session: ClaudeCoworkSession, projectRoot: string): AgentActivityEvent | null {
+  const latestPath = session.filePaths.find((path) => sameProjectPath(dirname(path), projectRoot)) ?? session.filePaths[0] ?? null;
+  if (!latestPath) {
+    return null;
+  }
+  return {
+    type: "fileChange",
+    action: "updated",
+    path: latestPath,
+    title: `updated ${latestPath}`,
+    isImage: isImagePath(latestPath)
+  };
+}
+
+async function claudeAgentFromCoworkSession(input: {
+  projectRoot: string;
+  session: ClaudeCoworkSession;
+}): Promise<DashboardAgent> {
+  const id = claudeCoworkAgentId(input.session.sessionId);
+  const appearance = await ensureAgentAppearance(input.projectRoot, id);
+  const state = claudeCoworkState(input.session);
+  const isOngoing = state === "thinking";
+  const paths = mergePathLists(input.session.roots, input.session.filePaths);
+
+  return {
+    id,
+    label: input.session.title ?? "Claude Cowork",
+    source: "claude",
+    sourceKind: input.session.model ? `claude:cowork:${input.session.model}` : "claude:cowork",
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: false,
+    isOngoing,
+    statusText: "cowork",
+    role: "cowork",
+    nickname: null,
+    isSubagent: false,
+    state,
+    detail: claudeCoworkDetail(input.session),
+    cwd: input.projectRoot,
+    roomId: null,
+    appearance,
+    updatedAt: new Date(input.session.updatedAt).toISOString(),
+    stoppedAt: isOngoing ? null : new Date(input.session.updatedAt).toISOString(),
+    paths: paths.length > 0 ? paths : [input.projectRoot],
+    activityEvent: claudeCoworkActivityEvent(input.session, input.projectRoot),
+    latestMessage: null,
+    threadId: input.session.sessionId,
+    taskId: null,
+    resumeCommand: null,
+    url: null,
+    git: null,
+    provenance: "claude",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly",
+    network: null
+  };
+}
+
+async function buildClaudeCoworkAgentsForProject(input: {
+  projectRoot: string;
+  sessions: ClaudeCoworkSession[];
+  limit?: number;
+}): Promise<DashboardAgent[]> {
+  const matching = input.sessions
+    .filter((session) => session.roots.some((root) => sameProjectPath(root, input.projectRoot)))
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, input.limit ?? 8);
+
+  return Promise.all(matching.map((session) =>
+    claudeAgentFromCoworkSession({
+      projectRoot: input.projectRoot,
+      session
+    })
+  ));
+}
+
 export async function loadClaudeProjectSnapshotData(projectRoot: string, limit = 12): Promise<{
   agents: DashboardAgent[];
   events: DashboardEvent[];
@@ -1730,30 +2749,68 @@ export async function loadClaudeProjectSnapshotData(projectRoot: string, limit =
     return { agents: [], events: [] };
   }
 
-  const sessions = await collectClaudeLoadedSessions(canonicalRoot, limit);
-  if (sessions.length === 0) {
+  const [sessions, teams] = await Promise.all([
+    collectClaudeLoadedSessions(canonicalRoot, limit),
+    readClaudeTeamSnapshots(limit * 4)
+  ]);
+  const coworkSessions = await readClaudeCoworkSessions(limit * 4);
+  const inferredLeadSessionIds = inferClaudeTeamLeadSessionIds(teams, sessions);
+  const teamIndex = buildClaudeTeamIndex(teams, inferredLeadSessionIds);
+  const [teamAgents, coworkAgents] = await Promise.all([
+    buildClaudeTeamAgentsForProject({
+      projectRoot: canonicalRoot,
+      sessions,
+      teamIndex
+    }),
+    buildClaudeCoworkAgentsForProject({
+      projectRoot: canonicalRoot,
+      sessions: coworkSessions,
+      limit
+    })
+  ]);
+  if (sessions.length === 0 && teamAgents.length === 0 && coworkAgents.length === 0) {
     return { agents: [], events: [] };
   }
 
-  const agents: DashboardAgent[] = [];
+  const agentsById = new Map<string, DashboardAgent>();
   const events = new Map<string, DashboardEvent>();
+  const upsertAgent = (agent: DashboardAgent) => {
+    const existing = agentsById.get(agent.id);
+    agentsById.set(agent.id, existing ? mergeClaudeDashboardAgents(existing, agent) : agent);
+  };
 
   for (const session of sessions) {
-    const appearance = await ensureAgentAppearance(canonicalRoot, `claude:${session.sessionId}`);
-    agents.push(claudeAgentFromLoadedSession(session, appearance));
+    const teamContext = teamIndex.bySessionId.get(session.sessionId) ?? null;
+    const appearance = await ensureAgentAppearance(canonicalRoot, claudeLeadAgentId(session.sessionId));
+    upsertAgent(claudeAgentFromLoadedSession(session, appearance, teamContext));
+    for (const childAgent of await buildClaudeSubagentAgents({
+      projectRoot: canonicalRoot,
+      session,
+      teamIndex
+    })) {
+      upsertAgent(childAgent);
+    }
     for (const event of buildClaudeSessionEvents({
       sessionId: session.sessionId,
       fallbackCwd: session.cwd,
       records: session.records,
       fallbackUpdatedAt: session.updatedAt,
-      hookRecords: session.hookRecords
+      hookRecords: session.hookRecords,
+      teamIndex
     })) {
       events.set(event.id, event);
     }
   }
 
+  for (const teamAgent of teamAgents) {
+    upsertAgent(teamAgent);
+  }
+  for (const coworkAgent of coworkAgents) {
+    upsertAgent(coworkAgent);
+  }
+
   return {
-    agents,
+    agents: [...agentsById.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     events: [...events.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
   };
 }
@@ -1889,18 +2946,40 @@ export function summariseClaudeSession(
 }
 
 export async function discoverClaudeProjects(limit = 50): Promise<DiscoveredProject[]> {
-  const sdkProjects = await discoverClaudeProjectsViaSdk(limit);
-  if (sdkProjects.length > 0) {
-    return sdkProjects.map((project) => ({
+  const [sdkProjects, teams, coworkSpaces, coworkSessions] = await Promise.all([
+    discoverClaudeProjectsViaSdk(limit),
+    readClaudeTeamSnapshots(limit * 4),
+    readClaudeCoworkSpaces(limit * 4),
+    readClaudeCoworkSessions(limit * 4)
+  ]);
+  const fallbackProjects = sdkProjects.length > 0 ? [] : await scanClaudeProjectDirs();
+  const grouped = new Map<string, ClaudeSdkProject>();
+
+  for (const project of [
+    ...sdkProjects,
+    ...fallbackProjects.map((project) => ({
       root: project.root,
-      label: basename(project.root) || project.root,
       updatedAt: project.updatedAt,
       count: project.count
-    }));
+    })),
+    ...claudeProjectsFromTeams(teams, limit),
+    ...claudeProjectsFromCowork({
+      spaces: coworkSpaces,
+      sessions: coworkSessions,
+      limit
+    })
+  ]) {
+    const existing = [...grouped.values()].find((candidate) => sameProjectPath(candidate.root, project.root));
+    if (existing) {
+      existing.count += project.count;
+      existing.updatedAt = Math.max(existing.updatedAt, project.updatedAt);
+      continue;
+    }
+    grouped.set(project.root, { ...project });
   }
 
-  const projects = await scanClaudeProjectDirs();
-  return projects
+  return [...grouped.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
     .slice(0, limit)
     .map((project) => ({
       root: project.root,
@@ -1908,6 +2987,89 @@ export async function discoverClaudeProjects(limit = 50): Promise<DiscoveredProj
       updatedAt: project.updatedAt,
       count: project.count
     }));
+}
+
+export function discoverClaudeProjectsFromTeamsForTest(teams: ClaudeTeamSnapshot[], limit = 50): DiscoveredProject[] {
+  return claudeProjectsFromTeams(teams, limit).map((project) => ({
+    root: project.root,
+    label: basename(project.root) || project.root,
+    updatedAt: project.updatedAt,
+    count: project.count
+  }));
+}
+
+export function discoverClaudeProjectsFromCoworkForTest(input: {
+  spaces?: ClaudeCoworkSpace[];
+  sessions?: ClaudeCoworkSession[];
+  limit?: number;
+}): DiscoveredProject[] {
+  return claudeProjectsFromCowork({
+    spaces: input.spaces ?? [],
+    sessions: input.sessions ?? [],
+    limit: input.limit ?? 50
+  }).map((project) => ({
+    root: project.root,
+    label: basename(project.root) || project.root,
+    updatedAt: project.updatedAt,
+    count: project.count
+  }));
+}
+
+export async function buildClaudeSubagentAgentsForTest(input: {
+  projectRoot: string;
+  sessionId: string;
+  cwd: string;
+  gitBranch?: string | null;
+  updatedAt: number;
+  records?: Array<Record<string, unknown>>;
+  hookRecords: Array<Record<string, unknown>>;
+  teams?: ClaudeTeamSnapshot[];
+}): Promise<DashboardAgent[]> {
+  const session: ClaudeLoadedSession = {
+    sessionId: input.sessionId,
+    cwd: canonicalizeProjectPath(input.cwd) ?? input.cwd,
+    gitBranch: input.gitBranch ?? null,
+    updatedAt: input.updatedAt,
+    records: input.records ?? [],
+    hookRecords: input.hookRecords,
+    summary: summariseClaudeSession(
+      input.sessionId,
+      canonicalizeProjectPath(input.cwd) ?? input.cwd,
+      input.records ?? [],
+      input.updatedAt,
+      input.hookRecords
+    )
+  };
+  const teamIndex = buildClaudeTeamIndex(input.teams ?? [], inferClaudeTeamLeadSessionIds(input.teams ?? [], [session]));
+  return buildClaudeSubagentAgents({
+    projectRoot: canonicalizeProjectPath(input.projectRoot) ?? input.projectRoot,
+    session,
+    teamIndex
+  });
+}
+
+export async function buildClaudeTeamAgentsForTest(input: {
+  projectRoot: string;
+  teams: ClaudeTeamSnapshot[];
+}): Promise<DashboardAgent[]> {
+  const sessions: ClaudeLoadedSession[] = [];
+  const inferredLeadSessionIds = inferClaudeTeamLeadSessionIds(input.teams, sessions);
+  const teamIndex = buildClaudeTeamIndex(input.teams, inferredLeadSessionIds);
+  return buildClaudeTeamAgentsForProject({
+    projectRoot: canonicalizeProjectPath(input.projectRoot) ?? input.projectRoot,
+    sessions,
+    teamIndex
+  });
+}
+
+export async function buildClaudeCoworkAgentsForTest(input: {
+  projectRoot: string;
+  sessions: ClaudeCoworkSession[];
+}): Promise<DashboardAgent[]> {
+  return buildClaudeCoworkAgentsForProject({
+    projectRoot: canonicalizeProjectPath(input.projectRoot) ?? input.projectRoot,
+    sessions: input.sessions
+  });
 }
 
 export async function loadClaudeAgents(projectRoot: string, limit = 12): Promise<DashboardAgent[]> {

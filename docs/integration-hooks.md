@@ -430,7 +430,7 @@ What we read from Codex:
 - `thread.agentRole`
 - role hints from prompt text and user message text as a legacy fallback
 - `collabAgentToolCall` items for parent-thread delegation status, including the current `receiverThreadIds` / `agentsStates` shape when present
-- multi-agents v2 `collabAgentToolCall.tool` values such as `spawnAgent`, `sendInput`, `wait`, `closeAgent`, and `resumeAgent`, plus receiver thread IDs from live `item/started` and `item/completed` notifications
+- multi-agents v2 `collabAgentToolCall.tool` values such as `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, and `close_agent`, plus camelCase app-server aliases and receiver thread IDs from live `item/started` and `item/completed` notifications
 
 How we use it:
 
@@ -550,6 +550,7 @@ What we read:
 
 - `listSessions()` from `@anthropic-ai/claude-agent-sdk` when available
 - `~/.claude/projects/*/*.jsonl`
+- Claude Desktop Co-work app data under `local-agent-mode-sessions`, including `spaces.json` and recent `local_*.json` session files
 
 How we use it:
 
@@ -557,6 +558,7 @@ How we use it:
 - scan project directories
 - fall back to sampling the head and tail of each log when the SDK path is unavailable
 - infer the project root from session `cwd`
+- add Co-work `spaces[].folders[].path` and session `userSelectedFolders` paths as workspace floors
 - merge Claude-discovered roots into workspace discovery
 
 ### Claude session sampling
@@ -566,9 +568,13 @@ What we read:
 - `getSessionMessages()` from `@anthropic-ai/claude-agent-sdk` when available
 - recent JSONL records from the head and tail of each session file as fallback
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl`
+- Claude Agent Teams config files under `~/.claude/teams/*/config.json`
+- Claude Desktop Co-work session files under `local-agent-mode-sessions/**/local_*.json`
 - record timestamps
 - message model names
 - `cwd`
+- teammate `cwd` / `worktreePath`
+- Co-work `spaceId`, `title`, `initialMessage`, `lastActivityAt`, `userSelectedFolders`, and `fsDetectedFiles`
 - `gitBranch`
 
 How we use it:
@@ -579,7 +585,30 @@ How we use it:
 - infer the most recent meaningful activity from transcript data when no hook sidecar exists
 - prefer typed Claude hook events when a sidecar exists for that session
 - assign the Claude `sessionId` to the normalized `threadId` field so browser event matching can treat Claude like other tracked sessions
+- derive child Claude agents from hook `agent_id` and Agent Teams `leadSessionId` / teammate metadata when those typed identifiers are available
+- add teammate `worktreePath` or `cwd` values to Claude project discovery so cowork/team workspaces can appear as floors
+- add Claude Desktop Co-work project folders as floors and show matching Co-work local-agent sessions as read-only Claude agents
 - assign an appearance and render it as a `claude` agent
+
+### Claude Desktop Co-work local store
+
+The Claude Desktop Co-work view keeps its project/task state in app data, not in `~/.claude/teams`. On Windows this has been observed under `%APPDATA%/Claude/local-agent-mode-sessions`; macOS and Linux candidates follow the normal Claude application-support/config locations.
+
+What Agents Office reads from that store:
+
+- bounded recursive `spaces.json` scans for Co-work spaces and their folder roots
+- bounded recursive `local_*.json` scans for local-agent sessions
+- session metadata such as `sessionId`, `cliSessionId`, `processName`, `title`, `initialMessage`, `model`, `spaceId`, `createdAt`, and `lastActivityAt`
+- project roots from `userSelectedFolders`
+- recent file touches from `fsDetectedFiles[].hostPath`
+
+How Agents Office uses it:
+
+- Co-work folders become workspace floors in fleet mode
+- matching Co-work sessions become read-only Claude agents with `sourceKind = claude:cowork:<model-or-app>`
+- recent `fsDetectedFiles` entries become file-change activity for hover cards, session history, and file-change surfaces
+- state is freshness-based because this local store does not expose a Codex-style live thread protocol
+- this is treated as observed local app state rather than an official Claude API contract
 
 ### Official Claude hook surface
 
@@ -612,6 +641,9 @@ How this project uses that surface:
 - that same bridge now gives `PermissionRequest` and `Elicitation` hooks a browser response path by waiting on the matching project-scoped response file in Agents Office user data and then returning the official structured hook output back to Claude
 - Agents Office also appends a synthetic resolution marker into the Claude hook sidecar after a browser response so the queue clears immediately even for permission requests that do not emit a later official hook result
 - when those sidecars exist, Claude agents can surface typed permission, input, tool, subagent, stop, user-prompt, session-start/end, and compacting state with `confidence = typed`
+- subagent-scoped hook records with `agent_id` become child `DashboardAgent` rows under the lead Claude session, and their events attach to the child row instead of the parent when possible
+- Claude Agent Teams config files can upgrade teammates into child agents with teammate name, role, active/idle state, parent `leadSessionId`, and cowork project/worktree floor discovery
+- Claude Desktop Co-work session records can add read-only Claude agents and workspace floors, but they do not provide hook-backed browser replies or typed subagent control
 - when they do not exist, Claude falls back to transcript inference with `confidence = inferred`
 
 ### Claude transcript inference rules
@@ -658,8 +690,8 @@ When a project-scoped Claude hook sidecar exists, the loader can map these offic
 | `FileChanged` | `editing` | typed file-change activity from Claude hook input |
 | `Notification` | `thinking`, `waiting`, or `blocked` | typed Claude-side message or warning surface |
 | `TaskCreated` | `delegating` | typed delegated-task creation state with shared `collabAgentToolCall` activity |
-| `SubagentStart` | `delegating` | typed delegation summary with shared `collabAgentToolCall` activity |
-| `SubagentStop` | `done` | typed subagent-finished summary with shared `collabAgentToolCall` activity |
+| `SubagentStart` | `delegating` | typed delegation summary plus child-agent row when `agent_id` is present |
+| `SubagentStop` | `done` | typed subagent-finished summary plus child-agent row when `agent_id` is present |
 | `Stop` / `TaskCompleted` | `done` | typed completion state |
 | `StopFailure` | `blocked` | typed turn-failure summary |
 | `TeammateIdle` | `waiting` | typed teammate-idle summary |
@@ -678,7 +710,8 @@ What we synthesize:
 How we use it:
 
 - merge Claude session activity into normalized `DashboardEvent` records on `snapshot.events`
-- use the Claude `sessionId` as the event and agent `threadId` match key
+- use the Claude `sessionId` as the event and agent `threadId` match key for lead sessions
+- use a synthetic child thread id, or the teammate `sessionId` when Claude exposes one, for subagent/team-scoped Claude events
 - exactly the same browser notification path as Codex agents
 - same room mapping via normalized `paths`
 - same session-card and hover-card surfaces
@@ -687,7 +720,7 @@ What Claude still does not provide here:
 
 - Codex-style resume/open command
 - Codex app-server style live push stream into this process without a user-configured hook bridge
-- Codex-grade parent/subagent hierarchy with stable parent thread ids in the shared snapshot
+- a complete Codex-grade hierarchy for every child; hook `agent_id`, teammate `sessionId`, and team `leadSessionId` now provide typed hierarchy where available, while transcript-only delegation remains weaker
 - a general thread-steer/reply API comparable to Codex app-server, so Claude session cards are still read-only even though hook-backed approval/input waits are now actionable
 
 ## OpenClaw Gateway Sessions
@@ -1088,18 +1121,19 @@ Missing representation:
 Status:
 
 - Claude is merged into the same snapshot model
-- Claude agents carry `provenance = claude` and `confidence = inferred`
+- transcript-derived Claude agents carry `provenance = claude` and `confidence = inferred`
+- hook-backed Claude sessions, subagents, and Agent Teams rows carry `provenance = claude` and `confidence = typed` when their state comes from typed hook/team metadata
 - Hermes agents carry `provenance = hermes` and `confidence = inferred`
 - Codex, cloud, and presence entries carry typed provenance
 
 Current representation:
 
-- visual distinction between typed Codex truth and inferred Claude activity in hover and session detail
+- visual distinction between typed Codex truth, typed Claude hook/team activity, and inferred Claude transcript activity in hover and session detail
 - explicit confidence and provenance surfaces in the shared model
 
 Missing representation:
 
-- stronger in-scene styling differences between Codex-native and Claude-inferred agents
+- stronger in-scene styling differences between Codex-native, Claude typed, and Claude-inferred agents
 
 ## Practical Summary
 
@@ -1118,6 +1152,9 @@ Today the project already rides:
 - Claude tool-use and message inference
 - Claude provenance/confidence signaling
 - hook-backed Claude approval and elicitation responses from the browser queue
+- hook-backed Claude subagent child rows from `agent_id`
+- Claude Agent Teams teammate rows and cowork/worktree floor discovery
+- Claude Desktop Co-work project floors and read-only local-agent sessions
 - Hermes local `state.db` session discovery
 - Hermes cwd/env and system-prompt project matching
 

@@ -31,7 +31,7 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 | --- | --- |
 | Codex local | Best support through `codex app-server`, CLI/runtime discovery, typed events, approvals, inputs, and subagents |
 | Codex cloud | Cloud task list through `codex cloud list --json` |
-| Claude | Local logs plus Agent SDK session reads and hook-backed typed sidecars for permissions, input, file/command activity, and delegated-agent work where configured |
+| Claude | Local logs, Agent SDK session reads, hook-backed typed sidecars, subagent child rows from `agent_id`, Agent Teams cowork floors, and Claude Desktop Co-work project folders |
 | Cursor | Local hook sidecars, workspace/log inference, and Cursor cloud agents |
 | Hermes | Durable `state.db` sessions, profile stores, live process cwd/env hints, and optional hook bridge sidecars folded into the matching session |
 | OpenClaw | Gateway sessions and config surfaces (untested) |
@@ -85,7 +85,9 @@ They are designed for bounded visibility, not remote control. Skills can query t
 
 ## Optional Integrations
 
-- **Claude**: Claude sessions are read from the Agent SDK when available, then fall back to local project logs. Project-scoped hook sidecars can upgrade Claude sessions from inferred transcript state to typed state, including browser-answerable `PermissionRequest` / `Elicitation` waits and shared delegated-work events for Agent/Task and subagent hooks.
+- **Claude**: Claude sessions are read from the Agent SDK when available, then fall back to local project logs. Project-scoped hook sidecars can upgrade Claude sessions from inferred transcript state to typed state, including browser-answerable `PermissionRequest` / `Elicitation` waits and shared delegated-work events for Agent/Task and subagent hooks. Hook records with `agent_id` now appear as child agents under the lead Claude session, Agent Teams can add teammate child rows plus cowork/worktree floors, and Claude Desktop Co-work project folders can appear as read-only workspace floors.
+
+  Co-work support is intended to work across Windows, macOS, and Linux wherever Claude Desktop exposes the same local Co-work project data.
 
 - **Hermes**: install a user-level hook bridge:
 

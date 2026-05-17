@@ -93,6 +93,7 @@ A good iteration improves at least one of these:
 - verify a stopped top-level Codex lead keeps its workstation for about 3 seconds, then cools into rec-room visibility
 - verify delayed first hydration from the Codex app-server does not replay stale replies as fresh toasts or trigger late doorway-entry motion for historical Codex agents
 - verify nested multi-agent v2 subagents remain visible with their recursive ancestor chain and render at `0.75 ** depth` avatar scale
+- verify boss-to-subagent hover arrows appear for both boss-office leads with multiple visible children and ordinary-workstation leads with a single visible child
 - verify rec-strip furniture starts on the first floor-grid row and does not exceed 2 tiles of depth from the top band
 - verify desk pods start on tile columns and their workstation seat cells remain aligned to the same grid contract as rec-strip furniture
 - verify global text scale changes hover/toast/map text without changing room geometry or desk assignment
@@ -124,6 +125,8 @@ A good iteration improves at least one of these:
 - verify hook-backed Claude `PermissionRequest` waits can be accepted/declined from the browser queue and clear immediately through the local response-file bridge
 - verify hook-backed Claude `Elicitation` waits render schema-backed questions, ignore optional unanswered fields, and clear immediately after browser submit
 - verify Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records produce shared delegated-work activity and `subagent` dashboard events while preserving Claude provenance
+- verify Claude hook records with `agent_id` create child agent rows under the lead Claude session, and that Agent Teams config files create teammate child rows plus cowork/worktree project floors
+- verify Claude Desktop Co-work projects under `local-agent-mode-sessions` appear as workspace floors with read-only Claude agents and recent detected-file activity
 - verify OpenClaw gateway sessions appear only for projects whose normalized root matches the configured OpenClaw agent workspace
 - verify OpenClaw sessions preserve parent-child structure through the shared `parentThreadId` hierarchy
 - verify inferred local Cursor sessions appear for repos that Cursor has opened locally and are marked as inferred in hover/session detail

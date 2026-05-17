@@ -57,7 +57,7 @@ export const PIXEL_OFFICE_THREAD_ITEM_ICON_URLS = {
   commandExecution: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/commandExecution.png`,
   fileChange: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/fileChange.png`,
   mcpToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/mcpToolCall.png`,
-  dynamicToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/dynamicToolCall.png`,
+  dynamicToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/mcpToolCall.png`,
   collabToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/collabToolCall.png`,
   collabAgentToolCall: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/collabToolCall.png`,
   webSearch: `${PIXEL_OFFICE_SPRITES_DIR}/icons/thread-item/webSearch.png`,

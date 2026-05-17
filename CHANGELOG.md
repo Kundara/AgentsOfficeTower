@@ -18,6 +18,8 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added inline `Needs You` input composers for local typed Codex `tool/requestUserInput` waits, sending schema-backed `answers` payloads back through the app-server observer connection.
 - Added inline `Reply` composers to app-server-owned local typed Codex session cards, routing follow-up text through app-server so idle threads resume with `turn/start` and active turns accept nudges through `turn/steer`.
 - Added hook-backed Claude `Needs You` actions for typed `PermissionRequest` and schema-backed `Elicitation` waits, using a local response-file bridge plus synthetic queue-clearing sidecar markers so browser approvals and form answers can flow back into the Agent SDK hooks.
+- Added Claude Agent Teams discovery from `~/.claude/teams`, using teammate `worktreePath` / `cwd` values as cowork project floors.
+- Added Claude Desktop Co-work discovery from `local-agent-mode-sessions`, using saved space folders and session-selected folders as workspace floors with read-only Claude agents and detected-file activity.
 - Added scene-click thread cards for local Codex agents, exposing recent typed thread history directly from the office map with reply controls only when the thread is owned by the same app-server connection.
 - Added read-only Hermes Agent visibility by reading Hermes `state.db`/profile stores and live Hermes process cwd/env hints, mapping matching project sessions into Agents Office without project-name hard matching.
 - Added `codex-agents-office agents link hermes`, which installs a small Hermes plugin hook bridge into `~/.hermes/plugins/codex-agents-office` so Hermes session activity can stream into Agents Office as typed sidecars without launching Hermes.
@@ -43,6 +45,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed Codex dynamic-tool server request handling so unsupported `item/tool/call` requests receive an explicit unsuccessful response from Agents Office rather than leaving the Codex turn pending.
 - Changed Claude Agent SDK integration to `@anthropic-ai/claude-agent-sdk` `^0.2.118` and added typed coverage for newer hook events including `PostToolBatch`, `UserPromptExpansion`, `PermissionDenied`, and `TaskCreated`.
 - Changed Claude delegation hooks and Agent/Task tool calls to normalize onto the shared `collabAgentToolCall` activity type used for delegated-agent work.
+- Changed Claude `agent_id` hook records and Agent Teams metadata to produce child `DashboardAgent` rows under the lead Claude session when typed parent/child identifiers are available.
 - Changed Cursor cloud API requests to prefer the documented Bearer-token authorization path before falling back to the older Basic-auth compatibility path.
 - Changed per-project Agents Office state so room configs, appearance rosters, presence snapshots, Claude hook bridges, and Cursor hook sidecars now write into machine-local Agents Office user data keyed by project root instead of creating or mutating `.codex-agents/` inside the tracked project.
 - Changed the browser `Needs You` input cards to show required/optional question labels, per-request completion summaries, clearer missing-answer guidance, and explicit clear actions so multi-question prompts read more like structured forms than raw field dumps.
@@ -52,6 +55,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed the browser `Needs You` queue so app-server-owned local Codex input waits without schema-backed questions can open the inline reply composer directly, while observed desktop, VS Code, and CLI threads keep the raw `codex resume ...` fallback.
 - Changed local Codex workstation seating so fresh read-only turns without a final answer stay desk-seated through quiet text gaps and only release after the finished-workstation cooldown.
 - Changed the browser office scene so recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events now raise short above-head Pixi badges (`START`, `DONE`, `STOP`, `FAIL`) in addition to the existing toast treatment.
+- Changed agent hover card names to use source brand colors: Codex purple, Claude orange, Hermes yellow, Cursor gray, and OpenClaw red.
 - Changed the browser office animation so waiting desk work now pulses its cue, blocked desk work gets a subtle shake treatment, and validating desk work uses a brighter pulsing workstation glow instead of the generic busy glow.
 - Changed seated active desk animation so planning, scanning, editing, running, validating, and delegating work now use distinct micro-motion profiles instead of one shared bob.
 - Changed scene movement so visible room changes now render as a doorway exit in the old room plus a doorway entry in the destination room, instead of retargeting one live sprite across rooms.
@@ -61,6 +65,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed activity/request cue rendering so those chips now include mode-specific icon adornments and icon-side motion instead of relying on color and text alone.
 - Changed script file-change toasts to use a dedicated pixel edit icon when the typed event or fallback activity path identifies a script-like file.
 - Changed thread-item toast icon overrides for MCP tool calls, dynamic tool calls, collab tool calls, file changes, and entered review mode.
+- Changed dynamic tool call thread/toast icons to reuse the regular MCP gear icon instead of the separate red dynamic-tool asset.
 - Changed toast label icons to fit inside a smaller fixed-size slot and keep single file-change deltas inline with the filename.
 - Changed workstation activity rendering so approval, input, and resolve events keep short mode-specific desk-side Pixi effects, while ordinary command/edit activity stays on the toast and session surfaces.
 - Changed request workstation effects so approval waits now reflect decision breadth/type and input waits now reflect question and required-answer load instead of reusing one generic approval/input pulse.
@@ -72,6 +77,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed local Codex thread selection so tracked parent sessions also retain listed subagent descendants, keeping spawned workers visible even when they would otherwise fall outside the local thread slice.
 - Changed browser active summary counters to group subagents under their lead session so spawned workers do not inflate floor, tab, or hero active counts.
 - Changed subagent scene motion so newly visible child workers start from their parent agent's scene position; finished children still cool down and exit through the door.
+- Changed boss-to-subagent relationship arrows so hovering any visible lead with subagents shows the arrows, including single-child leads that stay in ordinary workstation layout instead of the boss-office column.
 - Changed avatar rendering so hats are now attached to the same Pixi motion/depth pipeline as the base avatar sprite, keeping hats aligned through seating, walking, fading, and workstation occlusion.
 - Changed Codex scene thread panels to read-only history only, removing browser Send fields and local resume/launch/copy controls from the in-scene agent chat.
 - Changed Hermes activity mapping so a Hermes session is treated as the stable agent and can move project floors based on the latest project-bearing hook or DB activity, preferring tool/payload paths over Hermes' own process cwd.
@@ -87,6 +93,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed multiagents v2 local Codex subagent visibility by reading recent session JSONL metadata when the app-server omits child thread rows, preserving parent links, nicknames, roles, command activity, and latest messages in fleet snapshots.
 - Fixed Codex subagent parsing for direct `subAgentThreadSpawn` source shapes and top-level parent metadata, restoring child visibility when the app-server does not nest the spawn payload under `subAgent.thread_spawn`.
 - Fixed loaded active-status Codex subagents so a final-answer child no longer stays `isOngoing` or active just because the app-server keeps the thread loaded.
 - Fixed stale active Codex subagent rows so child workers without an in-progress turn or fresh update stop counting as live work after the stale window instead of inflating active totals.
@@ -94,6 +101,11 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed transient `notLoaded` Codex subagent rereads so completed child workers without ongoing state do not briefly re-enter active counts from fresh file/tool activity.
 - Fixed fleet project discovery so transient autodiscovery misses retain recently discovered project floors briefly instead of dropping and re-adding floors every poll.
 - Fixed Windows Codex app-server launch selection so the resolved Codex app bundle wins over stale PATH shims unless `CODEX_CLI_PATH` explicitly overrides it.
+- Fixed Pixi office scene refreshes so concurrent renderer initialization and resize observers cannot mark a floor as rendered before the Pixi root exists or rebuild the full room scene during viewport-only changes.
+- Fixed boss/workstation layout refreshes so desk shells and same-seat agents tween across slot changes instead of popping or briefly walking away and back.
+- Fixed event-driven Pixi refreshes so scene rebuilds swap through a completed offscreen root, keeping the current room visible while toasts, activity cues, and wall-board events update.
+- Fixed rare avatar sprinting after scene swaps or long frames by measuring avatar frame speeds, capping Pixi walking delta time, and routing larger same-seat desk moves through navigation instead of direct lerp.
+- Fixed fleet workspace floor ordering so activity recency cannot reshuffle rooms after the page is already watching a set of projects.
 - Fixed the Pixi workstation reveal blink so newly appearing desks toggle visibility at half the previous speed.
 - Fixed in-scene hot-stuff board labels so the clipped edge fade applies to overflowing text at the row end instead of cutting into the first characters.
 - Fixed hot-stuff heat refreshes so the one-second decay tick updates the existing tooltip overlay instead of invalidating and rebuilding the whole office scene.

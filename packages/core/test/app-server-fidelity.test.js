@@ -2447,6 +2447,44 @@ test("multi-agent v2 collab tool calls summarize camelCase tools", () => {
   assert.equal(summary.activityEvent?.type, "collabAgentToolCall");
 });
 
+test("multi-agent v2 collab tool calls summarize current upstream tool names", () => {
+  const details = ["send_message", "followup_task", "wait_agent", "close_agent"].map((tool) => {
+    const thread = {
+      ...sampleThread(),
+      turns: [
+        {
+          id: "turn_1",
+          status: "inProgress",
+          error: null,
+          items: [
+            {
+              type: "collabAgentToolCall",
+              id: `call_${tool}`,
+              tool,
+              status: "inProgress",
+              senderThreadId: "thr_parent",
+              receiverThreadIds: ["thr_child"],
+              prompt: "Coordinate child work.",
+              model: null,
+              reasoningEffort: null,
+              agentsStates: {}
+            }
+          ]
+        }
+      ]
+    };
+
+    return summariseThread(thread).detail;
+  });
+
+  assert.deepEqual(details, [
+    "Messaging subagent",
+    "Messaging subagent",
+    "Waiting on subagents",
+    "Closing subagent"
+  ]);
+});
+
 test("multi-agent v2 collab notifications become subagent events", () => {
   const event = buildDashboardEventFromAppServerMessage(
     { projectRoot: "/tmp/CodexAgentsOffice" },

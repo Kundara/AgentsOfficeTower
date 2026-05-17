@@ -26,8 +26,8 @@ const THREAD_ITEM_LABELS: Record<string, string> = {
 
 const THREAD_ITEM_NOTES: Partial<Record<string, string>> = {
   scriptEdit: "Used by script file-change toasts when the event has no more specific method icon.",
-  mcpToolCall: "Uses the refined wrench icon shared with dynamic tool calls.",
-  dynamicToolCall: "Uses the refined wrench icon shared with MCP tool calls.",
+  mcpToolCall: "Uses the regular gear icon shared with dynamic tool calls.",
+  dynamicToolCall: "Uses the regular gear icon shared with MCP tool calls.",
   collabAgentToolCall: "Legacy compatibility item retained outside the current official list."
 };
 

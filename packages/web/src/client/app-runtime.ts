@@ -154,6 +154,9 @@ export function startClientApp(): void {
       const baselineProjectHydrationAt = new Map();
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));
+      const configuredProjectOrder = new Map(configuredProjects.map((project, index) => [project.root, index]));
+      const dynamicProjectOrder = new Map();
+      let nextDynamicProjectOrder = configuredProjectOrder.size;
       function projectInfo(projectRoot) {
         if (state.fleet && Array.isArray(state.fleet.projects)) {
           const liveProject = state.fleet.projects.find((project) => project.projectRoot === projectRoot);
@@ -3850,8 +3853,32 @@ export function startClientApp(): void {
         };
       }
 
+      function projectDisplayOrderValue(project) {
+        const root = String(project && project.projectRoot || "");
+        if (configuredProjectOrder.has(root)) {
+          return configuredProjectOrder.get(root);
+        }
+        if (!dynamicProjectOrder.has(root)) {
+          dynamicProjectOrder.set(root, nextDynamicProjectOrder);
+          nextDynamicProjectOrder += 1;
+        }
+        return dynamicProjectOrder.get(root);
+      }
+
       function visibleProjects(fleet) {
-        return fleet.projects;
+        const projects = [...(Array.isArray(fleet && fleet.projects) ? fleet.projects : [])];
+        projects.forEach((project) => projectDisplayOrderValue(project));
+        return projects.sort((left, right) => {
+          const orderDelta = projectDisplayOrderValue(left) - projectDisplayOrderValue(right);
+          if (orderDelta !== 0) {
+            return orderDelta;
+          }
+          const labelDelta = projectLabel(left.projectRoot).localeCompare(projectLabel(right.projectRoot));
+          if (labelDelta !== 0) {
+            return labelDelta;
+          }
+          return String(left.projectRoot || "").localeCompare(String(right.projectRoot || ""));
+        });
       }
 
       function fleetCounts(fleet) {
@@ -4133,6 +4160,10 @@ export function startClientApp(): void {
         return isLeadSession(snapshot, agent) && liveChildAgentsFor(snapshot, agent.id).length > 1;
       }
 
+      function isRelationshipBossCandidate(snapshot, agent) {
+        return isLeadSession(snapshot, agent) && childAgentsFor(snapshot, agent.id).length > 0;
+      }
+
       function sortedBossOfficeAgents(snapshot, agents) {
         return [...agents].sort((left, right) => {
           const childDelta = liveChildAgentsFor(snapshot, right.id).length - liveChildAgentsFor(snapshot, left.id).length;
@@ -4268,7 +4299,7 @@ export function startClientApp(): void {
       function renderBossRelationshipLines(snapshot, roomId, roomPixelWidth, roomPixelHeight) {
         const lineEntries = [];
         for (const agent of snapshot.agents) {
-          if (!isBossOfficeCandidate(snapshot, agent)) {
+          if (!isRelationshipBossCandidate(snapshot, agent)) {
             continue;
           }
           const bossScene = sceneStateForAgent(snapshot, agent.id);
@@ -4748,6 +4779,27 @@ export function startClientApp(): void {
           return agent.confidence === "inferred" ? "User inferred" : "User typed";
         }
         return agentProvenanceLabel(agent);
+      }
+
+      function agentBrandClass(agent) {
+        const source = String(agent && agent.source || "").toLowerCase();
+        const provenance = String(agent && agent.provenance || "").toLowerCase();
+        if (source === "openclaw" || provenance === "openclaw") {
+          return "agent-hover-brand agent-hover-brand-openclaw";
+        }
+        if (source === "claude" || provenance === "claude") {
+          return "agent-hover-brand agent-hover-brand-claude";
+        }
+        if (source === "hermes" || provenance === "hermes") {
+          return "agent-hover-brand agent-hover-brand-hermes";
+        }
+        if (source === "cursor" || provenance === "cursor") {
+          return "agent-hover-brand agent-hover-brand-cursor";
+        }
+        if (source === "local" || source === "cloud" || provenance === "codex" || provenance === "cloud") {
+          return "agent-hover-brand agent-hover-brand-codex";
+        }
+        return "";
       }
 
       function latestAgentMessage(projectRoot, agent) {
@@ -5580,6 +5632,8 @@ export function startClientApp(): void {
         const hoverTitle = displayAgentLabel(snapshot, agent);
         const className = options.className || "agent-hover";
         const styleAttr = options.style ? ` style="${escapeHtml(options.style)}"` : "";
+        const titleBrandClass = agentBrandClass(agent);
+        const titleClassAttr = titleBrandClass ? ` class="${escapeHtml(titleBrandClass)}"` : "";
         const summaryClass =
           summary.emphasis === "error" ? "agent-hover-summary agent-hover-summary-error"
           : summary.source === "user"
@@ -5608,7 +5662,7 @@ export function startClientApp(): void {
         ].filter(Boolean);
         const meta = metaParts.join('<span class="agent-hover-separator"> · </span>');
 
-        return `<div class="${escapeHtml(className)}"${styleAttr}><div class="agent-hover-title"><strong>${escapeHtml(hoverTitle)}</strong></div>${worktreeHtml}<div class="${escapeHtml(summaryClass)}">${escapeHtml(summary.text)}</div>${actionHtml}<div class="agent-hover-meta">${meta}</div></div>`;
+        return `<div class="${escapeHtml(className)}"${styleAttr}><div class="agent-hover-title"><strong${titleClassAttr}>${escapeHtml(hoverTitle)}</strong></div>${worktreeHtml}<div class="${escapeHtml(summaryClass)}">${escapeHtml(summary.text)}</div>${actionHtml}<div class="agent-hover-meta">${meta}</div></div>`;
       }
 
       function threadHistoryEntryTimeMs(entry) {
@@ -6423,6 +6477,71 @@ export function startClientApp(): void {
       }
 
       const stableSceneOrderMemory = new Map();
+      const OFFICE_MOTION_DEFAULT_DELTA_MS = 16;
+      const OFFICE_MOTION_MAX_DELTA_MS = 50;
+      const OFFICE_MOTION_REBUILD_DELTA_CLAMP_MS = 120;
+      const OFFICE_MOTION_SAMPLE_LIMIT = 90;
+      const OFFICE_MOTION_WARN_SPEED_MULTIPLIER = 1.8;
+      const OFFICE_MOTION_WARN_ABSOLUTE_SPEED = 360;
+
+      function officeMotionFrameDeltaMs(renderer, now) {
+        const rawDeltaMs = Number(renderer && renderer.app && renderer.app.ticker && renderer.app.ticker.deltaMS);
+        const clampedDeltaMs = Number.isFinite(rawDeltaMs) && rawDeltaMs > 0
+          ? Math.min(rawDeltaMs, OFFICE_MOTION_MAX_DELTA_MS)
+          : OFFICE_MOTION_DEFAULT_DELTA_MS;
+        const clampUntil = Number(renderer && renderer.motionDeltaClampUntil) || 0;
+        if (Number.isFinite(now) && now < clampUntil) {
+          return Math.min(clampedDeltaMs, OFFICE_MOTION_DEFAULT_DELTA_MS);
+        }
+        return clampedDeltaMs;
+      }
+
+      function recordOfficeMotionSample(renderer, entry, mode, beforeX, beforeY, afterX, afterY, deltaMs, expectedSpeed) {
+        const distancePx = Math.hypot(Number(afterX) - Number(beforeX), Number(afterY) - Number(beforeY));
+        if (!renderer || !entry || !Number.isFinite(distancePx) || distancePx <= 0.05) {
+          return;
+        }
+        const safeDeltaMs = Math.max(1, Number(deltaMs) || OFFICE_MOTION_DEFAULT_DELTA_MS);
+        const speedPxPerSec = distancePx * 1000 / safeDeltaMs;
+        const routeLength = Array.isArray(entry.route) ? entry.route.length : 0;
+        const sample = {
+          at: new Date().toISOString(),
+          key: String(entry.key || ""),
+          mode: String(mode || "motion"),
+          distancePx: Math.round(distancePx * 10) / 10,
+          deltaMs: Math.round(safeDeltaMs * 10) / 10,
+          speedPxPerSec: Math.round(speedPxPerSec),
+          expectedSpeed: Math.round(Number(expectedSpeed) || 0),
+          routeIndex: Number.isFinite(entry.routeIndex) ? Number(entry.routeIndex) : 0,
+          routeLength,
+          seatShiftDistancePx: entry.seatShift && Number.isFinite(entry.seatShift.distancePx)
+            ? Math.round(Number(entry.seatShift.distancePx) * 10) / 10
+            : null
+        };
+        const samples = Array.isArray(renderer.motionDebugSamples) ? renderer.motionDebugSamples : [];
+        samples.push(sample);
+        while (samples.length > OFFICE_MOTION_SAMPLE_LIMIT) {
+          samples.shift();
+        }
+        renderer.motionDebugSamples = samples;
+        if (typeof window !== "undefined") {
+          window.__agentsOfficeMotionSamples = samples;
+        }
+        const expected = Math.max(Number(expectedSpeed) || 0, OFFICE_MOTION_WARN_ABSOLUTE_SPEED);
+        const shouldWarn = speedPxPerSec > expected * OFFICE_MOTION_WARN_SPEED_MULTIPLIER;
+        if (!shouldWarn) {
+          return;
+        }
+        const warnKey = String(entry.key || "") + "::" + String(mode || "motion");
+        const nowMs = Date.now();
+        renderer.motionDebugWarnedAt = renderer.motionDebugWarnedAt || new Map();
+        const lastWarnedAt = Number(renderer.motionDebugWarnedAt.get(warnKey) || 0);
+        if (nowMs - lastWarnedAt < 2000) {
+          return;
+        }
+        renderer.motionDebugWarnedAt.set(warnKey, nowMs);
+        console.warn("office avatar motion spike", sample);
+      }
 
       function sortAgentsStably(bucketKey, agents) {
         const cacheKey = String(bucketKey || "default");
@@ -7582,7 +7701,7 @@ export function startClientApp(): void {
         });
 
         snapshot.agents.forEach((agent) => {
-          if (!isBossOfficeCandidate(snapshot, agent)) {
+          if (!isRelationshipBossCandidate(snapshot, agent)) {
             return;
           }
           const bossPos = agentPositions.get(agent.id);
@@ -7648,6 +7767,15 @@ export function startClientApp(): void {
         const key = host.dataset.officeMapHost || "";
         const existing = officeSceneRenderers.get(key);
         if (existing && existing.host === host) {
+          if (!existing.root && existing.ready) {
+            await existing.ready;
+          }
+          if (existing.destroyed || existing.initError || !existing.root) {
+            if (officeSceneRenderers.get(key) === existing) {
+              officeSceneRenderers.delete(key);
+            }
+            return null;
+          }
           return existing;
         }
         if (existing) {
@@ -7676,12 +7804,16 @@ export function startClientApp(): void {
           animatedSprites: [],
           motionStates: new Map(),
           roomDoorStates: new Map(),
+          workstationLayoutStates: new Map(),
           agentHitNodes: new Map(),
           animateTick: null,
           focusables: [],
           roomById: new Map(),
           roomNavigation: new Map(),
           reservedAgentTiles: new Map(),
+          motionDeltaClampUntil: 0,
+          motionDebugSamples: [],
+          motionDebugWarnedAt: new Map(),
           updateAutonomousRestingMotion: null,
           syncHeldItemSprite: null
         };
@@ -7712,9 +7844,9 @@ export function startClientApp(): void {
           renderer.app.stage.addChild(renderer.root);
           renderer.animateTick = () => {
             const now = performance.now();
-            const deltaMs = renderer.app?.ticker?.deltaMS || 16;
+            const deltaMs = officeMotionFrameDeltaMs(renderer, now);
             renderer.animatedSprites.forEach((entry) => {
-              if (!entry || (!entry.sprite && entry.kind !== "blink" && entry.kind !== "wall-dashboard-row")) {
+              if (!entry || (!entry.sprite && entry.kind !== "blink" && entry.kind !== "wall-dashboard-row" && entry.kind !== "layout-shift")) {
                 return;
               }
               if (entry.kind === "wall-dashboard-row") {
@@ -7729,9 +7861,50 @@ export function startClientApp(): void {
                 entry.node.alpha = Math.min(1, 0.62 + eased * 0.38);
                 return;
               }
+              if (entry.kind === "layout-shift") {
+                const duration = Math.max(120, Number(entry.durationMs) || 420);
+                const elapsed = Math.max(0, now - Number(entry.startedAt || now));
+                const progress = Math.min(1, elapsed / duration);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                (entry.nodes || []).forEach((nodeEntry) => {
+                  if (!nodeEntry || !nodeEntry.node || !nodeEntry.node.parent) {
+                    return;
+                  }
+                  nodeEntry.node.x = pixelSnap((Number(nodeEntry.fromX) || 0) + ((Number(nodeEntry.targetX) || 0) - (Number(nodeEntry.fromX) || 0)) * eased);
+                  nodeEntry.node.y = pixelSnap((Number(nodeEntry.fromY) || 0) + ((Number(nodeEntry.targetY) || 0) - (Number(nodeEntry.fromY) || 0)) * eased);
+                });
+                return;
+              }
               if (entry.kind === "motion") {
+                const motionBeforeX = Number(entry.currentX);
+                const motionBeforeY = Number(entry.currentY);
+                const hadSeatShift = Boolean(entry.seatShift);
                 if (entry.autonomy && !entry.exiting && typeof renderer.updateAutonomousRestingMotion === "function") {
                   renderer.updateAutonomousRestingMotion(entry, now);
+                }
+                if (entry.seatShift) {
+                  const duration = Math.max(120, Number(entry.seatShift.durationMs) || 420);
+                  const elapsed = Math.max(0, now - Number(entry.seatShift.startedAt || now));
+                  const progress = Math.min(1, elapsed / duration);
+                  const eased = 1 - Math.pow(1 - progress, 3);
+                  entry.currentX = pixelSnap((Number(entry.seatShift.fromX) || 0) + ((Number(entry.seatShift.targetX) || 0) - (Number(entry.seatShift.fromX) || 0)) * eased);
+                  entry.currentY = pixelSnap((Number(entry.seatShift.fromY) || 0) + ((Number(entry.seatShift.targetY) || 0) - (Number(entry.seatShift.fromY) || 0)) * eased);
+                  if (progress >= 1) {
+                    entry.currentX = Number(entry.seatShift.targetX) || entry.currentX;
+                    entry.currentY = Number(entry.seatShift.targetY) || entry.currentY;
+                    entry.seatShift = null;
+                  }
+                  if (entry.roomId) {
+                    const currentRoom = renderer.model?.rooms?.find((room) => room.id === entry.roomId) || null;
+                    entry.currentTile = officeAvatarFootTile(
+                      currentRoom,
+                      renderer.model?.tile || 16,
+                      entry.currentX,
+                      entry.currentY,
+                      entry.width,
+                      entry.height
+                    );
+                  }
                 }
                 const route = Array.isArray(entry.route) ? entry.route : [];
                 const speed = Number(entry.speed) || 128;
@@ -7781,6 +7954,17 @@ export function startClientApp(): void {
                 if (entry.routeIndex >= route.length && typeof entry.targetFlipX === "boolean") {
                   entry.flipX = entry.targetFlipX;
                 }
+                recordOfficeMotionSample(
+                  renderer,
+                  entry,
+                  hadSeatShift ? "seat-shift" : (entry.autonomy ? "autonomy-route" : "route"),
+                  motionBeforeX,
+                  motionBeforeY,
+                  Number(entry.currentX),
+                  Number(entry.currentY),
+                  deltaMs,
+                  speed
+                );
                 const renderOffsetX = Number.isFinite(entry.renderOffsetX) ? Number(entry.renderOffsetX) : 0;
                 const renderOffsetY = Number.isFinite(entry.renderOffsetY) ? Number(entry.renderOffsetY) : 0;
                 const renderWidth = Number.isFinite(entry.renderWidth) ? Number(entry.renderWidth) : pixelSnap(entry.width, 1);
@@ -8270,6 +8454,21 @@ export function startClientApp(): void {
                 }
                 return !done;
               }
+              if (entry.kind === "layout-shift") {
+                const done = !Array.isArray(entry.nodes)
+                  || entry.nodes.length === 0
+                  || now - Number(entry.startedAt || now) >= Number(entry.durationMs || 420);
+                if (done) {
+                  (entry.nodes || []).forEach((nodeEntry) => {
+                    if (!nodeEntry || !nodeEntry.node || !nodeEntry.node.parent) {
+                      return;
+                    }
+                    nodeEntry.node.x = pixelSnap(Number(nodeEntry.targetX) || 0);
+                    nodeEntry.node.y = pixelSnap(Number(nodeEntry.targetY) || 0);
+                  });
+                }
+                return !done;
+              }
               if (entry.kind === "thrown-item") {
                 const done = now - Number(entry.startedAt || now) >= Number(entry.durationMs || 700);
                 if (done && entry.sprite && entry.sprite.parent) {
@@ -8330,9 +8529,18 @@ export function startClientApp(): void {
           };
           renderer.app.ticker.add(renderer.animateTick);
           renderer.resizeObserver = new ResizeObserver(() => {
-            if (renderer.model) {
-              syncOfficeRendererScene(renderer, renderer.model);
+            if (renderer.resizeSyncQueued) {
+              return;
             }
+            renderer.resizeSyncQueued = true;
+            window.requestAnimationFrame(() => {
+              renderer.resizeSyncQueued = false;
+              if (renderer.destroyed || !renderer.model) {
+                return;
+              }
+              syncOfficeRendererViewport(renderer, renderer.model);
+              syncOfficeAnchors(renderer, renderer.model, renderer.scale || 1);
+            });
           });
           renderer.resizeObserver.observe(host);
         }).catch((error) => {
@@ -9277,11 +9485,23 @@ const stableAgentTileReservations = new Map();
         node.zIndex = sceneFootDepth(y, height, bias, tileSize, depthBaseY, depthRow);
       }
 
-      function syncOfficeRendererScene(renderer, model) {
-        if (!renderer || !renderer.root || !window.PIXI) {
+      const WORKSTATION_LAYOUT_TWEEN_MS = 520;
+      const MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX = 8;
+
+      function setPixelStyleIfChanged(element, property, value) {
+        if (!(element instanceof HTMLElement)) {
           return;
         }
-        renderer.model = model;
+        const next = String(value);
+        if (element.style[property] !== next) {
+          element.style[property] = next;
+        }
+      }
+
+      function syncOfficeRendererViewport(renderer, model) {
+        if (!renderer || !renderer.host || !renderer.app || !model) {
+          return null;
+        }
         const availableWidth = Math.max(Math.round(renderer.host.getBoundingClientRect().width || renderer.host.clientWidth || model.width), 1);
         const scale = Math.min(Math.max(availableWidth / model.width, 0.5), 3.5);
         const scaledWidth = Math.max(1, Math.min(availableWidth, Math.round(model.width * scale)));
@@ -9289,29 +9509,85 @@ const stableAgentTileReservations = new Map();
         const leftOffset = Math.max(0, Math.round((availableWidth - scaledWidth) / 2));
         renderer.scale = scale;
         renderer.leftOffset = leftOffset;
-        renderer.host.style.height = scaledHeight + "px";
-        renderer.canvasContainer.style.left = leftOffset + "px";
-        renderer.canvasContainer.style.width = scaledWidth + "px";
-        renderer.canvasContainer.style.height = scaledHeight + "px";
-        renderer.anchorLayer.style.left = leftOffset + "px";
-        renderer.anchorLayer.style.width = scaledWidth + "px";
-        renderer.anchorLayer.style.height = scaledHeight + "px";
+        setPixelStyleIfChanged(renderer.host, "height", scaledHeight + "px");
+        setPixelStyleIfChanged(renderer.canvasContainer, "left", leftOffset + "px");
+        setPixelStyleIfChanged(renderer.canvasContainer, "width", scaledWidth + "px");
+        setPixelStyleIfChanged(renderer.canvasContainer, "height", scaledHeight + "px");
+        setPixelStyleIfChanged(renderer.anchorLayer, "left", leftOffset + "px");
+        setPixelStyleIfChanged(renderer.anchorLayer, "width", scaledWidth + "px");
+        setPixelStyleIfChanged(renderer.anchorLayer, "height", scaledHeight + "px");
         if (renderer.threadLayer) {
-          renderer.threadLayer.style.left = leftOffset + "px";
-          renderer.threadLayer.style.width = scaledWidth + "px";
-          renderer.threadLayer.style.height = scaledHeight + "px";
+          setPixelStyleIfChanged(renderer.threadLayer, "left", leftOffset + "px");
+          setPixelStyleIfChanged(renderer.threadLayer, "width", scaledWidth + "px");
+          setPixelStyleIfChanged(renderer.threadLayer, "height", scaledHeight + "px");
         }
-        renderer.app.renderer.resize(scaledWidth, scaledHeight);
+        if (renderer.renderWidth !== scaledWidth || renderer.renderHeight !== scaledHeight) {
+          renderer.app.renderer.resize(scaledWidth, scaledHeight);
+          renderer.renderWidth = scaledWidth;
+          renderer.renderHeight = scaledHeight;
+        }
+        if (renderer.root) {
+          renderer.root.scale.set(scale, scale);
+        }
+        return {
+          availableWidth,
+          scale,
+          scaledWidth,
+          scaledHeight,
+          leftOffset
+        };
+      }
+
+      function commitOfficeRendererRoot(renderer, previousRoot, nextRoot) {
+        if (!renderer || !renderer.app || !renderer.app.stage || !nextRoot) {
+          return;
+        }
+        const stage = renderer.app.stage;
+        if (nextRoot.parent !== stage) {
+          if (previousRoot && previousRoot.parent === stage && typeof stage.getChildIndex === "function") {
+            const index = stage.getChildIndex(previousRoot);
+            stage.addChildAt(nextRoot, Math.min(stage.children.length, index + 1));
+          } else {
+            stage.addChild(nextRoot);
+          }
+        }
+        if (previousRoot && previousRoot !== nextRoot && previousRoot.parent === stage) {
+          stage.removeChild(previousRoot);
+          try {
+            previousRoot.destroy?.({ children: true });
+          } catch {}
+        }
+        renderer.root = nextRoot;
+        renderer.motionDeltaClampUntil = performance.now() + OFFICE_MOTION_REBUILD_DELTA_CLAMP_MS;
+      }
+
+      function syncOfficeRendererScene(renderer, model) {
+        if (!renderer || !renderer.root || !window.PIXI) {
+          return false;
+        }
+        renderer.model = model;
+        if (!syncOfficeRendererViewport(renderer, model)) {
+          return false;
+        }
         const previousMotionStates = new Map(renderer.motionStates || []);
         const previousDoorStates = new Map(renderer.roomDoorStates || []);
+        const previousWorkstationLayoutStates = new Map(renderer.workstationLayoutStates || []);
+        const previousAnimatedSprites = Array.isArray(renderer.animatedSprites) ? renderer.animatedSprites : [];
+        const previousFocusables = Array.isArray(renderer.focusables) ? renderer.focusables : [];
+        const previousRoot = renderer.root;
+        const nextRoot = new window.PIXI.Container();
+        nextRoot.sortableChildren = true;
+        nextRoot.scale.set(renderer.scale || 1, renderer.scale || 1);
         renderer.motionStates = new Map();
         renderer.roomDoorStates = new Map();
-        renderer.root.removeChildren();
-        renderer.root.scale.set(scale, scale);
+        renderer.workstationLayoutStates = new Map();
         renderer.animatedSprites = [];
         renderer.focusables = [];
+        renderer.root = nextRoot;
 
         const PIXI = window.PIXI;
+        try {
+        const scale = renderer.scale || 1;
         const roomById = new Map(model.rooms.map((room) => [room.id, room]));
         const roomNavigation = buildOfficeNavigation(model);
         syncOfficeAnchors(renderer, model, scale);
@@ -9728,6 +10004,74 @@ const stableAgentTileReservations = new Map();
           renderer.root.addChild(container);
         }
 
+        function workstationLayoutStateKey(kind, item) {
+          return [
+            model.projectRoot || "",
+            kind || "workstation",
+            item && item.roomId || "",
+            item && item.id || ""
+          ].join("::");
+        }
+
+        function workstationLayoutState(kind, item) {
+          if (!item || !item.id || !item.roomId || !Number.isFinite(item.x) || !Number.isFinite(item.y)) {
+            return null;
+          }
+          return {
+            key: workstationLayoutStateKey(kind, item),
+            kind,
+            roomId: item.roomId,
+            x: Number(item.x),
+            y: Number(item.y),
+            width: Number.isFinite(item.width) ? Number(item.width) : 0,
+            height: Number.isFinite(item.height) ? Number(item.height) : 0
+          };
+        }
+
+        function animateWorkstationLayoutNodes(kind, item, nodes) {
+          const nextState = workstationLayoutState(kind, item);
+          if (!nextState) {
+            return;
+          }
+          renderer.workstationLayoutStates.set(nextState.key, nextState);
+          if (screenshotMode) {
+            return;
+          }
+          const previousState = previousWorkstationLayoutStates.get(nextState.key) || null;
+          if (!previousState || previousState.kind !== nextState.kind || previousState.roomId !== nextState.roomId) {
+            return;
+          }
+          const dx = Math.round(previousState.x - nextState.x);
+          const dy = Math.round(previousState.y - nextState.y);
+          if (Math.hypot(dx, dy) < 2) {
+            return;
+          }
+          const movingNodes = (Array.isArray(nodes) ? nodes : [])
+            .filter((node) => node && Number.isFinite(node.x) && Number.isFinite(node.y))
+            .map((node) => {
+              const targetX = Number(node.x);
+              const targetY = Number(node.y);
+              node.x = pixelSnap(targetX + dx);
+              node.y = pixelSnap(targetY + dy);
+              return {
+                node,
+                fromX: node.x,
+                fromY: node.y,
+                targetX,
+                targetY
+              };
+            });
+          if (movingNodes.length === 0) {
+            return;
+          }
+          renderer.animatedSprites.push({
+            kind: "layout-shift",
+            nodes: movingNodes,
+            startedAt: performance.now(),
+            durationMs: WORKSTATION_LAYOUT_TWEEN_MS
+          });
+        }
+
         function sceneIdleBehaviorConfig() {
           const idle = sceneDefinitions && sceneDefinitions.idleBehavior ? sceneDefinitions.idleBehavior : {};
           return {
@@ -9903,13 +10247,45 @@ const stableAgentTileReservations = new Map();
             return true;
           }
           const distance = motionTargetDistance(previousState, agent);
+          if (sameSlotAssignment(previousState, agent)) {
+            return Number.isFinite(distance) && distance <= MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX;
+          }
           if (!Number.isFinite(distance) || distance > 3) {
             return false;
           }
-          if (sameSlotAssignment(previousState, agent)) {
-            return true;
-          }
           return !previousState.slotId && !agent.slotId;
+        }
+
+        function startSeatedLayoutShift(motionState, agent) {
+          if (!motionState || !agent || motionState.exiting === true || !sameSlotAssignment(motionState, agent)) {
+            return false;
+          }
+          const previousTargetX = Number.isFinite(motionState.targetX) ? Number(motionState.targetX) : Number(motionState.currentX);
+          const previousTargetY = Number.isFinite(motionState.targetY) ? Number(motionState.targetY) : Number(motionState.currentY);
+          const shiftDistance = Math.hypot(previousTargetX - Number(agent.x), previousTargetY - Number(agent.y));
+          if (shiftDistance < 2) {
+            motionState.targetX = agent.x;
+            motionState.targetY = agent.y;
+            return false;
+          }
+          if (!Number.isFinite(shiftDistance) || shiftDistance > MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX) {
+            motionState.seatShift = null;
+            return false;
+          }
+          motionState.seatShift = {
+            fromX: Number.isFinite(motionState.currentX) ? Number(motionState.currentX) : previousTargetX,
+            fromY: Number.isFinite(motionState.currentY) ? Number(motionState.currentY) : previousTargetY,
+            targetX: Number(agent.x),
+            targetY: Number(agent.y),
+            distancePx: shiftDistance,
+            startedAt: performance.now(),
+            durationMs: WORKSTATION_LAYOUT_TWEEN_MS
+          };
+          motionState.targetX = agent.x;
+          motionState.targetY = agent.y;
+          motionState.route = [{ x: agent.x, y: agent.y }];
+          motionState.routeIndex = 1;
+          return true;
         }
 
         function buildExitGhostMotion(key, motionState, roomNavigation, reservations) {
@@ -11393,6 +11769,69 @@ const stableAgentTileReservations = new Map();
           };
         }
 
+        function syncMotionStateVisualPosition(motionState) {
+          if (!motionState || !motionState.sprite) {
+            return;
+          }
+          const renderOffsetX = Number.isFinite(motionState.renderOffsetX) ? Number(motionState.renderOffsetX) : 0;
+          const renderOffsetY = Number.isFinite(motionState.renderOffsetY) ? Number(motionState.renderOffsetY) : 0;
+          const renderWidth = Number.isFinite(motionState.renderWidth) ? Number(motionState.renderWidth) : pixelSnap(motionState.width, 1);
+          motionState.sprite.x = pixelSnap(motionState.currentX + renderOffsetX);
+          motionState.sprite.y = pixelSnap(motionState.currentY + renderOffsetY);
+          if (motionState.flipX) {
+            motionState.sprite.scale.x = -Math.abs(motionState.sprite.scale.x || 1);
+            motionState.sprite.x = pixelSnap(motionState.currentX + renderOffsetX) + renderWidth;
+          } else {
+            motionState.sprite.scale.x = Math.abs(motionState.sprite.scale.x || 1);
+          }
+          if (motionState.hatSprite) {
+            const hatWidth = Number.isFinite(motionState.hatWidth) ? Number(motionState.hatWidth) : 0;
+            const hatCenteredOffsetX = Number.isFinite(motionState.hatCenteredOffsetX) ? Number(motionState.hatCenteredOffsetX) : 0;
+            const hatManualOffsetX = Number.isFinite(motionState.hatManualOffsetX) ? Number(motionState.hatManualOffsetX) : 0;
+            const hatOffsetY = Number.isFinite(motionState.hatOffsetY) ? Number(motionState.hatOffsetY) : 0;
+            const hatBaseX = motionState.currentX + renderOffsetX;
+            motionState.hatSprite.x = pixelSnap(
+              hatBaseX
+              + hatCenteredOffsetX
+              + (motionState.flipX ? -hatManualOffsetX : hatManualOffsetX)
+            );
+            motionState.hatSprite.y = pixelSnap(motionState.currentY + renderOffsetY + hatOffsetY);
+            if (motionState.flipX) {
+              motionState.hatSprite.scale.x = -Math.abs(motionState.hatSprite.scale.x || 1);
+              motionState.hatSprite.x = pixelSnap(motionState.hatSprite.x + hatWidth);
+            } else {
+              motionState.hatSprite.scale.x = Math.abs(motionState.hatSprite.scale.x || 1);
+            }
+          }
+          if (motionState.bubbleBox && motionState.bubbleText) {
+            const bubbleX = pixelSnap(motionState.currentX + Math.round(motionState.width * 0.2));
+            const bubbleY = pixelSnap(motionState.currentY - 14);
+            motionState.bubbleBox.x = bubbleX;
+            motionState.bubbleBox.y = bubbleY;
+            motionState.bubbleText.x = bubbleX + Math.round((motionState.bubbleBox.width - motionState.bubbleText.width) / 2);
+            motionState.bubbleText.y = bubbleY + Math.round((motionState.bubbleBox.height - motionState.bubbleText.height) / 2) - 1;
+          }
+          if (motionState.statusMarker) {
+            const markerWidth = Math.max(8, Math.round(motionState.statusMarker.width || 11));
+            const markerLift = Number.isFinite(motionState.statusMarkerLift) ? Number(motionState.statusMarkerLift) : 0;
+            motionState.statusMarker.x = pixelSnap(motionState.currentX + Math.round((motionState.width - markerWidth) / 2));
+            motionState.statusMarker.y = pixelSnap(motionState.currentY - (motionState.bubbleBox ? 20 : 13) - markerLift);
+          }
+          if (typeof renderer.syncHeldItemSprite === "function") {
+            renderer.syncHeldItemSprite(motionState);
+          }
+          if (motionState.turnSignal && typeof syncTurnSignalNode === "function") {
+            syncTurnSignalNode(motionState, motionState.turnSignal);
+          }
+          if (motionState.activityCue && typeof syncActivityCueNode === "function") {
+            syncActivityCueNode(motionState, motionState.activityCue);
+          }
+          if (typeof renderer.syncMotionStateDepth === "function") {
+            renderer.syncMotionStateDepth(motionState);
+          }
+          syncAgentHitNodePosition(renderer, motionState);
+        }
+
         function parentSpawnPointForAgent(agent, parentState) {
           if (!agent || !parentState || parentState.roomId !== agent.roomId) {
             return null;
@@ -11511,7 +11950,9 @@ const stableAgentTileReservations = new Map();
             previousState.settledDepthFootY = Number.isFinite(avatarVisual.depthFootY) ? Number(avatarVisual.depthFootY) : null;
             previousState.settledDepthBias = Number.isFinite(avatarVisual.depthBias) ? Number(avatarVisual.depthBias) : null;
             previousState.settledDepthRow = Number.isFinite(avatarVisual.depthRow) ? Number(avatarVisual.depthRow) : null;
-            const isMoving = (Boolean(previousState && previousState.routeIndex < (previousState.route?.length || 0))
+            const seatedLayoutShifting = startSeatedLayoutShift(previousState, agent);
+            const isMoving = (seatedLayoutShifting
+              || Boolean(previousState && previousState.routeIndex < (previousState.route?.length || 0))
               || previousState.exiting === true);
             const movingDepthFootY = isMoving ? null : avatarVisual.depthFootY;
             const movingDepthBias = isMoving ? null : avatarVisual.depthBias;
@@ -11552,7 +11993,7 @@ const stableAgentTileReservations = new Map();
             }
             renderer.motionStates.set(agentKey, previousState);
             const previousStateEffectEntry = buildStateEffectAnimationEntry(agent, previousState);
-            if (autonomousResting) {
+            if (autonomousResting || seatedLayoutShifting) {
               renderer.animatedSprites.push(previousState);
             } else if (["editing", "running", "validating", "scanning", "thinking", "planning", "delegating"].includes(agent.state) && previousState.routeIndex >= (previousState.route?.length || 0)) {
               renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, previousState));
@@ -11570,8 +12011,12 @@ const stableAgentTileReservations = new Map();
             if (previousActivityCueEntry) {
               renderer.animatedSprites.push(previousActivityCueEntry);
             }
-            syncMotionStateDepth(previousState);
-            syncAgentHitNodePosition(renderer, previousState);
+            if (seatedLayoutShifting) {
+              syncMotionStateVisualPosition(previousState);
+            } else {
+              syncMotionStateDepth(previousState);
+              syncAgentHitNodePosition(renderer, previousState);
+            }
             return avatarVisual.nodes;
           }
           const startTile = previousState
@@ -12104,6 +12549,7 @@ const stableAgentTileReservations = new Map();
               durationMs: WORKSTATION_REVEAL_BLINK_DURATION_MS
             });
           }
+          animateWorkstationLayoutNodes("desk", desk, deskNodes);
 
           const deskFocusKeys = [];
           desk.agents.forEach((agent) => {
@@ -12267,6 +12713,7 @@ const stableAgentTileReservations = new Map();
             renderer.root.addChild(badgeText);
             officeNodes.push(badgeBg, badgeText);
           }
+          animateWorkstationLayoutNodes("office", office, officeNodes);
 
           if (office.agent) {
             currentAgentKeys.add(office.agent.key || office.agent.id);
@@ -12353,7 +12800,21 @@ const stableAgentTileReservations = new Map();
           });
         });
 
+        commitOfficeRendererRoot(renderer, previousRoot, nextRoot);
         applyOfficeRendererFocus(renderer);
+        return true;
+        } catch (error) {
+          renderer.root = previousRoot;
+          renderer.motionStates = previousMotionStates;
+          renderer.roomDoorStates = previousDoorStates;
+          renderer.workstationLayoutStates = previousWorkstationLayoutStates;
+          renderer.animatedSprites = previousAnimatedSprites;
+          renderer.focusables = previousFocusables;
+          try {
+            nextRoot.destroy?.({ children: true });
+          } catch {}
+          throw error;
+        }
       }
 
       function recentActivitySceneToken(snapshot) {
@@ -12452,8 +12913,9 @@ const stableAgentTileReservations = new Map();
       });
       if (renderer.sceneRenderToken !== renderToken) {
         await ensureOfficeSceneAssets(model);
-        syncOfficeRendererScene(renderer, model);
-        renderer.sceneRenderToken = renderToken;
+        if (syncOfficeRendererScene(renderer, model)) {
+          renderer.sceneRenderToken = renderToken;
+        }
       } else {
         renderer.model = model;
         syncOfficeAnchors(renderer, model, renderer.scale || 1);

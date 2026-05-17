@@ -161,7 +161,7 @@ Sources:
 - spawned subagents render at 75% of their parent depth's avatar size while sharing the same workstation placement, depth sorting, hats, and hover anchors as ordinary desk agents; a depth-2 subagent renders at `0.75 * 0.75` of a lead avatar, and deeper multi-agent v2 trees continue that scale by depth
 - local Codex thread selection keeps both ancestor parents and listed descendant subagents for tracked parents, so a visible lead session does not lose child workers just because the child is outside the local display slice
 - browser active summary counters group spawned subagents under their lead session; the scene still renders child agents individually, but floor/tab counts describe active lead-session groups
-- newly visible subagents use the same room-door entry path as other arrivals; parent/child relationship lines communicate delegation without making children spawn from the parent avatar
+- newly visible subagents use the same room-door entry path as other arrivals; parent/child relationship lines communicate delegation on boss hover for any visible lead/subagent pair, including single-child leads that stay in ordinary workstation layout
 - session panel includes a durable cross-project "needs you" queue for approval/input waits
   these entries now come from typed request hooks, not from regexes over session detail
   - session cards expose provenance/confidence so Codex-native, Claude transcript, Claude hook-backed, and Cursor API-backed state stay distinguishable
@@ -383,7 +383,7 @@ The active office view currently favors an open station language over enclosed c
 - ordinary refreshes now reuse a settled same-slot target when the layout delta is only a tiny no-op drift, so polling does not look like an unnecessary seat shuffle
 - finished subagents now keep a longer readable desk cooldown before they walk back out through that doorway instead of vanishing immediately
 - lead sessions with active subagents move into a dedicated left-side boss-office column; the column starts one floor tile below the floor start and uses contiguous 3-tile-tall office slots so four bosses can stack in a standard room while still reading as offices instead of rounded placeholder frames
-- hovering a boss reveals arrow lines from that office to the related spawned subagents
+- hovering a boss reveals arrow lines to the related spawned subagents whether that lead is in a boss office or in an ordinary workstation with one visible child
 - chairs and seated reach points sit slightly outward from the desk so the monitor relationship reads cleanly
 - workstation computers currently use the single complete desk cut, avoiding the broken narrow pseudo-monitor asset
 - waiting and resting agents move to an integrated wall-side rec strip instead of a detached room when they are actually off-desk
@@ -410,11 +410,15 @@ Claude support uses a deliberately weaker contract than Codex:
 - project discovery merges Codex-discovered roots with roots inferred from `~/.claude/projects`
 - Codex fleet startup also seeds workspace discovery from configured roots in `~/.codex/config.toml`, so trusted Codex projects can appear before their first visible thread update
 - when the Anthropic Agent SDK is available, Claude project discovery prefers `listSessions()` and per-session `cwd` metadata before falling back to raw directory scanning
+- Claude project discovery also reads fresh Agent Teams config under `~/.claude/teams`, using teammate `worktreePath` / `cwd` values as cowork project floors
+- Claude project discovery also reads Claude Desktop Co-work app data under `local-agent-mode-sessions`, using `spaces.json` folders and per-session `userSelectedFolders` as Co-work project floors
 - the snapshot builder can include recent Claude sessions for matching project roots
 - recent Claude session messages can now be read through the supported Agent SDK `getSessionMessages()` API before falling back to raw JSONL transcript sampling
+- Claude Desktop Co-work sessions are exposed as read-only Claude agents for matching project roots, with recent file detections surfaced as file-change activity when available
 - transcript-only Claude session state is still inferred from recent tool uses such as read, edit, bash, and task delegation when no typed hook signal exists
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl` can be produced either by a Claude Code hook script or by the exported Agent SDK sidecar bridge, and they upgrade Claude sessions to typed permission, tool, subagent, and stop state
-- Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records normalize to the same delegated-work activity family as Codex collab-agent items, while still preserving Claude provenance and weaker parent/child correlation
+- Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records normalize to the same delegated-work activity family as Codex collab-agent items
+- hook records with `agent_id` and team records with `leadSessionId` now create child Claude agents through the shared `parentThreadId` hierarchy, while transcript-only delegation still preserves weaker Claude provenance/confidence
 - the same Agent SDK sidecar bridge can now hold `PermissionRequest` and `Elicitation` hooks open while the browser writes a response file under the same project-scoped user-data area, then return the official hook decision back to Claude
 - the browser `Needs You` queue can now answer hook-backed Claude approval waits and schema-backed elicitation forms when the sidecar record came from that Agent SDK bridge
 - Claude agents are rendered in the same room model, but with explicit provenance/confidence so transcript inference and hook-backed state do not pretend to have Codex-grade app-server coverage

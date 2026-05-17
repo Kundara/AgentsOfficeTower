@@ -111,7 +111,8 @@ Delegated-work normalization:
 
 - Codex `collabToolCall` / `collabAgentToolCall` items and Claude Agent/Task/Subagent hook signals should converge on the shared `collabAgentToolCall` activity family where possible.
 - Shared delegated-work activity should produce `DashboardEvent.kind = "subagent"` so browser toasts, scene cues, session history, and future source adapters do not need separate per-provider event families for the same concept.
-- Claude still does not provide Codex-grade parent thread ids for this path, so provenance/confidence and source-specific detail text must remain visible in hover and session surfaces.
+- Claude hook `agent_id` and Agent Teams `leadSessionId` should create real `parentThreadId` child rows where available; transcript-only delegation should still keep Claude provenance/confidence and source-specific detail text visible because that path has weaker correlation.
+- Claude Desktop Co-work sessions should remain read-only Claude agents. They can seed workspace floors and file-change activity, but they must not imply Codex-style reply, resume, or subagent control.
 
 Recent typed turn lifecycle handling:
 
@@ -297,6 +298,7 @@ Global text scale rules:
 - When worktrees are split into separate floors, a worktree floor title should use the worktree name with a distinct bright-blue worktree badge/icon treatment.
 - Fleet startup should include configured Codex workspaces from `~/.codex/config.toml` when available, not only workspaces that already emitted recent local thread activity.
 - Fleet mode should hide autodiscovered workspaces once their last session timestamp is more than 7 days old.
+- Claude Desktop Co-work spaces should become workspace floors from `local-agent-mode-sessions` when their saved folder roots are still present locally.
 - Hermes-discovered workspaces should come only from a live Hermes process cwd or the latest current root of a fresh hook session; durable DB history, broad hook path sweeps, and exact transient roots such as `/tmp` must not create floors.
 - The selected workspace changes browser focus only; it does not change the monitor set.
 - `/api/server-meta` must report the live bound fleet project set, not only startup seed projects.
@@ -345,6 +347,7 @@ Worktree identity rules:
 - In the standard room height, the default internal boss-office layout should fit four stacked bosses by using contiguous 3-tile-tall office slots with no vertical gap.
 - The boss-office column must stay compact enough for several bosses to stack vertically on the left side of the room without consuming the main desk floor.
 - Boss-to-subagent relationships may be shown on hover, but they should stay secondary to desk occupancy and scene motion.
+- Any lead session with visible subagents should be eligible for boss-to-subagent hover arrows, even if it has only one subagent and therefore remains in the ordinary workstation layout instead of the boss-office column.
 - Boss-to-subagent relationship arrows should only appear when the user is hovering or focusing that boss in the scene; hovering a child, a generic desk agent, or a session card should not reveal them.
 - Relationship arrows should render above offices and avatars inside the map scene, but still remain behind toasts, hover cards, and other browser chrome.
 - Relationship arrows should use smooth spline-like curves with explicit arrowheads aligned to the curve's end direction so the target is unambiguous.

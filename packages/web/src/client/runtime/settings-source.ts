@@ -84,6 +84,9 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       const baselineProjectHydrationAt = new Map();
 
       const projectMetaByRoot = new Map(configuredProjects.map((project) => [project.root, project]));
+      const configuredProjectOrder = new Map(configuredProjects.map((project, index) => [project.root, index]));
+      const dynamicProjectOrder = new Map();
+      let nextDynamicProjectOrder = configuredProjectOrder.size;
       function projectInfo(projectRoot) {
         if (state.fleet && Array.isArray(state.fleet.projects)) {
           const liveProject = state.fleet.projects.find((project) => project.projectRoot === projectRoot);

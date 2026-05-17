@@ -33,8 +33,12 @@
   Useful contrast with the Agent SDK: model API wrappers, not Claude Code session observability.
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
   Official hook lifecycle and input schema for `PermissionRequest`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, and related events.
+- [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams)
+  Product and workflow reference for Claude team leads, teammates, team names, and cowork/project behavior.
 - [Automate workflows with hooks](https://code.claude.com/docs/en/automate-workflows-with-hooks)
   Quickstart examples for wiring command hooks and project-local hook scripts.
+- [tanbiralam/claude-code source](https://github.com/tanbiralam/claude-code/tree/main/src)
+  Implementation reference used to confirm current `agent_id` / `agent_type`, team config, teammate `sessionId`, and worktree metadata shapes; treat it as supporting evidence below official Claude docs, not a primary API contract.
 
 ## OpenClaw
 

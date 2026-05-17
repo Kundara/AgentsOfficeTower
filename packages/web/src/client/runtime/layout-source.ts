@@ -910,8 +910,32 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         };
       }
 
+      function projectDisplayOrderValue(project) {
+        const root = String(project && project.projectRoot || "");
+        if (configuredProjectOrder.has(root)) {
+          return configuredProjectOrder.get(root);
+        }
+        if (!dynamicProjectOrder.has(root)) {
+          dynamicProjectOrder.set(root, nextDynamicProjectOrder);
+          nextDynamicProjectOrder += 1;
+        }
+        return dynamicProjectOrder.get(root);
+      }
+
       function visibleProjects(fleet) {
-        return fleet.projects;
+        const projects = [...(Array.isArray(fleet && fleet.projects) ? fleet.projects : [])];
+        projects.forEach((project) => projectDisplayOrderValue(project));
+        return projects.sort((left, right) => {
+          const orderDelta = projectDisplayOrderValue(left) - projectDisplayOrderValue(right);
+          if (orderDelta !== 0) {
+            return orderDelta;
+          }
+          const labelDelta = projectLabel(left.projectRoot).localeCompare(projectLabel(right.projectRoot));
+          if (labelDelta !== 0) {
+            return labelDelta;
+          }
+          return String(left.projectRoot || "").localeCompare(String(right.projectRoot || ""));
+        });
       }
 
       function fleetCounts(fleet) {
@@ -1193,6 +1217,10 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         return isLeadSession(snapshot, agent) && liveChildAgentsFor(snapshot, agent.id).length > 1;
       }
 
+      function isRelationshipBossCandidate(snapshot, agent) {
+        return isLeadSession(snapshot, agent) && childAgentsFor(snapshot, agent.id).length > 0;
+      }
+
       function sortedBossOfficeAgents(snapshot, agents) {
         return [...agents].sort((left, right) => {
           const childDelta = liveChildAgentsFor(snapshot, right.id).length - liveChildAgentsFor(snapshot, left.id).length;
@@ -1328,7 +1356,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
       function renderBossRelationshipLines(snapshot, roomId, roomPixelWidth, roomPixelHeight) {
         const lineEntries = [];
         for (const agent of snapshot.agents) {
-          if (!isBossOfficeCandidate(snapshot, agent)) {
+          if (!isRelationshipBossCandidate(snapshot, agent)) {
             continue;
           }
           const bossScene = sceneStateForAgent(snapshot, agent.id);

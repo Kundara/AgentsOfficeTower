@@ -8,7 +8,12 @@ const { pathToFileURL } = require("node:url");
 const { promisify } = require("node:util");
 
 const {
+  buildClaudeCoworkAgentsForTest,
+  buildClaudeSubagentAgentsForTest,
+  buildClaudeTeamAgentsForTest,
   buildClaudeSessionEventsForTest,
+  discoverClaudeProjectsFromCoworkForTest,
+  discoverClaudeProjectsFromTeamsForTest,
   summariseClaudeHookRecord,
   summariseClaudeSession
 } = require("../dist/claude.js");
@@ -253,6 +258,226 @@ test("Claude delegation hooks normalize to shared subagent events", () => {
     && event.path === "/workspaces/CodexAgentsOffice"
     && event.title === "Spawning explorer subagent"
   ));
+});
+
+test("Claude subagent hooks create child agent rows keyed by agent_id", async () => {
+  await withTempAppData("claude-subagent-rows-", async () => {
+    const now = Date.now();
+    const agents = await buildClaudeSubagentAgentsForTest({
+      projectRoot: "/workspaces/CodexAgentsOffice",
+      sessionId: "session-123",
+      cwd: "/workspaces/CodexAgentsOffice",
+      updatedAt: now,
+      hookRecords: [
+        {
+          hook_event_name: "SubagentStart",
+          timestamp: new Date(now - 2_000).toISOString(),
+          cwd: "/workspaces/CodexAgentsOffice",
+          agent_id: "agent-1",
+          agent_type: "explorer"
+        },
+        {
+          hook_event_name: "PostToolUse",
+          timestamp: new Date(now - 1_000).toISOString(),
+          cwd: "/workspaces/CodexAgentsOffice",
+          agent_id: "agent-1",
+          agent_type: "explorer",
+          tool_name: "Bash",
+          tool_input: {
+            command: "npm test",
+            cwd: "/workspaces/CodexAgentsOffice"
+          }
+        }
+      ]
+    });
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].id, "claude:session-123:agent:agent-1");
+    assert.equal(agents[0].parentThreadId, "claude:session-123");
+    assert.equal(agents[0].threadId, "claude:session-123:agent:agent-1");
+    assert.equal(agents[0].isSubagent, true);
+    assert.equal(agents[0].role, "explorer");
+    assert.equal(agents[0].state, "validating");
+    assert.equal(agents[0].activityEvent?.type, "commandExecution");
+  });
+});
+
+test("Claude subagent hook events attach to the child thread id", () => {
+  const now = Date.now();
+  const events = buildClaudeSessionEventsForTest({
+    sessionId: "session-123",
+    fallbackCwd: "/workspaces/CodexAgentsOffice",
+    records: [],
+    fallbackUpdatedAt: now,
+    hookRecords: [
+      {
+        hook_event_name: "SubagentStart",
+        timestamp: new Date(now - 1_000).toISOString(),
+        cwd: "/workspaces/CodexAgentsOffice",
+        agent_id: "agent-1",
+        agent_type: "explorer"
+      }
+    ]
+  });
+
+  assert.ok(events.some((event) =>
+    event.kind === "subagent"
+    && event.threadId === "claude:session-123:agent:agent-1"
+  ));
+});
+
+test("Claude subagent hooks use teammate session ids when team metadata links them", async () => {
+  await withTempAppData("claude-team-hook-rows-", async () => {
+    const now = Date.now();
+    const agents = await buildClaudeSubagentAgentsForTest({
+      projectRoot: "/workspaces/CodexAgentsOffice",
+      sessionId: "lead-123",
+      cwd: "/workspaces/CodexAgentsOffice",
+      updatedAt: now,
+      teams: [
+        {
+          name: "review",
+          description: null,
+          leadAgentId: "team-lead@review",
+          leadSessionId: "lead-123",
+          updatedAt: now,
+          members: [
+            {
+              agentId: "security@review",
+              name: "security",
+              agentType: "security-reviewer",
+              model: "claude-sonnet-4-5",
+              prompt: null,
+              color: null,
+              joinedAt: now,
+              tmuxPaneId: "%1",
+              cwd: "/workspaces/CodexAgentsOffice",
+              worktreePath: null,
+              sessionId: "teammate-123",
+              subscriptions: [],
+              backendType: "tmux",
+              isActive: true,
+              mode: "default"
+            }
+          ]
+        }
+      ],
+      hookRecords: [
+        {
+          hook_event_name: "SubagentStart",
+          timestamp: new Date(now - 1_000).toISOString(),
+          cwd: "/workspaces/CodexAgentsOffice",
+          agent_id: "security@review",
+          agent_type: "security-reviewer"
+        }
+      ]
+    });
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].id, "claude:teammate-123");
+    assert.equal(agents[0].threadId, "teammate-123");
+    assert.equal(agents[0].parentThreadId, "claude:lead-123");
+    assert.equal(agents[0].nickname, "security");
+  });
+});
+
+test("Claude team files create teammate child agents and project floors", async () => {
+  await withTempAppData("claude-team-rows-", async () => {
+    const now = Date.now();
+    const teams = [
+      {
+        name: "review",
+        description: "Review team",
+        leadAgentId: "team-lead@review",
+        leadSessionId: "lead-123",
+        updatedAt: now,
+        members: [
+          {
+            agentId: "security@review",
+            name: "security",
+            agentType: "security-reviewer",
+            model: "claude-sonnet-4-5",
+            prompt: null,
+            color: "#4477aa",
+            joinedAt: now,
+            tmuxPaneId: "%1",
+            cwd: "/workspaces/CodexAgentsOffice",
+            worktreePath: "/workspaces/CodexAgentsOffice-review",
+            sessionId: "teammate-123",
+            subscriptions: [],
+            backendType: "tmux",
+            isActive: true,
+            mode: "default"
+          }
+        ]
+      }
+    ];
+
+    const agents = await buildClaudeTeamAgentsForTest({
+      projectRoot: "/workspaces/CodexAgentsOffice-review",
+      teams
+    });
+    const floors = discoverClaudeProjectsFromTeamsForTest(teams);
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].id, "claude:teammate-123");
+    assert.equal(agents[0].parentThreadId, "claude:lead-123");
+    assert.equal(agents[0].threadId, "teammate-123");
+    assert.equal(agents[0].isSubagent, true);
+    assert.equal(agents[0].nickname, "security");
+    assert.equal(agents[0].role, "security-reviewer");
+    assert.equal(agents[0].cwd, "/workspaces/CodexAgentsOffice-review");
+    assert.ok(floors.some((floor) => floor.root === "/workspaces/CodexAgentsOffice-review"));
+  });
+});
+
+test("Claude Co-work local agent sessions create workspace floors and read-only agents", async () => {
+  await withTempAppData("claude-cowork-rows-", async () => {
+    const now = Date.now();
+    const sessions = [
+      {
+        sessionId: "local_93d9682b-41c3-4903-a969-9531b87dc7e4",
+        cliSessionId: "ec813396-85ee-4e90-a82d-94262f7923bb",
+        processName: "serene-practical-feynman",
+        vmProcessName: "serene-practical-feynman",
+        title: "Write squirrel story with conflict",
+        initialMessage: "write a story about a squirrel, with deep conflict, save as md file",
+        model: "claude-opus-4-7",
+        spaceId: "1e7cd9fb-3d71-4af9-932a-a44204254ebb",
+        roots: ["/mnt/f/AI/Projects/ClaudeTest/Test Proj"],
+        filePaths: ["/mnt/f/AI/Projects/ClaudeTest/Test Proj/the_last_acorn.md"],
+        createdAt: now - 60_000,
+        updatedAt: now - 30_000,
+        isArchived: false
+      }
+    ];
+    const spaces = [
+      {
+        id: "1e7cd9fb-3d71-4af9-932a-a44204254ebb",
+        name: "Test Proj",
+        root: "/mnt/f/AI/Projects/ClaudeTest/Test Proj",
+        instructions: "Create a story document about a squirrel",
+        updatedAt: now - 45_000
+      }
+    ];
+
+    const agents = await buildClaudeCoworkAgentsForTest({
+      projectRoot: "/mnt/f/AI/Projects/ClaudeTest/Test Proj",
+      sessions
+    });
+    const floors = discoverClaudeProjectsFromCoworkForTest({
+      spaces,
+      sessions
+    });
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].id, "claude:cowork:local_93d9682b-41c3-4903-a969-9531b87dc7e4");
+    assert.equal(agents[0].sourceKind, "claude:cowork:claude-opus-4-7");
+    assert.equal(agents[0].threadId, "local_93d9682b-41c3-4903-a969-9531b87dc7e4");
+    assert.equal(agents[0].state, "thinking");
+    assert.equal(agents[0].activityEvent?.type, "fileChange");
+    assert.ok(floors.some((floor) => floor.root === "/mnt/f/AI/Projects/ClaudeTest/Test Proj"));
+  });
 });
 
 test("synthetic Claude model placeholders do not leak into agent labels", () => {

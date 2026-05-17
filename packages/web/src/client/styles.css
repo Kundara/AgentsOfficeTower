@@ -16,6 +16,11 @@
         --tile: 24px;
         --ui-text-scale: 1;
         --tower-scroll-y: 0px;
+        --brand-codex: #a970ff;
+        --brand-claude: #d97757;
+        --brand-hermes: #f5d94e;
+        --brand-cursor: #a7b0ba;
+        --brand-openclaw: #ff4d5e;
       }
 
       * { box-sizing: border-box; }
@@ -2342,6 +2347,26 @@
         display: block;
         font-size: 7px;
         line-height: 1.05;
+      }
+
+      .agent-hover-title strong.agent-hover-brand-codex {
+        color: var(--brand-codex);
+      }
+
+      .agent-hover-title strong.agent-hover-brand-claude {
+        color: var(--brand-claude);
+      }
+
+      .agent-hover-title strong.agent-hover-brand-hermes {
+        color: var(--brand-hermes);
+      }
+
+      .agent-hover-title strong.agent-hover-brand-cursor {
+        color: var(--brand-cursor);
+      }
+
+      .agent-hover-title strong.agent-hover-brand-openclaw {
+        color: var(--brand-openclaw);
       }
 
       .agent-hover-worktree {

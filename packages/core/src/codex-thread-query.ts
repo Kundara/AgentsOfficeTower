@@ -1,10 +1,29 @@
 import type { CodexAppServerClient } from "./app-server";
+import { discoverCodexSessionThreads } from "./codex-session-files";
 import { filterThreadsForProject } from "./project-paths";
 import { selectProjectThreadsWithParents } from "./local-thread-selection";
 import type { CodexThread } from "./types";
 
 const APP_SERVER_THREAD_LIST_TIMEOUT_MS = 15000;
 const APP_SERVER_THREAD_READ_TIMEOUT_MS = 15000;
+
+function mergeThreadLists(...threadLists: CodexThread[][]): CodexThread[] {
+  const byId = new Map<string, CodexThread>();
+  for (const thread of threadLists.flat()) {
+    const existing = byId.get(thread.id);
+    if (
+      !existing
+      || thread.updatedAt > existing.updatedAt
+      || (
+        thread.updatedAt === existing.updatedAt
+        && thread.turns.length > existing.turns.length
+      )
+    ) {
+      byId.set(thread.id, thread);
+    }
+  }
+  return [...byId.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+}
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return await Promise.race([
@@ -23,6 +42,7 @@ export async function listCodexProjectThreadCandidates(input: {
   client: CodexAppServerClient;
   projectRoot: string;
   localLimit: number;
+  includeSessionThreads?: boolean;
 }): Promise<{
   allThreads: CodexThread[];
   projectThreads: CodexThread[];
@@ -38,11 +58,18 @@ export async function listCodexProjectThreadCandidates(input: {
     APP_SERVER_THREAD_LIST_TIMEOUT_MS,
     "thread/list"
   );
-  const scopedProjectThreads = filterThreadsForProject(input.projectRoot, scopedThreads);
-  const scopedTrackedThreads = selectProjectThreadsWithParents(input.projectRoot, scopedThreads, input.localLimit);
+  const sessionThreads = input.includeSessionThreads === false
+    ? []
+    : await discoverCodexSessionThreads({
+      projectRoot: input.projectRoot,
+      maxFiles: Math.max(scopedLimit * 3, 120)
+    });
+  const scopedAllThreads = mergeThreadLists(scopedThreads, sessionThreads);
+  const scopedProjectThreads = filterThreadsForProject(input.projectRoot, scopedAllThreads);
+  const scopedTrackedThreads = selectProjectThreadsWithParents(input.projectRoot, scopedAllThreads, input.localLimit);
   if (scopedTrackedThreads.length > 0) {
     return {
-      allThreads: scopedThreads,
+      allThreads: scopedAllThreads,
       projectThreads: scopedProjectThreads,
       trackedThreads: scopedTrackedThreads,
       usedUnscopedFallback: false
@@ -56,11 +83,12 @@ export async function listCodexProjectThreadCandidates(input: {
     APP_SERVER_THREAD_LIST_TIMEOUT_MS,
     "thread/list fallback"
   );
-  const fallbackProjectThreads = filterThreadsForProject(input.projectRoot, unscopedThreads);
-  const fallbackTrackedThreads = selectProjectThreadsWithParents(input.projectRoot, unscopedThreads, input.localLimit);
+  const fallbackAllThreads = mergeThreadLists(unscopedThreads, sessionThreads);
+  const fallbackProjectThreads = filterThreadsForProject(input.projectRoot, fallbackAllThreads);
+  const fallbackTrackedThreads = selectProjectThreadsWithParents(input.projectRoot, fallbackAllThreads, input.localLimit);
   if (fallbackTrackedThreads.length === 0) {
     return {
-      allThreads: scopedThreads,
+      allThreads: scopedAllThreads,
       projectThreads: scopedProjectThreads,
       trackedThreads: scopedTrackedThreads,
       usedUnscopedFallback: false
@@ -68,7 +96,7 @@ export async function listCodexProjectThreadCandidates(input: {
   }
 
   return {
-    allThreads: unscopedThreads,
+    allThreads: fallbackAllThreads,
     projectThreads: fallbackProjectThreads,
     trackedThreads: fallbackTrackedThreads,
     usedUnscopedFallback: true

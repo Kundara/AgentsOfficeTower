@@ -1073,7 +1073,15 @@ export class ProjectLiveMonitor extends EventEmitter {
       const wasOngoing =
         this.ongoingThreadIds.has(threadId)
         || (previousThread ? isOngoingThread(previousThread) : false);
-      const readThread = await this.client.readThread(threadId);
+      let readThread: CodexThread;
+      try {
+        readThread = await this.client.readThread(threadId);
+      } catch (error) {
+        if (!listedThread) {
+          throw error;
+        }
+        readThread = listedThread;
+      }
       const thread = listedThread
         ? {
           ...readThread,
