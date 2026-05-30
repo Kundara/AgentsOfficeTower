@@ -69,11 +69,35 @@ test("Hermes plugin install writes a load-status marker bridge", async () => {
 
   const result = await installHermesAgentsOfficePlugin({ hermesHome, hookDir });
   const source = readFileSync(join(result.pluginDir, "__init__.py"), "utf8");
+  const manifest = readFileSync(join(result.pluginDir, "plugin.yaml"), "utf8");
+  const currentHermesHooks = [
+    "on_session_start",
+    "pre_gateway_dispatch",
+    "pre_llm_call",
+    "post_llm_call",
+    "transform_llm_output",
+    "pre_tool_call",
+    "post_tool_call",
+    "transform_tool_result",
+    "transform_terminal_output",
+    "pre_api_request",
+    "post_api_request",
+    "pre_approval_request",
+    "post_approval_response",
+    "on_session_end",
+    "on_session_finalize",
+    "on_session_reset",
+    "subagent_stop"
+  ];
 
   assert.equal(result.hookDir, hookDir);
   assert.match(source, /codex-agents-office\.status\.json/);
   assert.match(source, /status_event_name/);
   assert.match(source, /record_error/);
+  for (const hook of currentHermesHooks) {
+    assert.match(source, new RegExp(`"${hook}"`));
+    assert.match(manifest, new RegExp(`- ${hook}`));
+  }
 });
 
 test("Hermes user prompt remains active planning while recent", () => {
@@ -298,6 +322,78 @@ test("Hermes roaming hook sessions exclude existing workspace floors", async () 
   }
 });
 
+test("Hermes hook project relation expires after more than 20 rootless actions", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-projectless-"));
+  const previousCodexHome = process.env.CODEX_HOME;
+  const previousHookDir = process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR;
+  const codexHome = join(tempRoot, "codex-home");
+  const projectRoot = join(tempRoot, "project");
+  const outsideRoot = join(tempRoot, "outside");
+  const hooksDir = join(codexHome, "codex-agents-office", "hermes-hooks");
+  const hookFile = join(hooksDir, "orchestrator.jsonl");
+  mkdirSync(join(projectRoot, ".git"), { recursive: true });
+  mkdirSync(outsideRoot, { recursive: true });
+  mkdirSync(hooksDir, { recursive: true });
+
+  process.env.CODEX_HOME = codexHome;
+  process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR = hooksDir;
+  try {
+    const writeHookStream = (rootlessCount) => {
+      const base = Date.now() - 120_000;
+      const records = [
+        {
+          session_id: "orchestrator",
+          hook_event_name: "pre_tool_call",
+          timestamp: new Date(base).toISOString(),
+          cwd: outsideRoot,
+          payload: {
+            tool_name: "read_file",
+            args: { path: join(projectRoot, "src", "assigned.ts") }
+          }
+        },
+        ...Array.from({ length: rootlessCount }, (_, index) => ({
+          session_id: "orchestrator",
+          hook_event_name: "pre_llm_call",
+          timestamp: new Date(base + (index + 1) * 1000).toISOString(),
+          cwd: outsideRoot,
+          payload: {
+            user_message: `rootless action ${index + 1}`
+          }
+        }))
+      ];
+      writeFileSync(hookFile, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+    };
+
+    writeHookStream(20);
+    const stillAssigned = await loadRoamingHermesSnapshotData({
+      anchorProjectRoot: projectRoot,
+      knownProjectRoots: [projectRoot],
+      limit: 4
+    });
+    assert.deepEqual(stillAssigned.agents.map((agent) => agent.threadId), []);
+
+    writeHookStream(21);
+    const projectless = await loadRoamingHermesSnapshotData({
+      anchorProjectRoot: projectRoot,
+      knownProjectRoots: [projectRoot],
+      limit: 4
+    });
+    assert.deepEqual(projectless.agents.map((agent) => agent.threadId), ["orchestrator"]);
+    assert.equal(projectless.agents[0].sourceKind, "hermes:roaming");
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+    if (previousHookDir === undefined) {
+      delete process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR;
+    } else {
+      process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR = previousHookDir;
+    }
+  }
+});
+
 test("Hermes project discovery follows only the latest fresh hook project", async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-discovery-"));
   const previousCodexHome = process.env.CODEX_HOME;
@@ -436,6 +532,9 @@ test("durable Hermes hook cron sessions use project task labels instead of raw i
     const agent = snapshot.agents.find((entry) => entry.threadId === "cron_abc_20260515_194835");
     assert.ok(agent);
     assert.equal(agent.label, "IkaBot tick");
+    assert.equal(agent.sourceKind, "hermes:cron");
+    assert.equal(agent.role, "temporary");
+    assert.equal(agent.statusText, "active");
     assert.equal(agent.detail, "Thinking with gpt-5.5");
     assert.equal(agent.activityEvent?.type, "reasoning");
     assert.equal(agent.label.includes("cron_"), false);
@@ -451,6 +550,31 @@ test("durable Hermes hook cron sessions use project task labels instead of raw i
       process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR = previousHookDir;
     }
   }
+});
+
+test("stored Hermes cron sessions strip scheduler prompt text from activity", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const summary = summarizeHermesSessionForTest({
+    session: session({
+      id: "cron_ops_20260518_101112",
+      source: "cron",
+      startedAt: now,
+      lastActive: now,
+      messages: [
+        message({
+          role: "user",
+          content: "[IMPORTANT: You are running as a scheduled cron job. DELIVERY: hidden.]\n\nCheck the staging deploy.",
+          timestamp: now
+        })
+      ]
+    }),
+    projectRoot: "/tmp/project",
+    now: now * 1000
+  });
+
+  assert.equal(summary.state, "planning");
+  assert.equal(summary.detail, "Check the staging deploy.");
+  assert.equal(summary.activityEvent?.title, "Check the staging deploy.");
 });
 
 test("durable Hermes hook tool events expose command, file, and MCP toast shapes", async () => {

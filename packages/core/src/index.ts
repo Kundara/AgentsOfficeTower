@@ -9,6 +9,7 @@ export * from "./codex-command";
 export * from "./domain/workspace-activity";
 export * from "./hermes";
 export * from "./hermes-hook-install";
+export * from "./openclaw";
 export * from "./presence";
 export * from "./project-identity";
 export * from "./project-paths";

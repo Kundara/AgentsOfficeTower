@@ -9,6 +9,7 @@ import { basename } from "node:path";
 import { ensureAgentAppearance } from "./appearance";
 import {
   canonicalizeProjectPath,
+  projectPathIdentityKey,
   sameProjectPath,
   type DiscoveredProject
 } from "./project-paths";
@@ -557,6 +558,28 @@ function openClawLatestMessage(row: OpenClawSessionRow): string | null {
   return preview.length > 0 ? preview : null;
 }
 
+function pathWithinOpenClawProject(projectRoot: string, candidate: string | null | undefined): boolean {
+  if (!candidate) {
+    return false;
+  }
+  if (sameProjectPath(projectRoot, candidate)) {
+    return true;
+  }
+  const rootKey = projectPathIdentityKey(projectRoot);
+  const candidateKey = projectPathIdentityKey(candidate);
+  return Boolean(rootKey && candidateKey && candidateKey.startsWith(`${rootKey}/`));
+}
+
+function openClawWorkspaceInsideAnyProject(
+  workspaceRoot: string | null | undefined,
+  projectRoots: string[]
+): boolean {
+  if (!workspaceRoot) {
+    return false;
+  }
+  return projectRoots.some((projectRoot) => pathWithinOpenClawProject(projectRoot, workspaceRoot));
+}
+
 export function openClawSessionToActivityState(params: {
   row: OpenClawSessionRow;
   activeChildCount: number;
@@ -628,6 +651,98 @@ function sessionDepthForKey(
   return 1 + sessionDepthForKey(parent, parentByKey, seen);
 }
 
+function activeOpenClawChildCounts(sessions: OpenClawSessionRow[]): Map<string, number> {
+  const activeChildCountByKey = new Map<string, number>();
+  for (const session of sessions) {
+    const parentKey = session.parentSessionKey?.trim() || null;
+    if (!parentKey) {
+      continue;
+    }
+    const state = openClawSessionToActivityState({ row: session, activeChildCount: 0 });
+    if (state === "done" || state === "idle") {
+      continue;
+    }
+    activeChildCountByKey.set(parentKey, (activeChildCountByKey.get(parentKey) ?? 0) + 1);
+  }
+  return activeChildCountByKey;
+}
+
+async function openClawDashboardAgentFromSession(input: {
+  projectRoot: string;
+  session: OpenClawSessionRow;
+  agent: OpenClawWorkspaceAgent | null;
+  parentByKey: Map<string, string | null>;
+  activeChildCount: number;
+  sourceKind?: string;
+  statusText?: string | null;
+}): Promise<DashboardAgent | null> {
+  const updatedAtMs = sessionRowTimestamp(input.session);
+  if (!Number.isFinite(updatedAtMs)) {
+    return null;
+  }
+
+  const agentId = normalizeAgentIdFromSessionKey(input.session.key);
+  const labelAgent = input.agent ?? {
+    agentId: agentId ?? "openclaw",
+    name: null,
+    workspaceRoot: input.projectRoot,
+    isDefault: false
+  };
+  const activeChildCount = input.activeChildCount;
+  const state = openClawSessionToActivityState({
+    row: input.session,
+    activeChildCount
+  });
+  const sourceKind = input.sourceKind
+    ?? (
+      input.session.modelProvider && input.session.model
+        ? `openclaw:${input.session.modelProvider}/${input.session.model}`
+        : input.session.model
+          ? `openclaw:${input.session.model}`
+          : "openclaw"
+    );
+  const appearance = await ensureAgentAppearance(input.projectRoot, `openclaw:${input.session.key}`);
+  const cwd = input.agent?.workspaceRoot ?? null;
+
+  return {
+    id: `openclaw:${input.session.key}`,
+    label: openClawDisplayLabel({ row: input.session, agent: labelAgent }),
+    source: "openclaw",
+    sourceKind,
+    parentThreadId: input.session.parentSessionKey ? `openclaw:${input.session.parentSessionKey}` : null,
+    depth: sessionDepthForKey(input.session.key, input.parentByKey),
+    isCurrent: false,
+    isOngoing: input.session.status === "running",
+    statusText: input.statusText ?? input.session.status ?? null,
+    role: labelAgent.isDefault ? (labelAgent.name ?? "openclaw") : labelAgent.agentId,
+    nickname: labelAgent.name,
+    isSubagent: Boolean(input.session.parentSessionKey),
+    state,
+    detail: openClawSessionDetail({ row: input.session, activeChildCount }),
+    cwd,
+    roomId: null,
+    appearance,
+    updatedAt: new Date(updatedAtMs).toISOString(),
+    stoppedAt:
+      typeof input.session.endedAt === "number" && Number.isFinite(input.session.endedAt)
+        ? new Date(input.session.endedAt).toISOString()
+        : null,
+    paths: cwd ? [cwd] : [],
+    activityEvent: null,
+    latestMessage: openClawLatestMessage(input.session),
+    threadId: input.session.key,
+    taskId: null,
+    resumeCommand: null,
+    url: null,
+    git: null,
+    provenance: "openclaw",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly",
+    network: null
+  };
+}
+
 async function loadOpenClawWorkspaceDataUncached(): Promise<OpenClawWorkspaceData | null> {
   if (!openClawEnabled()) {
     return null;
@@ -684,7 +799,7 @@ export function openClawWorkspaceMatchesProject(
   workspaceRoot: string | null | undefined,
   projectRoot: string
 ): boolean {
-  return sameProjectPath(workspaceRoot, projectRoot);
+  return pathWithinOpenClawProject(projectRoot, workspaceRoot);
 }
 
 export async function discoverOpenClawProjects(limit = 20): Promise<DiscoveredProject[]> {
@@ -750,21 +865,10 @@ export async function loadOpenClawAgents(projectRoot: string): Promise<Dashboard
   });
 
   const parentByKey = new Map<string, string | null>();
-  const activeChildCountByKey = new Map<string, number>();
   for (const session of relevantSessions) {
     parentByKey.set(session.key, session.parentSessionKey?.trim() || null);
   }
-  for (const session of relevantSessions) {
-    const parentKey = session.parentSessionKey?.trim() || null;
-    if (!parentKey) {
-      continue;
-    }
-    const state = openClawSessionToActivityState({ row: session, activeChildCount: 0 });
-    if (state === "done" || state === "idle") {
-      continue;
-    }
-    activeChildCountByKey.set(parentKey, (activeChildCountByKey.get(parentKey) ?? 0) + 1);
-  }
+  const activeChildCountByKey = activeOpenClawChildCounts(relevantSessions);
 
   const agents: DashboardAgent[] = [];
   for (const session of relevantSessions.sort((left, right) => {
@@ -780,63 +884,93 @@ export async function loadOpenClawAgents(projectRoot: string): Promise<Dashboard
       continue;
     }
 
-    const updatedAtMs = sessionRowTimestamp(session);
-    if (!Number.isFinite(updatedAtMs)) {
-      continue;
-    }
-
     const activeChildCount = activeChildCountByKey.get(session.key) ?? 0;
-    const state = openClawSessionToActivityState({
-      row: session,
+    const dashboardAgent = await openClawDashboardAgentFromSession({
+      projectRoot,
+      session,
+      agent,
+      parentByKey,
       activeChildCount
     });
-    const sourceKind =
-      session.modelProvider && session.model
-        ? `openclaw:${session.modelProvider}/${session.model}`
-        : session.model
-          ? `openclaw:${session.model}`
-          : "openclaw";
-
-    agents.push({
-      id: `openclaw:${session.key}`,
-      label: openClawDisplayLabel({ row: session, agent }),
-      source: "openclaw",
-      sourceKind,
-      parentThreadId: session.parentSessionKey ? `openclaw:${session.parentSessionKey}` : null,
-      depth: sessionDepthForKey(session.key, parentByKey),
-      isCurrent: false,
-      isOngoing: session.status === "running",
-      statusText: session.status ?? null,
-      role: agent.isDefault ? (agent.name ?? "openclaw") : agent.agentId,
-      nickname: agent.name,
-      isSubagent: Boolean(session.parentSessionKey),
-      state,
-      detail: openClawSessionDetail({ row: session, activeChildCount }),
-      cwd: agent.workspaceRoot,
-      roomId: null,
-      appearance: await ensureAgentAppearance(projectRoot, `openclaw:${session.key}`),
-      updatedAt: new Date(updatedAtMs).toISOString(),
-      stoppedAt:
-        typeof session.endedAt === "number" && Number.isFinite(session.endedAt)
-          ? new Date(session.endedAt).toISOString()
-          : null,
-      paths: [agent.workspaceRoot],
-      activityEvent: null,
-      latestMessage: openClawLatestMessage(session),
-      threadId: session.key,
-      taskId: null,
-      resumeCommand: null,
-      url: null,
-      git: null,
-      provenance: "openclaw",
-      confidence: "typed",
-      needsUser: null,
-      liveSubscription: "readOnly",
-      network: null
-    });
+    if (dashboardAgent) {
+      agents.push(dashboardAgent);
+    }
   }
 
   return agents;
+}
+
+export async function loadRoamingOpenClawSnapshotData(input: {
+  anchorProjectRoot: string;
+  knownProjectRoots: string[];
+  limit?: number;
+}): Promise<{
+  agents: DashboardAgent[];
+  notes: string[];
+}> {
+  const anchorRoot = canonicalizeProjectPath(input.anchorProjectRoot);
+  if (!anchorRoot) {
+    return { agents: [], notes: [] };
+  }
+
+  const data = await loadOpenClawWorkspaceData();
+  if (!data) {
+    return { agents: [], notes: [] };
+  }
+
+  const knownRoots = input.knownProjectRoots
+    .map((root) => canonicalizeProjectPath(root))
+    .filter((root): root is string => Boolean(root));
+  const limit = input.limit ?? 4;
+  const recentCutoff = Date.now() - OPENCLAW_DISCOVERY_WINDOW_MS;
+  const agentById = new Map(data.agents.map((agent) => [agent.agentId, agent]));
+  const candidateSessions = data.sessions.filter((session) => {
+    const updatedAt = sessionRowTimestamp(session);
+    if (!Number.isFinite(updatedAt) || updatedAt < recentCutoff) {
+      return false;
+    }
+    const agentId = normalizeAgentIdFromSessionKey(session.key);
+    const agent = agentId ? agentById.get(agentId) ?? null : null;
+    return !openClawWorkspaceInsideAnyProject(agent?.workspaceRoot ?? null, knownRoots);
+  });
+
+  const parentByKey = new Map<string, string | null>();
+  for (const session of candidateSessions) {
+    parentByKey.set(session.key, session.parentSessionKey?.trim() || null);
+  }
+  const activeChildCountByKey = activeOpenClawChildCounts(candidateSessions);
+  const agents: DashboardAgent[] = [];
+
+  for (const session of candidateSessions.sort((left, right) => {
+    return sessionRowTimestamp(right) - sessionRowTimestamp(left);
+  })) {
+    const agentId = normalizeAgentIdFromSessionKey(session.key);
+    const sourceAgent = agentId ? agentById.get(agentId) ?? null : null;
+    const activeChildCount = activeChildCountByKey.get(session.key) ?? 0;
+    const dashboardAgent = await openClawDashboardAgentFromSession({
+      projectRoot: anchorRoot,
+      session,
+      agent: sourceAgent,
+      parentByKey,
+      activeChildCount,
+      sourceKind: "openclaw:roaming",
+      statusText: session.status === "running" ? "roaming" : session.status ?? null
+    });
+    if (!dashboardAgent) {
+      continue;
+    }
+    if (dashboardAgent.state === "idle" && dashboardAgent.isOngoing !== true) {
+      continue;
+    }
+    agents.push(dashboardAgent);
+  }
+
+  return {
+    agents: agents
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, limit),
+    notes: []
+  };
 }
 
 export function openClawSessionWorkspaceLabel(

@@ -37,9 +37,12 @@ const HERMES_SQLITE_MAX_BUFFER = 8 * 1024 * 1024;
 const HERMES_HOOK_FILE_BYTE_LIMIT = 1024 * 1024;
 const HERMES_HOOK_LINE_BYTE_LIMIT = 64 * 1024;
 const HERMES_HOOK_RECORD_LIMIT = 80;
+// Keep a project relation through 20 rootless hook actions, then treat the stream as projectless.
+const HERMES_PROJECT_RELATION_ACTION_WINDOW = 21;
 const HERMES_HOOK_TEXT_LIMIT = 1500;
 const HERMES_HOOK_PATH_LIMIT = 32;
 const HERMES_TRANSIENT_PROJECT_ROOTS = new Set(["/tmp", "/var/tmp", "/dev/shm"]);
+const HERMES_CRON_SESSION_ID_RE = /^cron_[A-Za-z0-9_-]+_\d{8}_\d{6}$/i;
 
 interface HermesSqliteExport {
   sessions: HermesStoredSession[];
@@ -624,14 +627,14 @@ function latestAssistantText(messages: HermesStoredMessage[]): string | null {
   return null;
 }
 
-function latestUserText(messages: HermesStoredMessage[]): string | null {
+function latestUserContent(messages: HermesStoredMessage[]): string | null {
   for (const message of [...messages].reverse()) {
     if (message.role !== "user") {
       continue;
     }
     const text = textFromContent(message.content);
     if (text) {
-      return shorten(text, 160);
+      return text;
     }
   }
   return null;
@@ -711,9 +714,39 @@ function hermesTitleLooksGenericPrompt(title: string): boolean {
     || /^please continue\b/i.test(title);
 }
 
+function isHermesCronSessionId(sessionId: string): boolean {
+  return HERMES_CRON_SESSION_ID_RE.test(sessionId);
+}
+
+function isHermesCronSession(session: HermesStoredSession): boolean {
+  const source = (session.source ?? "").trim().toLowerCase();
+  return isHermesCronSessionId(session.id) || source === "cron";
+}
+
+function hermesCronPromptText(text: string): string | null {
+  let normalized = text
+    .replace(/^\[IMPORTANT:\s*You are running as a scheduled cron job\.[\s\S]*?\]\s*/i, "")
+    .replace(/^Cronjob Response:[\s\S]*?-------------\s*/i, "")
+    .trim();
+  if (!normalized || normalized === "[SILENT]") {
+    return null;
+  }
+  normalized = normalized.replace(/^#\s*Cron Job:\s*/i, "").trim();
+  return normalized || null;
+}
+
+function latestHermesSessionUserText(session: HermesStoredSession, maxLength = 160): string | null {
+  const text = latestUserContent(session.messages);
+  if (!text) {
+    return null;
+  }
+  const displayText = isHermesCronSession(session) ? hermesCronPromptText(text) : text;
+  return displayText ? shorten(displayText, maxLength) : null;
+}
+
 function hermesFallbackSessionLabel(projectRoot: string, sessionId: string): string {
   const projectLabel = hermesProjectDisplayLabel(projectRoot);
-  if (/^cron_/i.test(sessionId)) {
+  if (isHermesCronSessionId(sessionId)) {
     return `${projectLabel} tick`;
   }
   return `${projectLabel} Hermes`;
@@ -722,7 +755,7 @@ function hermesFallbackSessionLabel(projectRoot: string, sessionId: string): str
 function hermesHookSessionLabel(records: HermesHookRecord[], projectRoot: string, latestMessage: string | null): string {
   const latest = records[records.length - 1];
   const sessionId = latest?.sessionId ?? "";
-  if (/^cron_/i.test(sessionId)) {
+  if (isHermesCronSessionId(sessionId)) {
     return hermesFallbackSessionLabel(projectRoot, sessionId);
   }
 
@@ -1034,11 +1067,14 @@ async function resolveProjectRootForPath(path: string): Promise<string | null> {
   return statResult ? canonicalizeProjectPath(normalized) : null;
 }
 
-function sessionLabel(session: HermesStoredSession): string {
+function sessionLabel(session: HermesStoredSession, projectRoot: string): string {
   if (session.title && session.title.trim()) {
     return shorten(session.title, 42);
   }
-  const prompt = latestUserText(session.messages);
+  if (isHermesCronSession(session)) {
+    return hermesFallbackSessionLabel(projectRoot, session.id);
+  }
+  const prompt = latestHermesSessionUserText(session, 160);
   if (prompt) {
     return shorten(prompt, 42);
   }
@@ -1047,8 +1083,25 @@ function sessionLabel(session: HermesStoredSession): string {
 }
 
 function sessionSourceKind(session: HermesStoredSession): string {
+  if (isHermesCronSession(session)) {
+    return "hermes:cron";
+  }
   const source = session.source && session.source.trim() ? session.source.trim() : "local";
   return session.model ? `hermes:${source}:${session.model}` : `hermes:${source}`;
+}
+
+function sessionRole(session: HermesStoredSession): string {
+  return isHermesCronSession(session) ? "temporary" : "hermes";
+}
+
+function sessionStatusText(session: HermesStoredSession, isOngoing: boolean): string {
+  if (isOngoing) {
+    return "active";
+  }
+  if (isHermesCronSession(session)) {
+    return "temporary";
+  }
+  return session.endReason ?? (session.endedAt ? "ended" : "open");
 }
 
 function isCliLikeHermesSource(session: HermesStoredSession): boolean {
@@ -1241,8 +1294,13 @@ function hermesHookPayloadPathCandidates(record: HermesHookRecord): string[] {
   return [...paths];
 }
 
+function recentHermesHookRecordsForProjectRelation(records: HermesHookRecord[]): HermesHookRecord[] {
+  return records.slice(-HERMES_PROJECT_RELATION_ACTION_WINDOW);
+}
+
 async function currentProjectRootForHermesHookSession(records: HermesHookRecord[]): Promise<string | null> {
-  for (const record of [...records].reverse()) {
+  const recentRecords = recentHermesHookRecordsForProjectRelation(records);
+  for (const record of [...recentRecords].reverse()) {
     const candidates = hermesHookPayloadPathCandidates(record);
     for (const candidate of candidates) {
       const root = await resolveProjectRootForPath(candidate);
@@ -1251,7 +1309,7 @@ async function currentProjectRootForHermesHookSession(records: HermesHookRecord[
       }
     }
   }
-  for (const record of [...records].reverse()) {
+  for (const record of [...recentRecords].reverse()) {
     const candidates = [record.cwd, record.processCwd].filter((entry): entry is string => Boolean(entry));
     for (const candidate of candidates) {
       const root = await resolveProjectRootForPath(candidate);
@@ -1311,7 +1369,22 @@ function isNonSessionHermesHookId(sessionId: string): boolean {
 
 function isDurableHermesHookSessionId(sessionId: string): boolean {
   return /^\d{8}_\d{6}_[0-9a-f]+$/i.test(sessionId)
-    || /^cron_[A-Za-z0-9_-]+_\d{8}_\d{6}$/i.test(sessionId);
+    || isHermesCronSessionId(sessionId);
+}
+
+function hermesHookSourceKind(sessionId: string): string {
+  return isHermesCronSessionId(sessionId) ? "hermes:cron" : "hermes:hook";
+}
+
+function hermesHookRole(sessionId: string): string {
+  return isHermesCronSessionId(sessionId) ? "temporary" : "hermes";
+}
+
+function hermesHookStatusText(sessionId: string, isOngoing: boolean): string {
+  if (isOngoing) {
+    return "active";
+  }
+  return isHermesCronSessionId(sessionId) ? "temporary" : "hook";
 }
 
 function canonicalHermesSessionIdForHookRecords(
@@ -1786,7 +1859,8 @@ function summarizeHermesSession(input: {
   const latest = [...session.messages].reverse().find((message) => message.role) ?? null;
   const latestCall = latestMessageToolCall(latest);
   const latestMessage = latestAssistantText(session.messages);
-  const latestUser = latestUserText(session.messages);
+  const latestUser = latestHermesSessionUserText(session);
+  const promptDetail = latestUser ?? (isHermesCronSession(session) ? "Scheduled cron job" : "Hermes prompt");
   const lastActiveMs = Math.max(session.lastActive * 1000, session.startedAt * 1000);
   const ageMs = now - lastActiveMs;
   const isEnded = session.endedAt !== null;
@@ -1855,13 +1929,13 @@ function summarizeHermesSession(input: {
     return {
       state: "planning",
       isOngoing: true,
-      detail: latestUser ?? "Hermes prompt",
+      detail: promptDetail,
       paths,
       activityEvent: {
         type: "userMessage",
         action: "said",
         path: paths[0] ?? projectRoot,
-        title: latestUser ?? "Hermes prompt",
+        title: promptDetail,
         isImage: false
       },
       latestMessage,
@@ -1895,7 +1969,7 @@ function summarizeHermesSession(input: {
     return {
       state: "waiting",
       isOngoing: true,
-      detail: latestMessage ?? latestUser ?? "Hermes session open",
+      detail: latestMessage ?? latestUser ?? (isHermesCronSession(session) ? "Scheduled cron job open" : "Hermes session open"),
       paths,
       activityEvent: latestMessage
         ? {
@@ -1916,7 +1990,7 @@ function summarizeHermesSession(input: {
   return {
     state: recentlyDone ? "done" : "idle",
     isOngoing: false,
-    detail: latestMessage ?? latestUser ?? (isEnded ? "Finished" : "Hermes session"),
+    detail: latestMessage ?? latestUser ?? (isEnded ? "Finished" : isHermesCronSession(session) ? "Scheduled cron job" : "Hermes session"),
     paths,
     activityEvent: latestMessage
       ? {
@@ -2175,15 +2249,15 @@ export async function loadHermesProjectSnapshotData(projectRoot: string, limit =
     const isContinuation = isHermesCompressionContinuation(session);
     agents.push({
       id: `hermes:${session.id}`,
-      label: sessionLabel(session),
+      label: sessionLabel(session, canonicalRoot),
       source: "hermes",
       sourceKind: sessionSourceKind(session),
       parentThreadId: !isContinuation && session.parentSessionId ? `hermes:${session.parentSessionId}` : null,
       depth: !isContinuation && session.parentSessionId ? 1 : 0,
       isCurrent: visibleSummary.isOngoing,
       isOngoing: visibleSummary.isOngoing,
-      statusText: visibleSummary.isOngoing ? "active" : session.endReason ?? (session.endedAt ? "ended" : "open"),
-      role: "hermes",
+      statusText: sessionStatusText(session, visibleSummary.isOngoing),
+      role: sessionRole(session),
       nickname: null,
       isSubagent: Boolean(!isContinuation && session.parentSessionId),
       state: visibleSummary.state,
@@ -2241,13 +2315,13 @@ export async function loadHermesProjectSnapshotData(projectRoot: string, limit =
       id: `hermes:${sessionId}`,
       label: hermesHookSessionLabel(hookRecords, canonicalRoot, summary.latestMessage),
       source: "hermes",
-      sourceKind: "hermes:hook",
+      sourceKind: hermesHookSourceKind(sessionId),
       parentThreadId: null,
       depth: 0,
       isCurrent: summary.isOngoing,
       isOngoing: summary.isOngoing,
-      statusText: summary.isOngoing ? "active" : "hook",
-      role: "hermes",
+      statusText: hermesHookStatusText(sessionId, summary.isOngoing),
+      role: hermesHookRole(sessionId),
       nickname: null,
       isSubagent: false,
       state: summary.state,
@@ -2444,13 +2518,8 @@ export async function loadRoamingHermesSnapshotData(input: {
     const currentRoot = await currentProjectRootForHermesHookSession(records);
     const candidatePaths = collectHermesHookPathCandidates(records);
     const isInsideKnownWorkspace = Boolean(
-      (
-        currentRoot
-        && knownRoots.some((root) => sameProjectPath(root, currentRoot) || pathWithinProject(root, currentRoot))
-      )
-      || candidatePaths.some((candidate) =>
-        knownRoots.some((root) => pathWithinProject(root, candidate))
-      )
+      currentRoot
+      && knownRoots.some((root) => sameProjectPath(root, currentRoot) || pathWithinProject(root, currentRoot))
     );
     if (isInsideKnownWorkspace) {
       continue;
@@ -2468,6 +2537,9 @@ export async function loadRoamingHermesSnapshotData(input: {
 
     const latest = records[records.length - 1];
     const appearance = await ensureAgentAppearance(anchorRoot, `hermes:${sessionId}`);
+    const statusText = isHermesCronSessionId(sessionId)
+      ? hermesHookStatusText(sessionId, summary.isOngoing)
+      : summary.isOngoing ? "roaming" : summary.state;
     agents.push({
       id: `hermes:${sessionId}`,
       label: hermesHookSessionLabel(records, anchorRoot, summary.latestMessage),
@@ -2477,8 +2549,8 @@ export async function loadRoamingHermesSnapshotData(input: {
       depth: 0,
       isCurrent: false,
       isOngoing: summary.isOngoing,
-      statusText: summary.isOngoing ? "roaming" : summary.state,
-      role: "hermes",
+      statusText,
+      role: hermesHookRole(sessionId),
       nickname: null,
       isSubagent: false,
       state: summary.state,
