@@ -161,6 +161,7 @@ interface ClaudeWorkflowJournalEntry {
 
 interface ClaudeWorkflowSubagentSeed {
   agentId: string;
+  childAgentId: string;
   agentType: string | null;
   name: string | null;
   description: string | null;
@@ -308,6 +309,10 @@ function claudeTeamMemberPrimaryCwd(member: ClaudeTeamMember): string {
 
 function claudeHookAgentId(record: Record<string, unknown>): string | null {
   return stringValue(record, "agent_id", "agentId");
+}
+
+function isClaudeChildHookRecord(record: Record<string, unknown>): boolean {
+  return Boolean(claudeHookAgentId(record));
 }
 
 function claudeHookAgentType(record: Record<string, unknown>): string | null {
@@ -2995,6 +3000,16 @@ function claudeWorkflowIdFromPath(subagentsDir: string, filePath: string): strin
   return workflowIndex >= 0 && parts[workflowIndex + 1] ? parts[workflowIndex + 1] : null;
 }
 
+function claudeWorkflowSubagentSeedKey(agentId: string, workflowId: string | null): string {
+  return `${workflowId ?? ""}\u0000${agentId}`;
+}
+
+function claudeWorkflowSubagentChildAgentId(seed: Omit<ClaudeWorkflowSubagentSeed, "childAgentId">, duplicatedAgentIds: Set<string>): string {
+  return seed.workflowId && duplicatedAgentIds.has(seed.agentId)
+    ? `workflow:${seed.workflowId}:agent:${seed.agentId}`
+    : seed.agentId;
+}
+
 async function listClaudeSubagentJsonlFiles(rootDir: string, limit = 200): Promise<string[]> {
   const files: string[] = [];
   async function walk(dir: string): Promise<void> {
@@ -3253,15 +3268,16 @@ async function readClaudeWorkflowSubagentSeeds(session: ClaudeLoadedSession): Pr
     }))
   );
   const journalEntries = scanResults.flatMap((result) => result.journalEntries);
-  const latestJournalByAgentId = new Map<string, ClaudeWorkflowJournalEntry>();
+  const latestJournalBySeedKey = new Map<string, ClaudeWorkflowJournalEntry>();
   for (const entry of journalEntries) {
-    const existing = latestJournalByAgentId.get(entry.agentId);
+    const seedKey = claudeWorkflowSubagentSeedKey(entry.agentId, entry.workflowId);
+    const existing = latestJournalBySeedKey.get(seedKey);
     if (!existing || entry.updatedAtMs >= existing.updatedAtMs) {
-      latestJournalByAgentId.set(entry.agentId, entry);
+      latestJournalBySeedKey.set(seedKey, entry);
     }
   }
 
-  const seedsByAgentId = new Map<string, ClaudeWorkflowSubagentSeed>();
+  const seedsByKey = new Map<string, Omit<ClaudeWorkflowSubagentSeed, "childAgentId">>();
   for (const result of scanResults) {
     for (const transcriptPath of result.jsonlFiles.filter((file) => basename(file) !== "journal.jsonl")) {
       const [sample, fileStats, meta] = await Promise.all([
@@ -3275,13 +3291,14 @@ async function readClaudeWorkflowSubagentSeeds(session: ClaudeLoadedSession): Pr
       }
       const records = [...sample.headRecords, ...sample.tailRecords];
       const workflowId = claudeWorkflowIdFromPath(result.subagentsDir, transcriptPath);
-      const journal = latestJournalByAgentId.get(agentId) ?? null;
+      const seedKey = claudeWorkflowSubagentSeedKey(agentId, workflowId);
+      const journal = latestJournalBySeedKey.get(seedKey) ?? null;
       const cwd = journal?.cwd ?? meta?.cwd ?? session.cwd;
       const agentType = journal?.agentType ?? meta?.agentType ?? null;
       const name = journal?.name ?? meta?.name ?? null;
       const description = journal?.description ?? meta?.description ?? null;
       const updatedAtMs = Math.max(latestClaudeTimestamp(records, sample.mtimeMs), fileStats?.mtimeMs ?? 0, journal?.updatedAtMs ?? 0);
-      const existing = seedsByAgentId.get(agentId);
+      const existing = seedsByKey.get(seedKey);
       if (existing && existing.updatedAtMs > updatedAtMs) {
         continue;
       }
@@ -3295,7 +3312,7 @@ async function readClaudeWorkflowSubagentSeeds(session: ClaudeLoadedSession): Pr
         fallbackDetail: journal?.detail ?? description ?? name ?? agentType ?? "Claude subagent"
       });
       const journalIsNewer = journal && journal.updatedAtMs >= Date.parse(summary.updatedAt);
-      seedsByAgentId.set(agentId, {
+      seedsByKey.set(seedKey, {
         agentId,
         agentType,
         name,
@@ -3318,8 +3335,9 @@ async function readClaudeWorkflowSubagentSeeds(session: ClaudeLoadedSession): Pr
     }
   }
 
-  for (const journal of latestJournalByAgentId.values()) {
-    if (seedsByAgentId.has(journal.agentId)) {
+  for (const journal of latestJournalBySeedKey.values()) {
+    const seedKey = claudeWorkflowSubagentSeedKey(journal.agentId, journal.workflowId);
+    if (seedsByKey.has(seedKey)) {
       continue;
     }
     const cwd = journal.cwd ?? session.cwd;
@@ -3337,7 +3355,7 @@ async function readClaudeWorkflowSubagentSeeds(session: ClaudeLoadedSession): Pr
       latestMessage: journal.latestMessage,
       isOngoing: journal.state !== "done" && journal.state !== "idle" && journal.state !== "blocked"
     };
-    seedsByAgentId.set(journal.agentId, {
+    seedsByKey.set(seedKey, {
       agentId: journal.agentId,
       agentType: journal.agentType,
       name: journal.name,
@@ -3349,7 +3367,24 @@ async function readClaudeWorkflowSubagentSeeds(session: ClaudeLoadedSession): Pr
     });
   }
 
-  return [...seedsByAgentId.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+  const workflowKeysByAgentId = new Map<string, Set<string>>();
+  for (const [seedKey, seed] of seedsByKey.entries()) {
+    const keys = workflowKeysByAgentId.get(seed.agentId) ?? new Set<string>();
+    keys.add(seedKey);
+    workflowKeysByAgentId.set(seed.agentId, keys);
+  }
+  const duplicatedAgentIds = new Set(
+    [...workflowKeysByAgentId.entries()]
+      .filter(([, keys]) => keys.size > 1)
+      .map(([agentId]) => agentId)
+  );
+
+  return [...seedsByKey.values()]
+    .map((seed) => ({
+      ...seed,
+      childAgentId: claudeWorkflowSubagentChildAgentId(seed, duplicatedAgentIds)
+    }))
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
 }
 
 async function buildClaudeSubagentAgents(input: {
@@ -3372,7 +3407,7 @@ async function buildClaudeSubagentAgents(input: {
 
   for (const seed of await readClaudeWorkflowSubagentSeeds(input.session)) {
     const context = input.teamIndex.byLeadAndAgentId.get(claudeTeamMemberContextKey(input.session.sessionId, seed.agentId)) ?? null;
-    const id = context ? claudeTeamAgentId(context) : claudeChildAgentId(input.session.sessionId, seed.agentId);
+    const id = context ? claudeTeamAgentId(context) : claudeChildAgentId(input.session.sessionId, seed.childAgentId);
     latestById.set(id, {
       agentId: seed.agentId,
       agentType: seed.agentType ?? context?.member.agentType ?? null,
@@ -3796,7 +3831,8 @@ export function summariseClaudeSession(
   const latestToolUpdatedAt = latestToolRecord ? recordTimestampMs(latestToolRecord, fallbackUpdatedAt) : Number.NEGATIVE_INFINITY;
   const latestUserTextUpdatedAt = latestUserTextRecord ? recordTimestampMs(latestUserTextRecord, fallbackUpdatedAt) : Number.NEGATIVE_INFINITY;
   const latestAssistantTextUpdatedAt = latestAssistantTextRecord ? recordTimestampMs(latestAssistantTextRecord, fallbackUpdatedAt) : Number.NEGATIVE_INFINITY;
-  const latestHookSummary = [...hookRecords]
+  const latestHookSummary = hookRecords
+    .filter((record) => !isClaudeChildHookRecord(record))
     .reverse()
     .map((record) => summariseClaudeHookRecord({
       sessionId,

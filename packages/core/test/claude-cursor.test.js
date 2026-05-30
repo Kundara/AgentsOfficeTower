@@ -334,6 +334,68 @@ test("Claude subagent hook events attach to the child thread id", () => {
   ));
 });
 
+test("Claude child hook records do not update lead summaries while still driving child activity", async () => {
+  await withTempAppData("claude-child-hook-ownership-", async () => {
+    const now = Date.now();
+    const sessionId = "session-child-ownership";
+    const cwd = "/workspaces/CodexAgentsOffice";
+    const leadRecords = [
+      {
+        type: "assistant",
+        timestamp: new Date(now - 3_000).toISOString(),
+        cwd,
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "Lead is coordinating the workflow." }]
+        }
+      }
+    ];
+    const childHook = {
+      hook_event_name: "PostToolUse",
+      timestamp: new Date(now - 1_000).toISOString(),
+      cwd,
+      agent_id: "agent-1",
+      agent_type: "explorer",
+      tool_name: "Bash",
+      tool_input: {
+        command: "npm test -w packages/core",
+        cwd
+      }
+    };
+
+    const summary = summariseClaudeSession(sessionId, cwd, leadRecords, now - 3_000, [childHook]);
+    assert.equal(summary.latestMessage, "Lead is coordinating the workflow.");
+    assert.equal(summary.detail, "Lead is coordinating the workflow.");
+    assert.notEqual(summary.detail, "npm test -w packages/core");
+    assert.notEqual(summary.activityEvent?.type, "commandExecution");
+
+    const agents = await buildClaudeSubagentAgentsForTest({
+      projectRoot: cwd,
+      sessionId,
+      cwd,
+      updatedAt: now,
+      records: leadRecords,
+      hookRecords: [childHook]
+    });
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].threadId, "claude:session-child-ownership:agent:agent-1");
+    assert.equal(agents[0].detail, "npm test -w packages/core");
+    assert.equal(agents[0].activityEvent?.type, "commandExecution");
+
+    const events = buildClaudeSessionEventsForTest({
+      sessionId,
+      fallbackCwd: cwd,
+      records: leadRecords,
+      fallbackUpdatedAt: now,
+      hookRecords: [childHook]
+    });
+    const commandEvents = events.filter((event) => event.method === "claude/commandExecution");
+    assert.equal(commandEvents.length, 1);
+    assert.equal(commandEvents[0].threadId, "claude:session-child-ownership:agent:agent-1");
+    assert.ok(!events.some((event) => event.method === "claude/commandExecution" && event.threadId === sessionId));
+  });
+});
+
 test("Claude subagent hooks use teammate session ids when team metadata links them", async () => {
   await withTempAppData("claude-team-hook-rows-", async () => {
     const now = Date.now();
@@ -499,7 +561,8 @@ test("Claude hook-backed child rows override inferred workflow rows for the same
     const now = Date.now();
     const projectDir = await mkdtemp(path.join(os.tmpdir(), "claude-workflow-hook-"));
     const sessionId = "session-workflow-789";
-    const transcriptPath = path.join(projectDir, sessionId, "subagents", "workflows", "workflow-c", "agent-reviewer.jsonl");
+    const workflowDir = path.join(projectDir, sessionId, "subagents", "workflows", "workflow-c");
+    const transcriptPath = path.join(workflowDir, "agent-reviewer.jsonl");
     await writeJsonl(transcriptPath, [
       {
         type: "assistant",
@@ -508,6 +571,27 @@ test("Claude hook-backed child rows override inferred workflow rows for the same
           model: "claude-sonnet-4-6",
           content: [{ type: "text", text: "Inferred transcript summary." }]
         }
+      }
+    ]);
+    await writeFile(
+      path.join(workflowDir, "agent-reviewer.meta.json"),
+      JSON.stringify({
+        agentId: "reviewer",
+        agentType: "code-reviewer",
+        name: "Workflow reviewer",
+        cwd: "/workspaces/CodexAgentsOffice"
+      }),
+      "utf8"
+    );
+    await writeJsonl(path.join(workflowDir, "journal.jsonl"), [
+      {
+        type: "agent_result",
+        timestamp: new Date(now - 500).toISOString(),
+        agent_id: "reviewer",
+        agent_type: "code-reviewer",
+        name: "Workflow reviewer",
+        result: "Journal summary for the same child.",
+        cwd: "/workspaces/CodexAgentsOffice"
       }
     ]);
 
@@ -540,6 +624,60 @@ test("Claude hook-backed child rows override inferred workflow rows for the same
       assert.equal(agents[0].sourceKind, "claude:subagent:explorer");
       assert.equal(agents[0].state, "validating");
       assert.equal(agents[0].activityEvent?.type, "commandExecution");
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("Claude workflow seeds keep same-named children from separate workflows distinct", async () => {
+  await withTempAppData("claude-workflow-distinct-agent-ids-", async () => {
+    const now = Date.now();
+    const projectDir = await mkdtemp(path.join(os.tmpdir(), "claude-workflow-distinct-"));
+    const sessionId = "session-workflow-distinct";
+    const workflowADir = path.join(projectDir, sessionId, "subagents", "workflows", "workflow-a");
+    const workflowBDir = path.join(projectDir, sessionId, "subagents", "workflows", "workflow-b");
+    await writeJsonl(path.join(workflowADir, "agent-reviewer.jsonl"), [
+      {
+        type: "assistant",
+        timestamp: new Date(now - 2_000).toISOString(),
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "Workflow A review complete." }]
+        }
+      }
+    ]);
+    await writeJsonl(path.join(workflowBDir, "agent-reviewer.jsonl"), [
+      {
+        type: "assistant",
+        timestamp: new Date(now - 1_000).toISOString(),
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "Workflow B review complete." }]
+        }
+      }
+    ]);
+
+    try {
+      const agents = await buildClaudeSubagentAgentsForTest({
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        sessionId,
+        projectDirPath: projectDir,
+        cwd: "/workspaces/CodexAgentsOffice",
+        updatedAt: now,
+        hookRecords: []
+      });
+      const byThreadId = new Map(agents.map((agent) => [agent.threadId, agent]));
+
+      assert.equal(agents.length, 2);
+      assert.equal(
+        byThreadId.get("claude:session-workflow-distinct:agent:workflow:workflow-a:agent:reviewer")?.latestMessage,
+        "Workflow A review complete."
+      );
+      assert.equal(
+        byThreadId.get("claude:session-workflow-distinct:agent:workflow:workflow-b:agent:reviewer")?.latestMessage,
+        "Workflow B review complete."
+      );
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }

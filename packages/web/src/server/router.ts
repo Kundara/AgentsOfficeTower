@@ -6,6 +6,7 @@ import { buildServerMeta } from "./server-metadata";
 import { renderHtml } from "../render/render-html";
 import { renderIconAuditHtml } from "../render/render-icon-audit-html";
 import { renderSceneEffectsAuditHtml } from "../render/render-scene-effects-audit-html";
+import { renderWideOfficeAuditHtml } from "../render/render-wide-office-audit-html";
 import { renderZOrderAuditHtml } from "../render/render-z-order-audit-html";
 import type { FleetLiveService } from "./fleet-live-service";
 import type { FleetResponse, ServerOptions } from "./server-types";
@@ -294,6 +295,24 @@ async function handleSceneEffectsAuditRoute(context: RequestContext): Promise<bo
   }
 
   sendHtml(context.response, renderSceneEffectsAuditHtml());
+  return true;
+}
+
+async function handleWideOfficeAuditRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET", "HEAD") || context.url.pathname !== "/wide-office-audit") {
+    return false;
+  }
+
+  if (requestMethod(context) === "HEAD") {
+    context.response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    context.response.end();
+    return true;
+  }
+
+  sendHtml(context.response, renderWideOfficeAuditHtml());
   return true;
 }
 
@@ -655,6 +674,7 @@ const ROUTES: RouteHandler[] = [
   handleHomeRoute,
   handleIconAuditRoute,
   handleSceneEffectsAuditRoute,
+  handleWideOfficeAuditRoute,
   handleZOrderAuditRoute,
   handleFleetRoute,
   handleServerMetaRoute,

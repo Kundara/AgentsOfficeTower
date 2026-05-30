@@ -698,6 +698,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           compact,
           tile,
           width: baseMaxX * tile,
+          fitWidth: baseMaxX * tile,
           height: maxY * tile,
           rooms: [],
           roomDoors: [],
@@ -715,6 +716,15 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         };
         const agentPositions = new Map();
         const openThreadSuppressesHover = Boolean(state.openAgentThread || state.closingAgentThread);
+
+        function expandRoomVisualWidth(roomModel, nextVisualWidth) {
+          if (!roomModel || !Number.isFinite(nextVisualWidth)) {
+            return;
+          }
+          const visualWidth = Math.max(roomModel.width, Math.ceil(nextVisualWidth / tile) * tile);
+          roomModel.visualWidth = Math.max(roomModel.visualWidth || roomModel.width, visualWidth);
+          model.width = Math.max(model.width, roomModel.x + roomModel.visualWidth);
+        }
 
         function sceneThreadPanelState(agent) {
           const projectRoot = threadViewProjectRoot(snapshot, agent);
@@ -774,18 +784,20 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           const roomX = room.x * tile;
           const roomY = room.y * tile;
           const floorTop = roomY + layoutConfig.deskTopY;
-          model.rooms.push({
+          const roomModel = {
             id: room.id,
             x: roomX,
             y: roomY,
             width: roomPixelWidth,
+            visualWidth: roomPixelWidth,
             height: roomPixelHeight,
             wallHeight: layoutConfig.deskTopY,
             floorTop,
             name: room.name,
             path: room.path || "",
             isPrimaryRoom
-          });
+          };
+          model.rooms.push(roomModel);
           const centerColumn = Math.floor(room.width / 2);
           const entrance = roomEntranceLayout(roomPixelWidth, tile, compact, floorTop);
           const doorWidth = Math.round(pixelOffice.props.boothDoor.w * entrance.doorScale);
@@ -866,7 +878,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           const officeAgents = sortedBossOfficeAgents(snapshot, occupants.filter((agent) => isBossOfficeCandidate(snapshot, agent)));
           const deskAgents = occupants.filter((agent) => !isBossOfficeCandidate(snapshot, agent));
           const officeAssignments = assignAgentsToOfficeSlots(snapshot, officeAgents, buildBossOfficeSlots(layoutConfig, officeAgents.length));
-          const deskAssignments = assignAgentsToDeskSlots(snapshot, deskAgents, buildDeskSlots(layoutConfig, roomPixelWidth, Math.ceil(deskAgents.length / 2), officeAssignments.length > 0));
+          const deskSlots = buildDeskSlots(layoutConfig, roomPixelWidth, Math.ceil(deskAgents.length / 2), officeAssignments.length > 0);
+          const deskAssignments = assignAgentsToDeskSlots(snapshot, deskAgents, deskSlots);
+          expandRoomVisualWidth(
+            roomModel,
+            deskSlots.reduce((rightEdge, slot) => Math.max(rightEdge, slot.x + slot.width + tile), roomPixelWidth)
+          );
 
           deskAssignments.forEach((entry) => {
             const pod = {

@@ -1223,6 +1223,55 @@ test("completed non-final turns keep the monitored thread live until final answe
   assert.equal(monitor.stoppedAtByThreadId.has(thread.id), false);
 });
 
+test("thread discovery preserves known ongoing threads with no final answer", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const updatedAt = Math.floor(Date.now() / 1000);
+  const knownThread = {
+    ...sampleThread(),
+    status: { type: "idle" },
+    updatedAt,
+    turns: [
+      {
+        id: "turn_1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_commentary",
+            type: "agentMessage",
+            text: "Still working between updates.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+  const listedThread = {
+    ...knownThread,
+    turns: []
+  };
+
+  monitor.threads.set(knownThread.id, knownThread);
+  monitor.markThreadLive(knownThread.id);
+  monitor.client = {
+    listThreads: async () => [listedThread],
+    listLoadedThreads: async () => [],
+    readThread: async () => {
+      throw new Error("thread/read should not be needed for an unchanged listed row");
+    }
+  };
+  monitor.scheduleThreadSubscriptions = () => {};
+  monitor.scheduleSnapshot = () => {};
+
+  await monitor.discoverThreads();
+
+  assert.equal(monitor.ongoingThreadIds.has(knownThread.id), true);
+  assert.equal(monitor.stoppedAtByThreadId.has(knownThread.id), false);
+});
+
 test("settled idle subagents stop even when no final-answer phase is present", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
@@ -4345,6 +4394,60 @@ test("subscription sync keeps stale ongoing notLoaded threads subscribed", async
 
   assert.deepEqual(resumedThreadIds, [staleOngoingThread.id]);
   assert.equal(monitor.subscribedThreadIds.has(staleOngoingThread.id), true);
+});
+
+test("subscription sync does not revive dormant subagents from recent timestamps", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false,
+    localLimit: 1
+  });
+  const dormantChildThread = {
+    ...sampleThread(),
+    id: "thr_dormant_child_recent",
+    source: {
+      subAgent: {
+        threadSpawn: {
+          parentThreadId: "thr_parent",
+          depth: 1
+        }
+      }
+    },
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor((Date.now() - 60 * 1000) / 1000),
+    turns: [
+      {
+        id: "turn_child",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            id: "item_commentary",
+            type: "agentMessage",
+            text: "Child progress that should not be resubscribed after stop.",
+            phase: "commentary"
+          }
+        ]
+      }
+    ]
+  };
+  const resumedThreadIds = [];
+
+  monitor.threads.set(dormantChildThread.id, dormantChildThread);
+  monitor.client = {
+    listLoadedThreads: async () => [],
+    resumeThread: async (threadId) => {
+      resumedThreadIds.push(threadId);
+      return dormantChildThread;
+    },
+    readThread: async () => dormantChildThread,
+    unsubscribeThread: async () => "unsubscribed"
+  };
+
+  await monitor.syncThreadSubscriptions();
+
+  assert.deepEqual(resumedThreadIds, []);
+  assert.equal(monitor.subscribedThreadIds.has(dormantChildThread.id), false);
 });
 
 test("initial discovery recovers a loaded current thread missing from cwd-scoped thread/list", async () => {

@@ -672,7 +672,8 @@ export const CLIENT_STYLES = `
       body.workspace-focus .office-map-host {
         min-height: 0;
         height: 100%;
-        overflow: hidden;
+        overflow-x: auto;
+        overflow-y: hidden;
       }
 
       body.workspace-focus .scene-shell,
@@ -758,8 +759,12 @@ export const CLIENT_STYLES = `
       .office-map-host {
         position: relative;
         width: 100%;
-        min-height: 520px;
-        overflow: visible;
+        min-height: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+        scrollbar-color: rgba(75, 214, 159, 0.45) rgba(6, 16, 22, 0.3);
+        scrollbar-width: thin;
       }
 
       .office-map-canvas {
@@ -778,7 +783,8 @@ export const CLIENT_STYLES = `
         position: absolute;
         top: 0;
         pointer-events: none;
-        overflow: visible;
+        overflow: clip;
+        overflow-clip-margin: 360px;
         z-index: 250;
       }
 
@@ -786,7 +792,8 @@ export const CLIENT_STYLES = `
         position: absolute;
         top: 0;
         pointer-events: none;
-        overflow: visible;
+        overflow: clip;
+        overflow-clip-margin: 360px;
         z-index: 315;
       }
 
@@ -2548,9 +2555,13 @@ export const CLIENT_STYLES = `
       }
 
       .agent-hover-summary {
+        display: -webkit-box;
         font-size: 6px;
         line-height: 1;
         color: #f4efdf;
+        -webkit-line-clamp: 10;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
         overflow-wrap: anywhere;
       }
 
@@ -2952,7 +2963,7 @@ export const CLIENT_STYLES = `
       }
 
       .tower-floor-body .scene-fit.compact {
-        min-height: 360px;
+        min-height: 0;
       }
 
       .tower-floor-body .scene-fit {

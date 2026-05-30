@@ -52,3 +52,35 @@ test("asset route serves public files whose names include spaces", async (t) => 
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("wide office audit route serves the fake-avatar scroll harness", async (t) => {
+  const server = http.createServer((request, response) => {
+    void handleRequest(request, response, createStubOptions(), createStubService());
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+  } catch (error) {
+    const code = error && typeof error === "object" ? error.code : null;
+    if (code === "EPERM") {
+      t.skip("sandbox disallows loopback listeners");
+      return;
+    }
+    throw error;
+  }
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/wide-office-audit`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /Wide Office Scroll Audit/);
+    assert.match(html, /audit-wide-avatar-32/);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});

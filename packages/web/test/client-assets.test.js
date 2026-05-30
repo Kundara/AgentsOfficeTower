@@ -5,6 +5,7 @@ const { join } = require("node:path");
 
 const { renderHtml } = require("../dist/render-html.js");
 const { renderSceneEffectsAuditHtml } = require("../dist/render/render-scene-effects-audit-html.js");
+const { renderWideOfficeAuditHtml } = require("../dist/render/render-wide-office-audit-html.js");
 const { renderZOrderAuditHtml } = require("../dist/render-z-order-audit-html.js");
 
 function readClientSource(...segments) {
@@ -107,6 +108,18 @@ test("scene effects audit html mocks approval and input waits through the normal
   assert.match(html, /audit-request-input/);
   assert.match(html, /Ready to dry-run publish once you approve the command\./);
   assert.match(html, /I need launch mode, a note, and the deploy token to proceed\./);
+  assert.match(html, /window\.fetch = \(input, init = undefined\)/);
+  assert.match(html, /window\.EventSource = MockEventSource/);
+  assert.match(html, /\/client\/app\.js\?v=/);
+});
+
+test("wide office audit spawns many fake avatars for horizontal scroll validation", () => {
+  const html = renderWideOfficeAuditHtml();
+
+  assert.match(html, /Wide Office Scroll Audit/);
+  assert.match(html, /32 synthetic active local avatars/);
+  assert.match(html, /audit-wide-avatar-01/);
+  assert.match(html, /audit-wide-avatar-32/);
   assert.match(html, /window\.fetch = \(input, init = undefined\)/);
   assert.match(html, /window\.EventSource = MockEventSource/);
   assert.match(html, /\/client\/app\.js\?v=/);
@@ -612,6 +625,9 @@ test("client runtime does not rebuild the Pixi room scene for resize-only update
   assert.ok(navigationSource.includes("setPixelStyleIfChanged(renderer.host, \"height\", scaledHeight + \"px\");"));
   assert.ok(navigationSource.includes("if (renderer.renderWidth !== scaledWidth || renderer.renderHeight !== scaledHeight) {"));
   assert.ok(navigationSource.includes("renderer.app.renderer.resize(scaledWidth, scaledHeight);"));
+  assert.ok(navigationSource.includes("const fitWidth = Math.max(1, Number(model.fitWidth) || model.width);"));
+  assert.ok(navigationSource.includes("const scaledHeight = Math.max(1, Math.round(model.height * scale));"));
+  assert.ok(navigationSource.includes("const maxScrollLeft = Math.max(0, scaledWidth - Math.max(1, renderer.host.clientWidth || availableWidth));"));
   assert.ok(navigationSource.includes("function commitOfficeRendererRoot(renderer, previousRoot, nextRoot) {"));
   assert.ok(navigationSource.includes("const previousRoot = renderer.root;"));
   assert.ok(navigationSource.includes("const nextRoot = new window.PIXI.Container();"));
@@ -973,6 +989,17 @@ test("workspace focus reuses compact scene geometry and grid-snapped desk starts
   );
 });
 
+test("workspace desk columns keep a three-tile gap between workstation pods", () => {
+  const sceneConfigSource = readFileSync(
+    join(__dirname, "../src/scene-config.ts"),
+    "utf8"
+  ).replace(/\r\n/g, "\n");
+  const sceneGridSource = readClientSource("scene-grid-source.ts");
+
+  assert.match(sceneConfigSource, /deskColumnGapTiles: 3,/);
+  assert.ok(sceneGridSource.includes("const columnX = deskStartX + columnIndex * (config.podWidth + config.deskColumnGap);"));
+});
+
 test("workspace focus lets the expanded floor fill the full panel rect", () => {
   const stylesSource = readFileSync(
     join(__dirname, "../src/client/styles.css"),
@@ -989,8 +1016,55 @@ test("workspace focus lets the expanded floor fill the full panel rect", () => {
   );
   assert.match(
     stylesSource,
-    /body\.workspace-focus \.office-map-host \{\n\s+min-height: 0;\n\s+height: 100%;\n\s+overflow: hidden;/
+    /body\.workspace-focus \.office-map-host \{\n\s+min-height: 0;\n\s+height: 100%;\n\s+overflow-x: auto;\n\s+overflow-y: hidden;/
   );
+});
+
+test("workspace office maps keep wide workstation layouts horizontally scrollable", () => {
+  const stylesSource = readClientSource("styles-source.ts").replace(/\r\n/g, "\n");
+  const servedStyles = readClientSource("styles.css").replace(/\r\n/g, "\n");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+
+  assert.match(
+    stylesSource,
+    /\.office-map-host \{\n\s+position: relative;\n\s+width: 100%;\n\s+min-height: 0;\n\s+overflow-x: auto;\n\s+overflow-y: hidden;/
+  );
+  assert.match(
+    servedStyles,
+    /\.office-map-host \{\n\s+position: relative;\n\s+width: 100%;\n\s+min-height: 0;\n\s+overflow-x: auto;\n\s+overflow-y: hidden;/
+  );
+  assert.ok(stylesSource.includes("overflow-clip-margin: 360px;"));
+  assert.match(
+    stylesSource,
+    /\.tower-floor-body \.scene-fit\.compact \{\n\s+min-height: 0;\n\s+\}/
+  );
+  assert.ok(
+    navigationSource.includes("const scaledWidth = Math.max(1, Math.round(model.width * scale));"),
+    "wide Pixi scenes should render to their scaled content width instead of clipping to the host"
+  );
+  assert.ok(
+    navigationSource.includes("const scale = Math.min(Math.max(availableWidth / fitWidth, 0.5), 3.5);"),
+    "wide desk expansion should add horizontal scroll length without squeezing the room scale"
+  );
+  assert.ok(
+    navigationSource.includes("const roomVisualWidth = Math.max(room.width, Number(room.visualWidth) || room.width);"),
+    "room wall and floor art should stretch to the synthetic visual width"
+  );
+  assert.ok(
+    readRuntimeSource("scene-source.ts").includes("fitWidth: baseMaxX * tile,"),
+    "the renderer should remember the unexpanded room width for scale fitting"
+  );
+  assert.ok(
+    readRuntimeSource("scene-source.ts").includes("function expandRoomVisualWidth(roomModel, nextVisualWidth) {"),
+    "wide desk columns should expand the rendered room and scene model"
+  );
+  assert.ok(uiSource.includes("function handleOfficeMapHorizontalWheel(event) {"));
+  assert.ok(uiSource.includes("function officeMapHorizontalMaxScrollLeft(host) {"));
+  assert.ok(uiSource.includes('const canvas = host.querySelector("[data-office-map-canvas]");'));
+  assert.ok(uiSource.includes("const maxScrollLeft = officeMapHorizontalMaxScrollLeft(host);"));
+  assert.ok(uiSource.includes("host.scrollLeft = nextScrollLeft;"));
+  assert.ok(uiSource.includes('document.body.addEventListener("wheel", handleOfficeMapHorizontalWheel, { passive: false });'));
 });
 
 test("runtime source strips markdown formatting markers from display text", () => {
@@ -1008,6 +1082,8 @@ test("runtime source sanitizes path-heavy labels and latest messages with the pr
   const layoutSource = readRuntimeSource("layout-source.ts");
   const renderSource = readRuntimeSource("render-source.ts");
   const uiSource = readRuntimeSource("ui-source.ts");
+  const stylesSource = readClientSource("styles-source.ts");
+  const servedStyles = readClientSource("styles.css");
 
   assert.ok(layoutSource.includes("function compactPathyLabel(snapshot, label) {"));
   assert.ok(layoutSource.includes("return normalizeDisplayText(snapshot && snapshot.projectRoot, preferred) || preferred || \"Agent\";"));
@@ -1015,6 +1091,8 @@ test("runtime source sanitizes path-heavy labels and latest messages with the pr
   assert.ok(renderSource.includes("const message = latestAgentMessage(snapshot.projectRoot, agent);"));
   assert.ok(renderSource.includes("const hoverTitle = displayAgentLabel(snapshot, agent);"));
   assert.ok(uiSource.includes("latestAgentMessage(snapshot.projectRoot, agent)"));
+  assert.match(stylesSource, /\.agent-hover-summary \{\n\s+display: -webkit-box;\n[\s\S]*?-webkit-line-clamp: 10;\n[\s\S]*?-webkit-box-orient: vertical;\n[\s\S]*?overflow: hidden;/);
+  assert.match(servedStyles, /\.agent-hover-summary \{\n\s+display: -webkit-box;\n[\s\S]*?-webkit-line-clamp: 10;\n[\s\S]*?-webkit-box-orient: vertical;\n[\s\S]*?overflow: hidden;/);
 });
 
 test("agent hover names use source brand color classes", () => {
@@ -1421,6 +1499,31 @@ test("toast runtime preserves read command summaries and text-message priority",
   assert.ok(
     toastSource.includes("if (shouldSuppressHistoricalHydrationNotification(snapshot, agent, null)) {\n              continue;\n            }"),
     "typed event toasts should skip stale first-seen hydrate agents"
+  );
+});
+
+test("toast runtime scopes typed child events to the matching thread agent", () => {
+  const renderSource = readRuntimeSource("render-source.ts").replace(/\r\n/g, "\n");
+  const toastSource = readFileSync(
+    join(__dirname, "../src/client/toast-source.ts"),
+    "utf8"
+  ).replace(/\r\n/g, "\n");
+
+  assert.ok(
+    renderSource.includes("if (event.threadId !== agent.threadId) {\n            return false;\n          }"),
+    "summary-to-toast suppression should only consider typed events on the same agent thread"
+  );
+  assert.ok(
+    toastSource.includes("const agent = snapshot.agents.find((candidate) => candidate.threadId && candidate.threadId === event.threadId);"),
+    "typed event toasts should anchor to the agent with the matching child thread id"
+  );
+  assert.ok(
+    toastSource.includes("const semanticSubjectKey = notificationSubjectKey(snapshot.projectRoot, agent, event.threadId);"),
+    "typed event toasts should key notifications by the typed event thread id"
+  );
+  assert.ok(
+    toastSource.includes("const semanticSubjectKey = notificationSubjectKey(snapshot.projectRoot, agent, agent.threadId);"),
+    "summary toasts should key notifications by the summarized agent thread id"
   );
 });
 

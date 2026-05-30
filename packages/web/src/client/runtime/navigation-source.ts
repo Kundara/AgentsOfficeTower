@@ -1317,9 +1317,10 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           return null;
         }
         const availableWidth = Math.max(Math.round(renderer.host.getBoundingClientRect().width || renderer.host.clientWidth || model.width), 1);
-        const scale = Math.min(Math.max(availableWidth / model.width, 0.5), 3.5);
-        const scaledWidth = Math.max(1, Math.min(availableWidth, Math.round(model.width * scale)));
-        const scaledHeight = Math.max(180, Math.round(model.height * scale));
+        const fitWidth = Math.max(1, Number(model.fitWidth) || model.width);
+        const scale = Math.min(Math.max(availableWidth / fitWidth, 0.5), 3.5);
+        const scaledWidth = Math.max(1, Math.round(model.width * scale));
+        const scaledHeight = Math.max(1, Math.round(model.height * scale));
         const leftOffset = Math.max(0, Math.round((availableWidth - scaledWidth) / 2));
         renderer.scale = scale;
         renderer.leftOffset = leftOffset;
@@ -1342,6 +1343,10 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
         }
         if (renderer.root) {
           renderer.root.scale.set(scale, scale);
+        }
+        const maxScrollLeft = Math.max(0, scaledWidth - Math.max(1, renderer.host.clientWidth || availableWidth));
+        if (renderer.host.scrollLeft > maxScrollLeft) {
+          renderer.host.scrollLeft = maxScrollLeft;
         }
         return {
           availableWidth,
@@ -4072,21 +4077,22 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
         }
 
         model.rooms.forEach((room) => {
+          const roomVisualWidth = Math.max(room.width, Number(room.visualWidth) || room.width);
           const roomBox = new PIXI.Graphics()
-            .roundRect(room.x, room.y, room.width, room.height, 10)
+            .roundRect(room.x, room.y, roomVisualWidth, room.height, 10)
             .fill({ color: room.isPrimary ? 0x1f7fcf : 0x256fa8, alpha: 0.95 })
             .stroke({ color: 0x365a76, width: 3 });
           roomBox.zIndex = 1;
           renderer.root.addChild(roomBox);
 
           const wallBand = new PIXI.Graphics()
-            .rect(room.x, room.y, room.width, room.wallHeight)
+            .rect(room.x, room.y, roomVisualWidth, room.wallHeight)
             .fill({ color: 0xdceefe, alpha: 0.92 });
           wallBand.zIndex = 2;
           renderer.root.addChild(wallBand);
 
           const mural = new PIXI.Graphics()
-            .rect(room.x + 8, room.y + 8, room.width - 16, Math.max(16, room.wallHeight - 16))
+            .rect(room.x + 8, room.y + 8, Math.max(16, roomVisualWidth - 16), Math.max(16, room.wallHeight - 16))
             .fill({ color: 0x9dd6ff, alpha: 0.32 });
           mural.zIndex = 2;
           renderer.root.addChild(mural);
@@ -4133,24 +4139,24 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           const floorTop = room.floorTop;
           for (let y = floorTop; y < room.y + room.height; y += 48) {
             const band = new PIXI.Graphics()
-              .rect(room.x, y, room.width, 22)
+              .rect(room.x, y, roomVisualWidth, 22)
               .fill({ color: 0x48a7ee, alpha: 0.96 });
             band.zIndex = 1.5;
             renderer.root.addChild(band);
             const seam = new PIXI.Graphics()
-              .rect(room.x, Math.min(y + 22, room.y + room.height - 2), room.width, 2)
+              .rect(room.x, Math.min(y + 22, room.y + room.height - 2), roomVisualWidth, 2)
               .fill({ color: 0x7eeaff, alpha: 0.86 });
             seam.zIndex = 1.6;
             renderer.root.addChild(seam);
             const shadowBand = new PIXI.Graphics()
-              .rect(room.x, Math.min(y + 24, room.y + room.height - 22), room.width, 22)
+              .rect(room.x, Math.min(y + 24, room.y + room.height - 22), roomVisualWidth, 22)
               .fill({ color: 0x2f8fdf, alpha: 0.94 });
             shadowBand.zIndex = 1.55;
             renderer.root.addChild(shadowBand);
           }
 
           if (state.globalSceneSettings.debugTiles) {
-            for (let x = room.x; x <= room.x + room.width; x += model.tile) {
+            for (let x = room.x; x <= room.x + roomVisualWidth; x += model.tile) {
               const vertical = new PIXI.Graphics()
                 .moveTo(x, floorTop)
                 .lineTo(x, room.y + room.height)
@@ -4161,7 +4167,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             for (let y = floorTop; y <= room.y + room.height; y += model.tile) {
               const horizontal = new PIXI.Graphics()
                 .moveTo(room.x, y)
-                .lineTo(room.x + room.width, y)
+                .lineTo(room.x + roomVisualWidth, y)
                 .stroke({ color: 0xffffff, width: 1, alpha: 0.18 });
               horizontal.zIndex = 96;
               renderer.root.addChild(horizontal);
@@ -4827,8 +4833,9 @@ function focusKeysIntersect(keys, focusedKeys) {
           return null;
         }
         const availableWidth = Math.max(Math.round(host.getBoundingClientRect().width || host.clientWidth || model.width), 1);
-        const scale = Math.min(Math.max(availableWidth / model.width, 0.5), 3.5);
-        const scaledWidth = Math.max(1, Math.min(availableWidth, Math.round(model.width * scale)));
+        const fitWidth = Math.max(1, Number(model.fitWidth) || model.width);
+        const scale = Math.min(Math.max(availableWidth / fitWidth, 0.5), 3.5);
+        const scaledWidth = Math.max(1, Math.round(model.width * scale));
         return {
           host,
           model,
@@ -4861,7 +4868,7 @@ function focusKeysIntersect(keys, focusedKeys) {
         if (!renderer || !renderer.model) {
           return;
         }
-        const pointerX = event.clientX - furnitureDragState.hostRect.left - (renderer.leftOffset || 0);
+        const pointerX = event.clientX - furnitureDragState.hostRect.left + (renderer.host.scrollLeft || 0) - (renderer.leftOffset || 0);
         const nextColumn = Math.round(pointerX / (renderer.scale * renderer.model.tile) - furnitureDragState.pointerOffsetTiles);
         if (!Number.isFinite(nextColumn) || nextColumn === furnitureDragState.currentColumn) {
           return;

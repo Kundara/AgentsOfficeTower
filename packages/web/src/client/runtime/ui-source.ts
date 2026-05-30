@@ -546,6 +546,64 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         });
       }
 
+      function officeMapHorizontalWheelTarget(target) {
+        if (!(target instanceof Element)) {
+          return null;
+        }
+        const host = target.closest("[data-office-map-host]");
+        return host instanceof HTMLElement ? host : null;
+      }
+
+      function wheelDeltaPixels(event) {
+        const unit = event.deltaMode === 1
+          ? 16
+          : event.deltaMode === 2
+            ? Math.max(window.innerHeight || 0, 1)
+            : 1;
+        const dominantDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+          ? event.deltaX
+          : event.deltaY;
+        return dominantDelta * unit;
+      }
+
+      function officeMapHorizontalMaxScrollLeft(host) {
+        const canvas = host.querySelector("[data-office-map-canvas]");
+        const canvasWidth = canvas instanceof HTMLElement
+          ? Math.max(
+            Number.parseFloat(canvas.style.width || ""),
+            canvas.getBoundingClientRect().width,
+            canvas.scrollWidth
+          )
+          : 0;
+        const scrollWidth = Math.max(canvasWidth || 0, host.clientWidth);
+        return Math.max(0, Math.round(scrollWidth - host.clientWidth));
+      }
+
+      function handleOfficeMapHorizontalWheel(event) {
+        if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target)) {
+          return;
+        }
+        const host = officeMapHorizontalWheelTarget(event.target);
+        if (!(host instanceof HTMLElement)) {
+          return;
+        }
+        const maxScrollLeft = officeMapHorizontalMaxScrollLeft(host);
+        if (maxScrollLeft <= 1) {
+          return;
+        }
+        const delta = wheelDeltaPixels(event);
+        if (!Number.isFinite(delta) || Math.abs(delta) < 0.5) {
+          return;
+        }
+        const previousScrollLeft = host.scrollLeft;
+        const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, previousScrollLeft + delta));
+        if (Math.abs(nextScrollLeft - previousScrollLeft) < 0.5) {
+          return;
+        }
+        host.scrollLeft = nextScrollLeft;
+        event.preventDefault();
+      }
+
       const THREAD_REPLY_TIMEOUT_MS = 90000;
 
       async function postJson(path, payload = {}, timeoutMs = 15000) {
@@ -1601,6 +1659,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         renderNotifications();
         scheduleOfficeSceneViewportSync();
       });
+      document.body.addEventListener("wheel", handleOfficeMapHorizontalWheel, { passive: false });
       window.setInterval(() => {
         syncOfficeWallDashboardHeat();
       }, 1000);

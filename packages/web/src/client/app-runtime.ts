@@ -7186,6 +7186,7 @@ export function startClientApp(): void {
           compact,
           tile,
           width: baseMaxX * tile,
+          fitWidth: baseMaxX * tile,
           height: maxY * tile,
           rooms: [],
           roomDoors: [],
@@ -7203,6 +7204,15 @@ export function startClientApp(): void {
         };
         const agentPositions = new Map();
         const openThreadSuppressesHover = Boolean(state.openAgentThread || state.closingAgentThread);
+
+        function expandRoomVisualWidth(roomModel, nextVisualWidth) {
+          if (!roomModel || !Number.isFinite(nextVisualWidth)) {
+            return;
+          }
+          const visualWidth = Math.max(roomModel.width, Math.ceil(nextVisualWidth / tile) * tile);
+          roomModel.visualWidth = Math.max(roomModel.visualWidth || roomModel.width, visualWidth);
+          model.width = Math.max(model.width, roomModel.x + roomModel.visualWidth);
+        }
 
         function sceneThreadPanelState(agent) {
           const projectRoot = threadViewProjectRoot(snapshot, agent);
@@ -7262,18 +7272,20 @@ export function startClientApp(): void {
           const roomX = room.x * tile;
           const roomY = room.y * tile;
           const floorTop = roomY + layoutConfig.deskTopY;
-          model.rooms.push({
+          const roomModel = {
             id: room.id,
             x: roomX,
             y: roomY,
             width: roomPixelWidth,
+            visualWidth: roomPixelWidth,
             height: roomPixelHeight,
             wallHeight: layoutConfig.deskTopY,
             floorTop,
             name: room.name,
             path: room.path || "",
             isPrimaryRoom
-          });
+          };
+          model.rooms.push(roomModel);
           const centerColumn = Math.floor(room.width / 2);
           const entrance = roomEntranceLayout(roomPixelWidth, tile, compact, floorTop);
           const doorWidth = Math.round(pixelOffice.props.boothDoor.w * entrance.doorScale);
@@ -7354,7 +7366,12 @@ export function startClientApp(): void {
           const officeAgents = sortedBossOfficeAgents(snapshot, occupants.filter((agent) => isBossOfficeCandidate(snapshot, agent)));
           const deskAgents = occupants.filter((agent) => !isBossOfficeCandidate(snapshot, agent));
           const officeAssignments = assignAgentsToOfficeSlots(snapshot, officeAgents, buildBossOfficeSlots(layoutConfig, officeAgents.length));
-          const deskAssignments = assignAgentsToDeskSlots(snapshot, deskAgents, buildDeskSlots(layoutConfig, roomPixelWidth, Math.ceil(deskAgents.length / 2), officeAssignments.length > 0));
+          const deskSlots = buildDeskSlots(layoutConfig, roomPixelWidth, Math.ceil(deskAgents.length / 2), officeAssignments.length > 0);
+          const deskAssignments = assignAgentsToDeskSlots(snapshot, deskAgents, deskSlots);
+          expandRoomVisualWidth(
+            roomModel,
+            deskSlots.reduce((rightEdge, slot) => Math.max(rightEdge, slot.x + slot.width + tile), roomPixelWidth)
+          );
 
           deskAssignments.forEach((entry) => {
             const pod = {
@@ -10053,9 +10070,10 @@ const stableAgentTileReservations = new Map();
           return null;
         }
         const availableWidth = Math.max(Math.round(renderer.host.getBoundingClientRect().width || renderer.host.clientWidth || model.width), 1);
-        const scale = Math.min(Math.max(availableWidth / model.width, 0.5), 3.5);
-        const scaledWidth = Math.max(1, Math.min(availableWidth, Math.round(model.width * scale)));
-        const scaledHeight = Math.max(180, Math.round(model.height * scale));
+        const fitWidth = Math.max(1, Number(model.fitWidth) || model.width);
+        const scale = Math.min(Math.max(availableWidth / fitWidth, 0.5), 3.5);
+        const scaledWidth = Math.max(1, Math.round(model.width * scale));
+        const scaledHeight = Math.max(1, Math.round(model.height * scale));
         const leftOffset = Math.max(0, Math.round((availableWidth - scaledWidth) / 2));
         renderer.scale = scale;
         renderer.leftOffset = leftOffset;
@@ -10078,6 +10096,10 @@ const stableAgentTileReservations = new Map();
         }
         if (renderer.root) {
           renderer.root.scale.set(scale, scale);
+        }
+        const maxScrollLeft = Math.max(0, scaledWidth - Math.max(1, renderer.host.clientWidth || availableWidth));
+        if (renderer.host.scrollLeft > maxScrollLeft) {
+          renderer.host.scrollLeft = maxScrollLeft;
         }
         return {
           availableWidth,
@@ -12808,21 +12830,22 @@ const stableAgentTileReservations = new Map();
         }
 
         model.rooms.forEach((room) => {
+          const roomVisualWidth = Math.max(room.width, Number(room.visualWidth) || room.width);
           const roomBox = new PIXI.Graphics()
-            .roundRect(room.x, room.y, room.width, room.height, 10)
+            .roundRect(room.x, room.y, roomVisualWidth, room.height, 10)
             .fill({ color: room.isPrimary ? 0x1f7fcf : 0x256fa8, alpha: 0.95 })
             .stroke({ color: 0x365a76, width: 3 });
           roomBox.zIndex = 1;
           renderer.root.addChild(roomBox);
 
           const wallBand = new PIXI.Graphics()
-            .rect(room.x, room.y, room.width, room.wallHeight)
+            .rect(room.x, room.y, roomVisualWidth, room.wallHeight)
             .fill({ color: 0xdceefe, alpha: 0.92 });
           wallBand.zIndex = 2;
           renderer.root.addChild(wallBand);
 
           const mural = new PIXI.Graphics()
-            .rect(room.x + 8, room.y + 8, room.width - 16, Math.max(16, room.wallHeight - 16))
+            .rect(room.x + 8, room.y + 8, Math.max(16, roomVisualWidth - 16), Math.max(16, room.wallHeight - 16))
             .fill({ color: 0x9dd6ff, alpha: 0.32 });
           mural.zIndex = 2;
           renderer.root.addChild(mural);
@@ -12869,24 +12892,24 @@ const stableAgentTileReservations = new Map();
           const floorTop = room.floorTop;
           for (let y = floorTop; y < room.y + room.height; y += 48) {
             const band = new PIXI.Graphics()
-              .rect(room.x, y, room.width, 22)
+              .rect(room.x, y, roomVisualWidth, 22)
               .fill({ color: 0x48a7ee, alpha: 0.96 });
             band.zIndex = 1.5;
             renderer.root.addChild(band);
             const seam = new PIXI.Graphics()
-              .rect(room.x, Math.min(y + 22, room.y + room.height - 2), room.width, 2)
+              .rect(room.x, Math.min(y + 22, room.y + room.height - 2), roomVisualWidth, 2)
               .fill({ color: 0x7eeaff, alpha: 0.86 });
             seam.zIndex = 1.6;
             renderer.root.addChild(seam);
             const shadowBand = new PIXI.Graphics()
-              .rect(room.x, Math.min(y + 24, room.y + room.height - 22), room.width, 22)
+              .rect(room.x, Math.min(y + 24, room.y + room.height - 22), roomVisualWidth, 22)
               .fill({ color: 0x2f8fdf, alpha: 0.94 });
             shadowBand.zIndex = 1.55;
             renderer.root.addChild(shadowBand);
           }
 
           if (state.globalSceneSettings.debugTiles) {
-            for (let x = room.x; x <= room.x + room.width; x += model.tile) {
+            for (let x = room.x; x <= room.x + roomVisualWidth; x += model.tile) {
               const vertical = new PIXI.Graphics()
                 .moveTo(x, floorTop)
                 .lineTo(x, room.y + room.height)
@@ -12897,7 +12920,7 @@ const stableAgentTileReservations = new Map();
             for (let y = floorTop; y <= room.y + room.height; y += model.tile) {
               const horizontal = new PIXI.Graphics()
                 .moveTo(room.x, y)
-                .lineTo(room.x + room.width, y)
+                .lineTo(room.x + roomVisualWidth, y)
                 .stroke({ color: 0xffffff, width: 1, alpha: 0.18 });
               horizontal.zIndex = 96;
               renderer.root.addChild(horizontal);
@@ -13563,8 +13586,9 @@ function focusKeysIntersect(keys, focusedKeys) {
           return null;
         }
         const availableWidth = Math.max(Math.round(host.getBoundingClientRect().width || host.clientWidth || model.width), 1);
-        const scale = Math.min(Math.max(availableWidth / model.width, 0.5), 3.5);
-        const scaledWidth = Math.max(1, Math.min(availableWidth, Math.round(model.width * scale)));
+        const fitWidth = Math.max(1, Number(model.fitWidth) || model.width);
+        const scale = Math.min(Math.max(availableWidth / fitWidth, 0.5), 3.5);
+        const scaledWidth = Math.max(1, Math.round(model.width * scale));
         return {
           host,
           model,
@@ -13597,7 +13621,7 @@ function focusKeysIntersect(keys, focusedKeys) {
         if (!renderer || !renderer.model) {
           return;
         }
-        const pointerX = event.clientX - furnitureDragState.hostRect.left - (renderer.leftOffset || 0);
+        const pointerX = event.clientX - furnitureDragState.hostRect.left + (renderer.host.scrollLeft || 0) - (renderer.leftOffset || 0);
         const nextColumn = Math.round(pointerX / (renderer.scale * renderer.model.tile) - furnitureDragState.pointerOffsetTiles);
         if (!Number.isFinite(nextColumn) || nextColumn === furnitureDragState.currentColumn) {
           return;
@@ -14455,6 +14479,64 @@ function focusKeysIntersect(keys, focusedKeys) {
           }
           wrapper.dataset.sceneFitted = "true";
         });
+      }
+
+      function officeMapHorizontalWheelTarget(target) {
+        if (!(target instanceof Element)) {
+          return null;
+        }
+        const host = target.closest("[data-office-map-host]");
+        return host instanceof HTMLElement ? host : null;
+      }
+
+      function wheelDeltaPixels(event) {
+        const unit = event.deltaMode === 1
+          ? 16
+          : event.deltaMode === 2
+            ? Math.max(window.innerHeight || 0, 1)
+            : 1;
+        const dominantDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+          ? event.deltaX
+          : event.deltaY;
+        return dominantDelta * unit;
+      }
+
+      function officeMapHorizontalMaxScrollLeft(host) {
+        const canvas = host.querySelector("[data-office-map-canvas]");
+        const canvasWidth = canvas instanceof HTMLElement
+          ? Math.max(
+            Number.parseFloat(canvas.style.width || ""),
+            canvas.getBoundingClientRect().width,
+            canvas.scrollWidth
+          )
+          : 0;
+        const scrollWidth = Math.max(canvasWidth || 0, host.clientWidth);
+        return Math.max(0, Math.round(scrollWidth - host.clientWidth));
+      }
+
+      function handleOfficeMapHorizontalWheel(event) {
+        if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target)) {
+          return;
+        }
+        const host = officeMapHorizontalWheelTarget(event.target);
+        if (!(host instanceof HTMLElement)) {
+          return;
+        }
+        const maxScrollLeft = officeMapHorizontalMaxScrollLeft(host);
+        if (maxScrollLeft <= 1) {
+          return;
+        }
+        const delta = wheelDeltaPixels(event);
+        if (!Number.isFinite(delta) || Math.abs(delta) < 0.5) {
+          return;
+        }
+        const previousScrollLeft = host.scrollLeft;
+        const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, previousScrollLeft + delta));
+        if (Math.abs(nextScrollLeft - previousScrollLeft) < 0.5) {
+          return;
+        }
+        host.scrollLeft = nextScrollLeft;
+        event.preventDefault();
       }
 
       const THREAD_REPLY_TIMEOUT_MS = 90000;
@@ -15512,6 +15594,7 @@ function focusKeysIntersect(keys, focusedKeys) {
         renderNotifications();
         scheduleOfficeSceneViewportSync();
       });
+      document.body.addEventListener("wheel", handleOfficeMapHorizontalWheel, { passive: false });
       window.setInterval(() => {
         syncOfficeWallDashboardHeat();
       }, 1000);

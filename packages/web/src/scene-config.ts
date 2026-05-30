@@ -40,7 +40,7 @@ export const INTERNAL_SCENE_SETTINGS: InternalSceneSettings = {
   compactTileSizePx: 16,
   deskAreaStartRatio: 0.2,
   wallDepthTiles: 3,
-  deskColumnGapTiles: 4,
+  deskColumnGapTiles: 3,
   deskGroupGapTiles: 1,
   deskRowsPerColumn: 3,
   deskPodWidthTiles: 6,

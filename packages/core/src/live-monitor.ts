@@ -242,6 +242,24 @@ function isFreshEnoughToPromoteAwaitingFinalAnswer(thread: CodexThread): boolean
   return Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs <= ACTIVE_SUBSCRIPTION_WINDOW_MS;
 }
 
+function isRecentThreadSubscriptionCandidate(thread: CodexThread, now: number): boolean {
+  if (parentThreadIdForThread(thread)) {
+    return false;
+  }
+  const updatedAtMs = thread.updatedAt * 1000;
+  return Number.isFinite(updatedAtMs) && now - updatedAtMs <= ACTIVE_SUBSCRIPTION_WINDOW_MS;
+}
+
+function shouldPreserveKnownOngoingThread(thread: CodexThread, wasOngoing: boolean): boolean {
+  if (isOngoingThread(thread)) {
+    return true;
+  }
+  if (!wasOngoing || isSettledDormantSubagentThread(thread)) {
+    return false;
+  }
+  return threadStillAwaitsFinalAnswer(thread);
+}
+
 export interface ProjectLiveMonitorOptions {
   projectRoot: string;
   localLimit?: number;
@@ -652,7 +670,7 @@ export class ProjectLiveMonitor extends EventEmitter {
             updatedAt: listedThread.updatedAt,
             path: listedThread.path ?? known.path
           };
-          if (isOngoingThread(mergedThread)) {
+          if (shouldPreserveKnownOngoingThread(mergedThread, this.ongoingThreadIds.has(listedThread.id))) {
             this.markThreadLive(listedThread.id);
           } else if (this.ongoingThreadIds.has(listedThread.id)) {
             this.markThreadStopped(listedThread.id);
@@ -718,7 +736,7 @@ export class ProjectLiveMonitor extends EventEmitter {
           this.ongoingThreadIds.has(thread.id)
           || (thread.status.type === "active" && !isStaleActiveSubagentThread(thread, now))
           || isOngoingThread(thread)
-          || (now - thread.updatedAt * 1000) <= ACTIVE_SUBSCRIPTION_WINDOW_MS
+          || isRecentThreadSubscriptionCandidate(thread, now)
         )
       ))
       .sort((left, right) => {

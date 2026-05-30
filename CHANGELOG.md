@@ -33,6 +33,8 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed workstation column spacing from four tiles to three tiles so dense desk layouts waste less horizontal space.
+- Changed agent hover summaries to clamp long latest-message text to 10 visual rows so office tooltips stay compact.
 - Changed the Hermes plugin bridge to register Hermes' current lifecycle, LLM/API, tool-transform, approval, and `subagent_stop` hooks with bounded string payloads, and map transform/tool/subagent sidecars into typed activity.
 - Changed the Hermes plugin bridge to write a non-session load/error status marker in the hook output directory, making gateway plugin registration verifiable without creating fake workload agents.
 - Changed Hermes cron runs such as `cron_<job>_<timestamp>` sessions to render as temporary Hermes agents with compact project tick labels instead of raw scheduler prompts or raw cron ids.
@@ -101,6 +103,10 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed wide office workspaces so workstation layouts that exceed the visible panel render to a horizontally scrollable scene with continuous wall/floor art, without squeezing the room scale or adding a tall blank floor card, with mouse-wheel scrolling while hovering the map and a wide-office audit route for fake-avatar scroll validation.
+- Fixed Claude workflow/subagent duplication by keeping child `agent_id` hook activity out of lead-session summaries while still routing typed events and child rows to the child thread, and by preserving separate same-named workflow children from distinct workflow ids.
+- Fixed local Codex discovery polling so an already-known thread without a final answer keeps its workstation seat through idle/read-only list refreshes instead of bouncing to the rec room between messages.
+- Fixed dormant local Codex subagents so subscription refreshes no longer revive stopped child rows from recent timestamps, preventing child workers from repeatedly popping back onto desks after they have already cooled down.
 - Fixed roaming Hermes/OpenClaw tower avatars so unassigned sessions float just left of the visible tower with larger, faster bobbing sprites, velocity tilt, stable screen-space height during scroll, and scroll-only updates that do not spawn duplicate transfer ghosts or desk-seat copies.
 - Fixed completed roaming Hermes/OpenClaw sessions so they leave the floating tower layer after the finished cooldown instead of lingering as apparently active projectless hoverers.
 - Fixed transcript-only Claude sessions so untimestamped metadata touches and older `Read` tool records cannot keep a finished Claude Desktop chat seated as active work after a later final assistant reply.
