@@ -76,6 +76,11 @@ async function withTempAppData(prefix, fn) {
   }
 }
 
+async function writeJsonl(filePath, records) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, records.map((record) => JSON.stringify(record)).join("\n") + "\n", "utf8");
+}
+
 test("typed Claude permission hooks become approval-backed blocked state", () => {
   const summary = summariseClaudeHookRecord({
     sessionId: "session-123",
@@ -384,6 +389,163 @@ test("Claude subagent hooks use teammate session ids when team metadata links th
   });
 });
 
+test("Claude workflow subagent transcripts create inferred child rows under the lead session", async () => {
+  await withTempAppData("claude-workflow-subagent-rows-", async () => {
+    const now = Date.now();
+    const projectDir = await mkdtemp(path.join(os.tmpdir(), "claude-workflow-project-"));
+    const sessionId = "session-workflow-123";
+    const workflowDir = path.join(projectDir, sessionId, "subagents", "workflows", "workflow-a");
+    const transcriptPath = path.join(workflowDir, "agent-reviewer.jsonl");
+    await writeJsonl(transcriptPath, [
+      {
+        type: "assistant",
+        timestamp: new Date(now - 1_000).toISOString(),
+        cwd: "/workspaces/CodexAgentsOffice",
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "Reviewed the renderer and found no duplicate desks." }]
+        }
+      }
+    ]);
+    await writeFile(
+      path.join(workflowDir, "agent-reviewer.meta.json"),
+      JSON.stringify({
+        agentId: "reviewer",
+        agentType: "code-reviewer",
+        name: "Renderer reviewer",
+        description: "Review renderer changes",
+        cwd: "/workspaces/CodexAgentsOffice"
+      }),
+      "utf8"
+    );
+
+    try {
+      const agents = await buildClaudeSubagentAgentsForTest({
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        sessionId,
+        projectDirPath: projectDir,
+        cwd: "/workspaces/CodexAgentsOffice",
+        updatedAt: now,
+        hookRecords: []
+      });
+
+      assert.equal(agents.length, 1);
+      assert.equal(agents[0].id, "claude:session-workflow-123:agent:reviewer");
+      assert.equal(agents[0].parentThreadId, "claude:session-workflow-123");
+      assert.equal(agents[0].isSubagent, true);
+      assert.equal(agents[0].label, "Renderer reviewer");
+      assert.equal(agents[0].role, "code-reviewer");
+      assert.equal(agents[0].sourceKind, "claude:workflow-subagent");
+      assert.equal(agents[0].confidence, "inferred");
+      assert.equal(agents[0].state, "done");
+      assert.equal(agents[0].latestMessage, "Reviewed the renderer and found no duplicate desks.");
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("Claude workflow journal records create and finish inferred child rows", async () => {
+  await withTempAppData("claude-workflow-journal-rows-", async () => {
+    const now = Date.now();
+    const projectDir = await mkdtemp(path.join(os.tmpdir(), "claude-workflow-journal-"));
+    const sessionId = "session-workflow-456";
+    const journalPath = path.join(projectDir, sessionId, "subagents", "workflows", "workflow-b", "journal.jsonl");
+    await writeJsonl(journalPath, [
+      {
+        type: "agent_started",
+        timestamp: new Date(now - 2_000).toISOString(),
+        agent_id: "planner",
+        agent_type: "planner",
+        name: "Planner",
+        description: "Plan the renderer check",
+        cwd: "/workspaces/CodexAgentsOffice"
+      },
+      {
+        type: "agent_result",
+        timestamp: new Date(now - 1_000).toISOString(),
+        agent_id: "auditor",
+        agent_type: "auditor",
+        name: "Auditor",
+        result: "Audit complete with one follow-up.",
+        cwd: "/workspaces/CodexAgentsOffice"
+      }
+    ]);
+
+    try {
+      const agents = await buildClaudeSubagentAgentsForTest({
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        sessionId,
+        projectDirPath: projectDir,
+        cwd: "/workspaces/CodexAgentsOffice",
+        updatedAt: now,
+        hookRecords: []
+      });
+      const byThreadId = new Map(agents.map((agent) => [agent.threadId, agent]));
+
+      assert.equal(agents.length, 2);
+      assert.equal(byThreadId.get("claude:session-workflow-456:agent:planner")?.state, "running");
+      assert.equal(byThreadId.get("claude:session-workflow-456:agent:planner")?.isOngoing, true);
+      assert.equal(byThreadId.get("claude:session-workflow-456:agent:auditor")?.state, "done");
+      assert.equal(byThreadId.get("claude:session-workflow-456:agent:auditor")?.latestMessage, "Audit complete with one follow-up.");
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("Claude hook-backed child rows override inferred workflow rows for the same agent", async () => {
+  await withTempAppData("claude-workflow-hook-override-", async () => {
+    const now = Date.now();
+    const projectDir = await mkdtemp(path.join(os.tmpdir(), "claude-workflow-hook-"));
+    const sessionId = "session-workflow-789";
+    const transcriptPath = path.join(projectDir, sessionId, "subagents", "workflows", "workflow-c", "agent-reviewer.jsonl");
+    await writeJsonl(transcriptPath, [
+      {
+        type: "assistant",
+        timestamp: new Date(now - 1_000).toISOString(),
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "Inferred transcript summary." }]
+        }
+      }
+    ]);
+
+    try {
+      const agents = await buildClaudeSubagentAgentsForTest({
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        sessionId,
+        projectDirPath: projectDir,
+        cwd: "/workspaces/CodexAgentsOffice",
+        updatedAt: now,
+        hookRecords: [
+          {
+            hook_event_name: "PostToolUse",
+            timestamp: new Date(now).toISOString(),
+            cwd: "/workspaces/CodexAgentsOffice",
+            agent_id: "reviewer",
+            agent_type: "explorer",
+            tool_name: "Bash",
+            tool_input: {
+              command: "npm test",
+              cwd: "/workspaces/CodexAgentsOffice"
+            }
+          }
+        ]
+      });
+
+      assert.equal(agents.length, 1);
+      assert.equal(agents[0].id, "claude:session-workflow-789:agent:reviewer");
+      assert.equal(agents[0].confidence, "typed");
+      assert.equal(agents[0].sourceKind, "claude:subagent:explorer");
+      assert.equal(agents[0].state, "validating");
+      assert.equal(agents[0].activityEvent?.type, "commandExecution");
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("Claude team files create teammate child agents and project floors", async () => {
   await withTempAppData("claude-team-rows-", async () => {
     const now = Date.now();
@@ -580,6 +742,69 @@ test("synthetic Claude model placeholders do not leak into agent labels", () => 
   );
 
   assert.equal(summary.label, "Claude f06c");
+});
+
+test("Claude transcript ai-title wins over model fallback labels", () => {
+  const now = Date.now();
+  const summary = summariseClaudeSession(
+    "session-1234",
+    "/workspaces/CodexAgentsOffice",
+    [
+      {
+        type: "ai-title",
+        aiTitle: "Track live Claude workers",
+        sessionId: "session-1234"
+      },
+      {
+        type: "assistant",
+        timestamp: new Date(now - 1_000).toISOString(),
+        cwd: "/workspaces/CodexAgentsOffice",
+        message: {
+          model: "claude-opus-4-8-20260530",
+          content: [
+            {
+              type: "text",
+              text: "I am checking the agent roster."
+            }
+          ]
+        }
+      }
+    ],
+    now
+  );
+
+  assert.equal(summary.label, "Track live Claude workers");
+  assert.notEqual(summary.label, "Claude opus 4 8");
+});
+
+test("Claude SDK session title wins over transcript model fallback labels", () => {
+  const now = Date.now();
+  const summary = summariseClaudeSession(
+    "session-5678",
+    "/workspaces/CodexAgentsOffice",
+    [
+      {
+        type: "assistant",
+        timestamp: new Date(now - 1_000).toISOString(),
+        cwd: "/workspaces/CodexAgentsOffice",
+        message: {
+          model: "claude-opus-4-8-20260530",
+          content: [
+            {
+              type: "text",
+              text: "I am checking the agent roster."
+            }
+          ]
+        }
+      }
+    ],
+    now,
+    [],
+    "Claude roster audit"
+  );
+
+  assert.equal(summary.label, "Claude roster audit");
+  assert.notEqual(summary.label, "Claude opus 4 8");
 });
 
 test("typed Claude file-change hooks become editing file-change activity", () => {

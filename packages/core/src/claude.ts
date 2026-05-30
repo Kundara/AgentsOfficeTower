@@ -1,5 +1,5 @@
 import { open, readdir, readFile, stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { homedir } from "node:os";
 
 import { ensureAgentAppearance } from "./appearance";
@@ -8,7 +8,6 @@ import { sameProjectPath, type DiscoveredProject } from "./project-paths";
 import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
 
 const DEFAULT_CLAUDE_CONFIG_DIR = join(homedir(), ".claude");
-const CLAUDE_PROJECTS_DIR = join(DEFAULT_CLAUDE_CONFIG_DIR, "projects");
 const CLAUDE_TEAMS_DIR = join(DEFAULT_CLAUDE_CONFIG_DIR, "teams");
 const CLAUDE_COWORK_LOCAL_AGENT_DIR_NAME = "local-agent-mode-sessions";
 const LOG_HEAD_BYTES = 4096;
@@ -40,6 +39,8 @@ interface ClaudeSdkProject {
 
 interface ClaudeSdkSessionEntry {
   sessionId: string;
+  title: string | null;
+  projectDirPath: string | null;
   updatedAt: number;
   cwd: string;
   gitBranch: string | null;
@@ -48,6 +49,8 @@ interface ClaudeSdkSessionEntry {
 
 interface ClaudeLoadedSession {
   sessionId: string;
+  title: string | null;
+  projectDirPath: string | null;
   cwd: string;
   gitBranch: string | null;
   updatedAt: number;
@@ -133,6 +136,38 @@ export interface ClaudeBackgroundJobSession {
   updatedAt: number;
   createdAt: number | null;
   isOngoing: boolean;
+}
+
+interface ClaudeWorkflowSubagentMeta {
+  agentId: string;
+  agentType: string | null;
+  name: string | null;
+  description: string | null;
+  cwd: string | null;
+}
+
+interface ClaudeWorkflowJournalEntry {
+  agentId: string;
+  agentType: string | null;
+  name: string | null;
+  description: string | null;
+  workflowId: string | null;
+  state: ActivityState;
+  detail: string;
+  updatedAtMs: number;
+  latestMessage: string | null;
+  cwd: string | null;
+}
+
+interface ClaudeWorkflowSubagentSeed {
+  agentId: string;
+  agentType: string | null;
+  name: string | null;
+  description: string | null;
+  workflowId: string | null;
+  cwd: string;
+  summary: ClaudeActivitySummary;
+  updatedAtMs: number;
 }
 
 const CLAUDE_EVENT_WINDOW_MS = 2 * 60 * 1000;
@@ -329,6 +364,10 @@ function claudeConfigDirs(): string[] {
 
 function claudeJobsDirs(): string[] {
   return claudeConfigDirs().map((dir) => join(dir, "jobs"));
+}
+
+function claudeProjectsDirs(): string[] {
+  return claudeConfigDirs().map((dir) => join(dir, "projects"));
 }
 
 function mergeClaudeProjectSourceKinds(project: ClaudeSdkProject, sourceKind: string): void {
@@ -2398,6 +2437,42 @@ function normalizeClaudeDisplayModel(model: string | null): string | null {
   return normalized || null;
 }
 
+function normalizeClaudeSessionTitle(title: string | null): string | null {
+  if (!title) {
+    return null;
+  }
+  const normalized = title.replace(/\s+/g, " ").trim();
+  if (!normalized || !isMeaningfulTranscriptText(normalized) || isSyntheticClaudeUserText(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function extractClaudeSessionTitle(records: Array<Record<string, unknown>>): string | null {
+  for (const record of [...records].reverse()) {
+    const type = typeof record.type === "string" ? record.type : "";
+    if (type === "ai-title") {
+      const title = normalizeClaudeSessionTitle(stringValue(record, "aiTitle", "ai_title", "title", "name"));
+      if (title) {
+        return title;
+      }
+    }
+
+    if (type === "session-title" || type === "session_title") {
+      const title = normalizeClaudeSessionTitle(stringValue(record, "title", "name", "summary"));
+      if (title) {
+        return title;
+      }
+    }
+  }
+  return null;
+}
+
+function labelFromSessionTitle(title: string | null, model: string | null, sessionId: string): string {
+  const normalizedTitle = normalizeClaudeSessionTitle(title);
+  return normalizedTitle ? shorten(normalizedTitle, 42) : labelFromModel(model, sessionId);
+}
+
 function labelFromModel(model: string | null, sessionId: string): string {
   const normalized = normalizeClaudeDisplayModel(model);
   if (!normalized) {
@@ -2417,58 +2492,54 @@ function extractProjectRoot(records: Array<Record<string, unknown>>): string | n
 }
 
 async function scanClaudeProjectDirs(): Promise<ClaudeProjectDir[]> {
-  let projectEntries;
-  try {
-    projectEntries = await readdir(CLAUDE_PROJECTS_DIR, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
   const projects: ClaudeProjectDir[] = [];
 
-  for (const entry of projectEntries) {
-    if (!entry.isDirectory()) {
-      continue;
+  for (const projectsDir of claudeProjectsDirs()) {
+    const projectEntries = await readdir(projectsDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of projectEntries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      const dirPath = join(projectsDir, entry.name);
+      const fileEntries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
+      const files = await Promise.all(
+        fileEntries
+          .filter((file) => file.isFile() && file.name.endsWith(".jsonl"))
+          .map(async (file) => {
+            const path = join(dirPath, file.name);
+            const sample = await readLogSample(path).catch(() => null);
+            if (!sample) {
+              return null;
+            }
+            return {
+              path,
+              updatedAt: sample.mtimeMs,
+              root: extractProjectRoot([...sample.headRecords, ...sample.tailRecords])
+            };
+          })
+      );
+
+      const validFiles = files.filter((file): file is { path: string; updatedAt: number; root: string | null } => Boolean(file));
+      if (validFiles.length === 0) {
+        continue;
+      }
+
+      const newestFile = [...validFiles].sort((left, right) => right.updatedAt - left.updatedAt)[0];
+      if (!newestFile.root) {
+        continue;
+      }
+
+      projects.push({
+        root: newestFile.root,
+        dirPath,
+        updatedAt: newestFile.updatedAt,
+        count: validFiles.length,
+        files: validFiles
+          .map((file) => ({ path: file.path, updatedAt: file.updatedAt }))
+          .sort((left, right) => right.updatedAt - left.updatedAt)
+      });
     }
-
-    const dirPath = join(CLAUDE_PROJECTS_DIR, entry.name);
-    const fileEntries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
-    const files = await Promise.all(
-      fileEntries
-        .filter((file) => file.isFile() && file.name.endsWith(".jsonl"))
-        .map(async (file) => {
-          const path = join(dirPath, file.name);
-          const sample = await readLogSample(path).catch(() => null);
-          if (!sample) {
-            return null;
-          }
-          return {
-            path,
-            updatedAt: sample.mtimeMs,
-            root: extractProjectRoot([...sample.headRecords, ...sample.tailRecords])
-          };
-        })
-    );
-
-    const validFiles = files.filter((file): file is { path: string; updatedAt: number; root: string | null } => Boolean(file));
-    if (validFiles.length === 0) {
-      continue;
-    }
-
-    const newestFile = [...validFiles].sort((left, right) => right.updatedAt - left.updatedAt)[0];
-    if (!newestFile.root) {
-      continue;
-    }
-
-    projects.push({
-      root: newestFile.root,
-      dirPath,
-      updatedAt: newestFile.updatedAt,
-      count: validFiles.length,
-      files: validFiles
-        .map((file) => ({ path: file.path, updatedAt: file.updatedAt }))
-        .sort((left, right) => right.updatedAt - left.updatedAt)
-    });
   }
 
   return projects.sort((left, right) => right.updatedAt - left.updatedAt);
@@ -2517,6 +2588,9 @@ async function loadClaudeSessionsViaSdk(projectRoot: string, limit = 12): Promis
   if (!sessions || sessions.length === 0) {
     return null;
   }
+  const projectDirPath = await scanClaudeProjectDirs()
+    .then((projects) => projects.find((project) => sameProjectPath(project.root, projectRoot))?.dirPath ?? null)
+    .catch(() => null);
 
   const entries = await Promise.all(
     sessions.map(async (session) => {
@@ -2533,6 +2607,10 @@ async function loadClaudeSessionsViaSdk(projectRoot: string, limit = 12): Promis
       }
       return {
         sessionId: session.sessionId,
+        title: normalizeClaudeSessionTitle(
+          session.customTitle ?? session.summary ?? session.firstPrompt ?? null
+        ),
+        projectDirPath,
         updatedAt: session.lastModified,
         cwd,
         gitBranch: session.gitBranch ?? null,
@@ -2559,10 +2637,13 @@ async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Pro
           session.cwd,
           session.records,
           updatedAt,
-          hookRecords
+          hookRecords,
+          session.title
         );
         return {
           sessionId: session.sessionId,
+          title: session.title,
+          projectDirPath: session.projectDirPath,
           cwd: session.cwd,
           gitBranch: session.gitBranch,
           updatedAt,
@@ -2580,7 +2661,7 @@ async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Pro
     return [];
   }
 
-  const sessions = await Promise.all(
+  const sessions: Array<ClaudeLoadedSession | null> = await Promise.all(
     project.files.slice(0, limit).map(async (file) => {
       const sample = await readLogSample(file.path).catch(() => null);
       if (!sample) {
@@ -2605,6 +2686,8 @@ async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Pro
 
       return {
         sessionId,
+        title: extractClaudeSessionTitle(records),
+        projectDirPath: project.dirPath,
         cwd,
         gitBranch: summary.gitBranch,
         updatedAt,
@@ -2876,6 +2959,399 @@ async function claudeAgentFromTeamMemberContext(input: {
   };
 }
 
+function claudeSubagentIdFromTranscriptPath(filePath: string): string | null {
+  const fileName = basename(filePath);
+  const match = fileName.match(/^agent-(.+)\.jsonl$/i);
+  if (match) {
+    return match[1].trim() || null;
+  }
+  return fileName.endsWith(".jsonl") ? fileName.slice(0, -".jsonl".length).trim() || null : null;
+}
+
+function claudeWorkflowSubagentRecordSources(record: Record<string, unknown>): Array<Record<string, unknown>> {
+  return [
+    record,
+    asRecord(record.agent),
+    asRecord(record.subagent),
+    asRecord(record.sub_agent),
+    asRecord(record.metadata),
+    asRecord(record.meta)
+  ].filter((entry): entry is Record<string, unknown> => Boolean(entry));
+}
+
+function claudeWorkflowSubagentAgentIdFromRecord(record: Record<string, unknown>): string | null {
+  const sources = claudeWorkflowSubagentRecordSources(record);
+  const explicit = firstStringValue(sources, "agentId", "agent_id", "subagentId", "subagent_id", "id");
+  if (explicit) {
+    return explicit;
+  }
+  const transcriptPath = firstStringValue(sources, "agentTranscriptPath", "agent_transcript_path", "transcriptPath", "transcript_path");
+  return transcriptPath ? claudeSubagentIdFromTranscriptPath(transcriptPath) : null;
+}
+
+function claudeWorkflowIdFromPath(subagentsDir: string, filePath: string): string | null {
+  const parts = relative(subagentsDir, filePath).replace(/\\/g, "/").split("/");
+  const workflowIndex = parts.findIndex((part) => part === "workflows");
+  return workflowIndex >= 0 && parts[workflowIndex + 1] ? parts[workflowIndex + 1] : null;
+}
+
+async function listClaudeSubagentJsonlFiles(rootDir: string, limit = 200): Promise<string[]> {
+  const files: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    if (files.length >= limit) {
+      return;
+    }
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (files.length >= limit) {
+        break;
+      }
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(path);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        files.push(path);
+      }
+    }
+  }
+  await walk(rootDir);
+  return files;
+}
+
+async function readClaudeWorkflowSubagentMeta(transcriptPath: string): Promise<ClaudeWorkflowSubagentMeta | null> {
+  const agentIdFromPath = claudeSubagentIdFromTranscriptPath(transcriptPath);
+  const baseName = basename(transcriptPath, ".jsonl");
+  const candidates = Array.from(new Set([
+    join(dirname(transcriptPath), `${baseName}.meta.json`),
+    agentIdFromPath ? join(dirname(transcriptPath), `agent-${agentIdFromPath}.meta.json`) : null,
+    agentIdFromPath ? join(dirname(transcriptPath), `${agentIdFromPath}.meta.json`) : null
+  ].filter((entry): entry is string => Boolean(entry))));
+
+  for (const candidate of candidates) {
+    const content = await readFile(candidate, "utf8").catch(() => null);
+    if (!content) {
+      continue;
+    }
+    const record = (() => {
+      try {
+        return asRecord(JSON.parse(content));
+      } catch {
+        return null;
+      }
+    })();
+    if (!record) {
+      continue;
+    }
+    const sources = claudeWorkflowSubagentRecordSources(record);
+    const agentId = firstStringValue(sources, "agentId", "agent_id", "subagentId", "subagent_id", "id") ?? agentIdFromPath;
+    if (!agentId) {
+      continue;
+    }
+    return {
+      agentId,
+      agentType: firstStringValue(sources, "agentType", "agent_type", "type", "role"),
+      name: firstStringValue(sources, "name", "label", "title"),
+      description: firstStringValue(sources, "description", "summary", "prompt"),
+      cwd: canonicalizeProjectPath(firstStringValue(sources, "cwd", "workingDirectory", "working_directory"))
+    };
+  }
+
+  return agentIdFromPath
+    ? { agentId: agentIdFromPath, agentType: null, name: null, description: null, cwd: null }
+    : null;
+}
+
+async function directoryExists(dirPath: string): Promise<boolean> {
+  return stat(dirPath)
+    .then((stats) => stats.isDirectory())
+    .catch(() => false);
+}
+
+function latestClaudeTimestamp(records: Array<Record<string, unknown>>, fallbackUpdatedAt: number): number {
+  return records.reduce((latest, record) => {
+    const timestamp = explicitRecordTimestampMs(record);
+    return Number.isFinite(timestamp) ? Math.max(latest, timestamp) : latest;
+  }, fallbackUpdatedAt);
+}
+
+function latestClaudeAssistantText(records: Array<Record<string, unknown>>): string | null {
+  for (const record of [...records].reverse()) {
+    const text = extractAssistantText(record);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
+function claudeWorkflowResultText(record: Record<string, unknown>): string | null {
+  return firstStringValue(
+    claudeWorkflowSubagentRecordSources(record),
+    "last_assistant_message",
+    "result",
+    "summary",
+    "message",
+    "output",
+    "text",
+    "content"
+  );
+}
+
+function claudeWorkflowRecordKind(record: Record<string, unknown>): string | null {
+  return firstStringValue(claudeWorkflowSubagentRecordSources(record), "event", "type", "status", "phase", "kind");
+}
+
+function isClaudeWorkflowResultRecord(record: Record<string, unknown>): boolean {
+  const kind = claudeWorkflowRecordKind(record)?.replace(/[_-]+/g, " ");
+  return Boolean(kind && /\b(result|done|complete|completed|finished|stop|stopped|success|failed|error)\b/i.test(kind));
+}
+
+function isClaudeWorkflowStartRecord(record: Record<string, unknown>): boolean {
+  const kind = claudeWorkflowRecordKind(record)?.replace(/[_-]+/g, " ");
+  return Boolean(kind && /\b(start|started|spawn|spawned|created|queued|running|active)\b/i.test(kind));
+}
+
+function claudeWorkflowStateFromRecord(record: Record<string, unknown>, fallback: ActivityState): ActivityState {
+  const text = [claudeWorkflowRecordKind(record), claudeWorkflowResultText(record)]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/[_-]+/g, " ")
+    .toLowerCase();
+  if (/\b(error|failed|failure|blocked|denied)\b/.test(text) || record.is_error === true) {
+    return "blocked";
+  }
+  if (/\b(result|done|complete|completed|finished|stop|stopped|success)\b/.test(text)) {
+    return "done";
+  }
+  if (/\b(start|started|spawn|spawned|created|queued|running|active)\b/.test(text)) {
+    return "running";
+  }
+  return fallback;
+}
+
+function claudeWorkflowSubagentSummary(input: {
+  agentId: string;
+  agentType: string | null;
+  workflowId: string | null;
+  records: Array<Record<string, unknown>>;
+  cwd: string;
+  updatedAtMs: number;
+  fallbackDetail: string;
+}): ClaudeActivitySummary {
+  const latestRecord = input.records.at(-1) ?? null;
+  const latestAssistantText = latestClaudeAssistantText(input.records);
+  const resultRecord = [...input.records].reverse().find(isClaudeWorkflowResultRecord) ?? null;
+  const resultText = resultRecord ? claudeWorkflowResultText(resultRecord) : null;
+  const ageMs = Date.now() - input.updatedAtMs;
+  const state =
+    resultRecord ? claudeWorkflowStateFromRecord(resultRecord, "done")
+    : latestAssistantText ? "done"
+    : ageMs <= RECENT_DONE_WINDOW_MS ? "running"
+    : "idle";
+  const detail = resultText ?? latestAssistantText ?? (latestRecord ? claudeWorkflowResultText(latestRecord) : null) ?? input.fallbackDetail;
+  const paths = extractPathsFromText(detail);
+  const sourceKind = input.workflowId
+    ? "claude:workflow-subagent"
+    : input.agentType ? `claude:subagent:${input.agentType}` : "claude:subagent";
+
+  return {
+    label: labelFromModel(null, input.agentId),
+    sourceKind,
+    state,
+    detail: state === "idle" ? "Idle" : shorten(detail, 88),
+    updatedAt: new Date(input.updatedAtMs).toISOString(),
+    paths: paths.length > 0 ? paths : [input.cwd],
+    activityEvent:
+      state === "running"
+        ? claudeCollabActivityEvent({ detail: input.workflowId ? "Workflow subagent running" : "Subagent running", path: input.cwd })
+        : null,
+    gitBranch: null,
+    confidence: "inferred",
+    needsUser: null,
+    latestMessage: state === "idle" ? null : latestAssistantText ?? resultText,
+    isOngoing: state !== "done" && state !== "idle" && state !== "blocked"
+  };
+}
+
+function claudeWorkflowJournalEntryFromRecord(
+  record: Record<string, unknown>,
+  fallbackUpdatedAt: number,
+  workflowId: string | null
+): ClaudeWorkflowJournalEntry | null {
+  const agentId = claudeWorkflowSubagentAgentIdFromRecord(record);
+  if (!agentId || (!isClaudeWorkflowStartRecord(record) && !isClaudeWorkflowResultRecord(record))) {
+    return null;
+  }
+  const sources = claudeWorkflowSubagentRecordSources(record);
+  const updatedAtMs = recordTimestampMs(record, fallbackUpdatedAt);
+  const detail =
+    claudeWorkflowResultText(record)
+    ?? firstStringValue(sources, "prompt", "description", "task", "name", "agentType", "agent_type")
+    ?? "Workflow subagent updated";
+  const state = claudeWorkflowStateFromRecord(record, isClaudeWorkflowResultRecord(record) ? "done" : "running");
+  return {
+    agentId,
+    agentType: firstStringValue(sources, "agentType", "agent_type", "type", "role"),
+    name: firstStringValue(sources, "name", "label", "title"),
+    description: firstStringValue(sources, "description", "summary", "prompt", "task"),
+    workflowId: firstStringValue(sources, "workflowId", "workflow_id") ?? workflowId,
+    state,
+    detail: shorten(detail, 88),
+    updatedAtMs,
+    latestMessage: state === "done" || state === "blocked" ? detail : null,
+    cwd: canonicalizeProjectPath(firstStringValue(sources, "cwd", "workingDirectory", "working_directory"))
+  };
+}
+
+async function readClaudeWorkflowJournalEntries(subagentsDir: string): Promise<ClaudeWorkflowJournalEntry[]> {
+  const files = await listClaudeSubagentJsonlFiles(join(subagentsDir, "workflows"), 80).catch(() => []);
+  const entries: ClaudeWorkflowJournalEntry[] = [];
+  for (const journalPath of files.filter((file) => basename(file) === "journal.jsonl")) {
+    const sample = await readLogSample(journalPath).catch(() => null);
+    if (!sample) {
+      continue;
+    }
+    const workflowId = claudeWorkflowIdFromPath(subagentsDir, journalPath);
+    for (const record of [...sample.headRecords, ...sample.tailRecords]) {
+      const entry = claudeWorkflowJournalEntryFromRecord(record, sample.mtimeMs, workflowId);
+      if (entry) {
+        entries.push(entry);
+      }
+    }
+  }
+  return entries;
+}
+
+async function claudeSessionSubagentsDirs(session: ClaudeLoadedSession): Promise<string[]> {
+  const candidates = new Set<string>();
+  if (session.projectDirPath) {
+    candidates.add(join(session.projectDirPath, session.sessionId, "subagents"));
+  }
+
+  const projectDirs = await scanClaudeProjectDirs().catch(() => []);
+  for (const project of projectDirs) {
+    candidates.add(join(project.dirPath, session.sessionId, "subagents"));
+  }
+
+  const existing = await Promise.all(
+    [...candidates].map(async (candidate) => ((await directoryExists(candidate)) ? candidate : null))
+  );
+  return existing.filter((candidate): candidate is string => Boolean(candidate));
+}
+
+async function readClaudeWorkflowSubagentSeeds(session: ClaudeLoadedSession): Promise<ClaudeWorkflowSubagentSeed[]> {
+  const subagentsDirs = await claudeSessionSubagentsDirs(session);
+  if (subagentsDirs.length === 0) {
+    return [];
+  }
+
+  const scanResults = await Promise.all(
+    subagentsDirs.map(async (subagentsDir) => ({
+      subagentsDir,
+      jsonlFiles: await listClaudeSubagentJsonlFiles(subagentsDir).catch(() => []),
+      journalEntries: await readClaudeWorkflowJournalEntries(subagentsDir)
+    }))
+  );
+  const journalEntries = scanResults.flatMap((result) => result.journalEntries);
+  const latestJournalByAgentId = new Map<string, ClaudeWorkflowJournalEntry>();
+  for (const entry of journalEntries) {
+    const existing = latestJournalByAgentId.get(entry.agentId);
+    if (!existing || entry.updatedAtMs >= existing.updatedAtMs) {
+      latestJournalByAgentId.set(entry.agentId, entry);
+    }
+  }
+
+  const seedsByAgentId = new Map<string, ClaudeWorkflowSubagentSeed>();
+  for (const result of scanResults) {
+    for (const transcriptPath of result.jsonlFiles.filter((file) => basename(file) !== "journal.jsonl")) {
+      const [sample, fileStats, meta] = await Promise.all([
+        readLogSample(transcriptPath).catch(() => null),
+        stat(transcriptPath).catch(() => null),
+        readClaudeWorkflowSubagentMeta(transcriptPath)
+      ]);
+      const agentId = meta?.agentId ?? claudeSubagentIdFromTranscriptPath(transcriptPath);
+      if (!agentId || !sample) {
+        continue;
+      }
+      const records = [...sample.headRecords, ...sample.tailRecords];
+      const workflowId = claudeWorkflowIdFromPath(result.subagentsDir, transcriptPath);
+      const journal = latestJournalByAgentId.get(agentId) ?? null;
+      const cwd = journal?.cwd ?? meta?.cwd ?? session.cwd;
+      const agentType = journal?.agentType ?? meta?.agentType ?? null;
+      const name = journal?.name ?? meta?.name ?? null;
+      const description = journal?.description ?? meta?.description ?? null;
+      const updatedAtMs = Math.max(latestClaudeTimestamp(records, sample.mtimeMs), fileStats?.mtimeMs ?? 0, journal?.updatedAtMs ?? 0);
+      const existing = seedsByAgentId.get(agentId);
+      if (existing && existing.updatedAtMs > updatedAtMs) {
+        continue;
+      }
+      const summary = claudeWorkflowSubagentSummary({
+        agentId,
+        agentType,
+        workflowId: journal?.workflowId ?? workflowId,
+        records,
+        cwd,
+        updatedAtMs,
+        fallbackDetail: journal?.detail ?? description ?? name ?? agentType ?? "Claude subagent"
+      });
+      const journalIsNewer = journal && journal.updatedAtMs >= Date.parse(summary.updatedAt);
+      seedsByAgentId.set(agentId, {
+        agentId,
+        agentType,
+        name,
+        description,
+        workflowId: journal?.workflowId ?? workflowId,
+        cwd,
+        summary: journalIsNewer
+          ? {
+            ...summary,
+            state: journal.state,
+            detail: journal.state === "idle" ? "Idle" : journal.detail,
+            updatedAt: new Date(journal.updatedAtMs).toISOString(),
+            activityEvent: journal.state === "running" ? claudeCollabActivityEvent({ detail: journal.detail, path: cwd }) : null,
+            latestMessage: journal.latestMessage ?? summary.latestMessage,
+            isOngoing: journal.state !== "done" && journal.state !== "idle" && journal.state !== "blocked"
+          }
+          : summary,
+        updatedAtMs
+      });
+    }
+  }
+
+  for (const journal of latestJournalByAgentId.values()) {
+    if (seedsByAgentId.has(journal.agentId)) {
+      continue;
+    }
+    const cwd = journal.cwd ?? session.cwd;
+    const summary: ClaudeActivitySummary = {
+      label: labelFromModel(null, journal.agentId),
+      sourceKind: "claude:workflow-subagent",
+      state: journal.state,
+      detail: journal.state === "idle" ? "Idle" : journal.detail,
+      updatedAt: new Date(journal.updatedAtMs).toISOString(),
+      paths: [cwd],
+      activityEvent: journal.state === "running" ? claudeCollabActivityEvent({ detail: journal.detail, path: cwd }) : null,
+      gitBranch: null,
+      confidence: "inferred",
+      needsUser: null,
+      latestMessage: journal.latestMessage,
+      isOngoing: journal.state !== "done" && journal.state !== "idle" && journal.state !== "blocked"
+    };
+    seedsByAgentId.set(journal.agentId, {
+      agentId: journal.agentId,
+      agentType: journal.agentType,
+      name: journal.name,
+      description: journal.description,
+      workflowId: journal.workflowId,
+      cwd,
+      summary,
+      updatedAtMs: journal.updatedAtMs
+    });
+  }
+
+  return [...seedsByAgentId.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+}
+
 async function buildClaudeSubagentAgents(input: {
   projectRoot: string;
   session: ClaudeLoadedSession;
@@ -2884,11 +3360,32 @@ async function buildClaudeSubagentAgents(input: {
   const latestById = new Map<string, {
     agentId: string;
     agentType: string | null;
+    name: string | null;
+    description: string | null;
+    workflowId: string | null;
     context: ClaudeTeamMemberContext | null;
     cwd: string;
     summary: ClaudeActivitySummary;
     updatedAtMs: number;
+    confidence: AgentConfidence;
   }>();
+
+  for (const seed of await readClaudeWorkflowSubagentSeeds(input.session)) {
+    const context = input.teamIndex.byLeadAndAgentId.get(claudeTeamMemberContextKey(input.session.sessionId, seed.agentId)) ?? null;
+    const id = context ? claudeTeamAgentId(context) : claudeChildAgentId(input.session.sessionId, seed.agentId);
+    latestById.set(id, {
+      agentId: seed.agentId,
+      agentType: seed.agentType ?? context?.member.agentType ?? null,
+      name: seed.name,
+      description: seed.description,
+      workflowId: seed.workflowId,
+      context,
+      cwd: context ? claudeTeamMemberPrimaryCwd(context.member) : seed.cwd,
+      summary: ageClaudeSummary(seed.summary),
+      updatedAtMs: seed.updatedAtMs,
+      confidence: "inferred"
+    });
+  }
 
   for (const record of input.session.hookRecords) {
     const agentId = claudeHookAgentId(record);
@@ -2911,19 +3408,23 @@ async function buildClaudeSubagentAgents(input: {
     const id = context ? claudeTeamAgentId(context) : claudeChildAgentId(input.session.sessionId, agentId);
     const updatedAtMs = recordTimestampMs(record, input.session.updatedAt);
     const existing = latestById.get(id);
-    if (existing && existing.updatedAtMs > updatedAtMs) {
+    if (existing?.confidence === "typed" && existing.updatedAtMs > updatedAtMs) {
       continue;
     }
 
     latestById.set(id, {
       agentId,
       agentType: claudeHookAgentType(record) ?? existing?.agentType ?? context?.member.agentType ?? null,
+      name: existing?.name ?? null,
+      description: existing?.description ?? null,
+      workflowId: existing?.workflowId ?? null,
       context,
       cwd:
         canonicalizeProjectPath(stringValue(record, "cwd"))
         ?? (context ? claudeTeamMemberPrimaryCwd(context.member) : input.session.cwd),
       summary: ageClaudeSummary(summary),
-      updatedAtMs
+      updatedAtMs,
+      confidence: "typed"
     });
   }
 
@@ -2934,13 +3435,21 @@ async function buildClaudeSubagentAgents(input: {
       const appearance = await ensureAgentAppearance(input.projectRoot, id);
       const label =
         seed.context?.member.name
+        ?? seed.name
+        ?? seed.description
         ?? (seed.agentType ? titleCaseIdentifier(seed.agentType) : `Claude ${seed.agentId.slice(0, 4)}`);
       const role = seed.context?.member.agentType ?? seed.agentType ?? "subagent";
+      const sourceKind =
+        seed.context ? `claude:team:${seed.context.team.name}`
+        : seed.confidence === "typed" ? (seed.agentType ? `claude:subagent:${seed.agentType}` : "claude:subagent")
+        : seed.workflowId ? "claude:workflow-subagent"
+        : seed.agentType ? `claude:subagent:${seed.agentType}`
+        : "claude:subagent";
       return {
         id,
         label,
         source: "claude" as const,
-        sourceKind: seed.context ? `claude:team:${seed.context.team.name}` : seed.agentType ? `claude:subagent:${seed.agentType}` : "claude:subagent",
+        sourceKind,
         parentThreadId,
         depth: parentThreadId ? 1 : 0,
         isCurrent: false,
@@ -2969,7 +3478,7 @@ async function buildClaudeSubagentAgents(input: {
           originUrl: null
         },
         provenance: "claude" as const,
-        confidence: "typed" as const,
+        confidence: seed.confidence,
         needsUser: seed.summary.needsUser,
         liveSubscription: "readOnly" as const,
         network: null
@@ -3261,7 +3770,8 @@ export function summariseClaudeSession(
   fallbackCwd: string,
   records: Array<Record<string, unknown>>,
   fallbackUpdatedAt: number,
-  hookRecords: Array<Record<string, unknown>> = []
+  hookRecords: Array<Record<string, unknown>> = [],
+  sessionTitle: string | null = null
 ): ClaudeActivitySummary {
   const timestampedRecords = records
     .map((record, index) => ({ record, index, timestamp: explicitRecordTimestampMs(record) }))
@@ -3279,6 +3789,7 @@ export function summariseClaudeSession(
 
   const latestMessage = latestAssistant ? messageObject(latestAssistant) : null;
   const model = latestMessage && typeof latestMessage.model === "string" ? latestMessage.model : null;
+  const displayLabel = labelFromSessionTitle(sessionTitle ?? extractClaudeSessionTitle(records), model, sessionId);
   const updatedAtMs = latestRecord ? recordTimestampMs(latestRecord, fallbackUpdatedAt) : fallbackUpdatedAt;
   const updatedAt = new Date(updatedAtMs).toISOString();
   const gitBranch = latestRecord && typeof latestRecord.gitBranch === "string" ? latestRecord.gitBranch : null;
@@ -3299,7 +3810,10 @@ export function summariseClaudeSession(
 
   if (latestHookSummary) {
     return mergeClaudeAssistantTextSummary({
-      base: ageClaudeSummary(latestHookSummary),
+      base: {
+        ...ageClaudeSummary(latestHookSummary),
+        label: displayLabel
+      },
       latestAssistantTextRecord,
       fallbackUpdatedAt,
       fallbackCwd
@@ -3315,7 +3829,7 @@ export function summariseClaudeSession(
       : ageMs <= RECENT_DONE_WINDOW_MS ? "done"
       : "idle";
     return {
-      label: labelFromModel(model, sessionId),
+      label: displayLabel,
       sourceKind: sourceKindFromModel(model),
       state,
       detail: shorten(text, 88),
@@ -3355,6 +3869,7 @@ export function summariseClaudeSession(
       if (toolSummary) {
         return {
           ...toolSummary,
+          label: displayLabel,
           confidence: "inferred"
         };
       }
@@ -3365,7 +3880,7 @@ export function summariseClaudeSession(
     const text = extractUserText(latestUserTextRecord) ?? "Assigned work";
     const paths = extractPathsFromText(text);
     return {
-      label: labelFromModel(model, sessionId),
+      label: displayLabel,
       sourceKind: sourceKindFromModel(model),
       state: "planning",
       detail: shorten(text, 88),
@@ -3381,7 +3896,7 @@ export function summariseClaudeSession(
   }
 
   return {
-    label: labelFromModel(model, sessionId),
+    label: displayLabel,
     sourceKind: sourceKindFromModel(model),
     state: "idle",
     detail: "Idle",
@@ -3493,6 +4008,7 @@ export function discoverClaudeProjectsFromBackgroundJobsForTest(jobs: ClaudeBack
 export async function buildClaudeSubagentAgentsForTest(input: {
   projectRoot: string;
   sessionId: string;
+  projectDirPath?: string | null;
   cwd: string;
   gitBranch?: string | null;
   updatedAt: number;
@@ -3502,6 +4018,8 @@ export async function buildClaudeSubagentAgentsForTest(input: {
 }): Promise<DashboardAgent[]> {
   const session: ClaudeLoadedSession = {
     sessionId: input.sessionId,
+    title: extractClaudeSessionTitle(input.records ?? []),
+    projectDirPath: input.projectDirPath ?? null,
     cwd: canonicalizeProjectPath(input.cwd) ?? input.cwd,
     gitBranch: input.gitBranch ?? null,
     updatedAt: input.updatedAt,
