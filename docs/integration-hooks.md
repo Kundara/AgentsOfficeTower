@@ -569,6 +569,9 @@ What we read:
 
 - `getSessionMessages()` from `@anthropic-ai/claude-agent-sdk` when available
 - recent JSONL records from the head and tail of each session file as fallback
+- local workflow/subagent JSONL files under `~/.claude/projects/<encoded-cwd>/<session-id>/subagents/**/agent-*.jsonl`
+- matching workflow/subagent metadata files such as `agent-*.meta.json`
+- workflow journals such as `~/.claude/projects/<encoded-cwd>/<session-id>/subagents/workflows/<workflow-id>/journal.jsonl`
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl`
 - Claude Agent Teams config files under `~/.claude/teams/*/config.json`
 - Claude Agent View background session state under `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json`
@@ -589,7 +592,8 @@ How we use it:
 - infer the most recent meaningful activity from transcript data when no hook sidecar exists
 - prefer typed Claude hook events when a sidecar exists for that session
 - assign the Claude `sessionId` to the normalized `threadId` field so browser event matching can treat Claude like other tracked sessions
-- derive child Claude agents from hook `agent_id` and Agent Teams `leadSessionId` / teammate metadata when those typed identifiers are available
+- derive inferred child Claude agents from local workflow/subagent transcripts, metadata, and journals when hooks are absent
+- derive typed child Claude agents from hook `agent_id` and Agent Teams `leadSessionId` / teammate metadata when those typed identifiers are available
 - add teammate `worktreePath` or `cwd` values to Claude project discovery so cowork/team workspaces can appear as floors
 - add Agent View background jobs as read-only `claude:background` agents keyed by the Claude session id when available, otherwise by the background job id
 - expose `claude attach <job>` as the read-only resume command for those rows
@@ -638,7 +642,9 @@ How Agents Office uses it:
 
 Claude Code dynamic workflows / `ultracode` are a separate research-preview surface. Official docs describe workflow scripts that coordinate dozens to hundreds of subagents, `/workflows` progress UI with phases, token totals, agent prompts/tool calls/results, and `ultracode` as `xhigh` effort plus automatic workflow orchestration.
 
-Agents Office does not currently consume a stable workflow run-state file or app-server-like API for that progress view. Hook sidecars remain the strongest implemented live path for local Claude subagent hierarchy today. The best official hookless protocol candidate is Claude Code OpenTelemetry export:
+Agents Office consumes the local child-agent artifacts Claude writes beside each project session: `subagents/**/agent-*.jsonl`, matching `agent-*.meta.json`, and workflow `journal.jsonl` files. Those files create inferred child `DashboardAgent` rows under the lead Claude session, including rows from journal `started` records before the child transcript has useful assistant text and `result` records when the workflow finishes a child.
+
+This is still not a full `/workflows` progress API: Agents Office does not currently reproduce Claude's phase tree, token totals, or run controls. Hook sidecars remain the strongest implemented typed path for local Claude subagent hierarchy today, and they override matching inferred child rows by `agent_id`. The best official hookless protocol candidate for richer future live state is Claude Code OpenTelemetry export:
 
 - `OTEL_LOGS_EXPORTER` can export structured prompt, API, tool, permission, MCP, hook, compaction, skill, and other events
 - trace spans include `agent_id`, `parent_agent_id`, and `subagent_type` attributes for subagent/model/tool correlation
@@ -649,7 +655,9 @@ Agents Office does not currently consume a stable workflow run-state file or app
 Official docs:
 
 - [Claude Agent SDK TypeScript reference](https://platform.claude.com/docs/en/agent-sdk/typescript)
+- [Claude Code dynamic workflows](https://code.claude.com/docs/en/workflows)
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
+- [Claude Code subagents](https://code.claude.com/docs/en/sub-agents)
 
 What Anthropic exposes in hook input:
 
@@ -675,7 +683,7 @@ How this project uses that surface:
 - that same bridge now gives `PermissionRequest` and `Elicitation` hooks a browser response path by waiting on the matching project-scoped response file in Agents Office user data and then returning the official structured hook output back to Claude
 - Agents Office also appends a synthetic resolution marker into the Claude hook sidecar after a browser response so the queue clears immediately even for permission requests that do not emit a later official hook result
 - when those sidecars exist, Claude agents can surface typed permission, input, tool, subagent, stop, user-prompt, session-start/end, and compacting state with `confidence = typed`
-- subagent-scoped hook records with `agent_id` become child `DashboardAgent` rows under the lead Claude session, and their events attach to the child row instead of the parent when possible
+- subagent-scoped hook records with `agent_id` become child `DashboardAgent` rows under the lead Claude session, override matching inferred workflow/subagent rows, and attach their events to the child row instead of the parent when possible
 - Claude Agent Teams config files can upgrade teammates into child agents with teammate name, role, active/idle state, parent `leadSessionId`, and cowork project/worktree floor discovery
 - Claude Desktop Co-work session records can add read-only Claude agents and workspace floors, but they do not provide hook-backed browser replies or typed subagent control
 - when they do not exist, Claude falls back to transcript inference with `confidence = inferred`
@@ -756,8 +764,8 @@ What Claude still does not provide here:
 
 - Codex-style resume/open command
 - Codex app-server style live push stream into this process without a user-configured hook bridge
-- a complete Codex-grade hierarchy for every child; hook `agent_id`, teammate `sessionId`, and team `leadSessionId` now provide typed hierarchy where available, while transcript-only delegation remains weaker
-- a stable documented local state file or API for `/workflows` phase/agent progress; Agent View jobs are visible, but workflow-managed subagents still need hooks or a future OpenTelemetry collector
+- a complete Codex-grade hierarchy for every child; local workflow/subagent files provide inferred child rows, while hook `agent_id`, teammate `sessionId`, and team `leadSessionId` provide typed hierarchy where available
+- a stable documented local API for `/workflows` phase/agent progress; Agent View jobs and workflow-managed child rows are visible, but the full phase tree still needs a future protocol path such as OpenTelemetry
 - a general thread-steer/reply API comparable to Codex app-server, so Claude session cards are still read-only even though hook-backed approval/input waits are now actionable
 
 ## OpenClaw Gateway Sessions
@@ -1172,7 +1180,8 @@ Status:
 
 - Claude is merged into the same snapshot model
 - transcript-derived Claude agents carry `provenance = claude` and `confidence = inferred`
-- hook-backed Claude sessions, subagents, and Agent Teams rows carry `provenance = claude` and `confidence = typed` when their state comes from typed hook/team metadata
+- local workflow/subagent transcript and journal child rows carry `provenance = claude` and `confidence = inferred`
+- hook-backed Claude sessions, subagents, and Agent Teams rows carry `provenance = claude` and `confidence = typed` when their state comes from typed hook/team metadata, including when a hook row upgrades a matching inferred workflow child
 - Hermes agents carry `provenance = hermes` and `confidence = inferred`
 - Codex, cloud, and presence entries carry typed provenance
 
@@ -1200,6 +1209,7 @@ Today the project already rides:
 - Codex thread file watches for fast refresh
 - Claude local JSONL discovery
 - Claude tool-use and message inference
+- local Claude workflow/subagent transcript and journal discovery
 - Claude provenance/confidence signaling
 - hook-backed Claude approval and elicitation responses from the browser queue
 - hook-backed Claude subagent child rows from `agent_id`

@@ -20,6 +20,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added hook-backed Claude `Needs You` actions for typed `PermissionRequest` and schema-backed `Elicitation` waits, using a local response-file bridge plus synthetic queue-clearing sidecar markers so browser approvals and form answers can flow back into the Agent SDK hooks.
 - Added Claude Agent Teams discovery from `~/.claude/teams`, using teammate `worktreePath` / `cwd` values as cowork project floors.
 - Added Claude Agent View background job discovery from `~/.claude/jobs/*/state.json`, rendering matching jobs as read-only `claude:background` agents and workspace floors without requiring project hooks.
+- Added Claude workflow-subagent discovery from local session `subagents` transcripts, matching `*.meta.json`, and workflow `journal.jsonl` records, rendering inferred child rows under the lead session without requiring hooks.
 - Added Claude Desktop Co-work discovery from `local-agent-mode-sessions`, using saved space folders and session-selected folders as workspace floors with read-only Claude agents and detected-file activity.
 - Added scene-click thread cards for local Codex agents, exposing recent typed thread history directly from the office map with reply controls only when the thread is owned by the same app-server connection.
 - Added read-only Hermes Agent visibility by reading Hermes `state.db`/profile stores and live Hermes process cwd/env hints, mapping matching project sessions into Agents Office without project-name hard matching.
@@ -47,7 +48,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed Codex dynamic-tool server request handling so unsupported `item/tool/call` requests receive an explicit unsuccessful response from Agents Office rather than leaving the Codex turn pending.
 - Changed Claude Agent SDK integration to `@anthropic-ai/claude-agent-sdk` `^0.2.118` and added typed coverage for newer hook events including `PostToolBatch`, `UserPromptExpansion`, `PermissionDenied`, and `TaskCreated`.
 - Changed Claude delegation hooks and Agent/Task tool calls to normalize onto the shared `collabAgentToolCall` activity type used for delegated-agent work.
-- Changed Claude `agent_id` hook records and Agent Teams metadata to produce child `DashboardAgent` rows under the lead Claude session when typed parent/child identifiers are available.
+- Changed Claude `agent_id` hook records and Agent Teams metadata to produce child `DashboardAgent` rows under the lead Claude session when typed parent/child identifiers are available, with hook-backed rows overriding matching inferred workflow-subagent rows.
 - Changed Claude Desktop Co-work-only project floors to sort after normal workspaces in fleet/server and browser ordering.
 - Changed Cursor cloud API requests to prefer the documented Bearer-token authorization path before falling back to the older Basic-auth compatibility path.
 - Changed per-project Agents Office state so room configs, appearance rosters, presence snapshots, Claude hook bridges, and Cursor hook sidecars now write into machine-local Agents Office user data keyed by project root instead of creating or mutating `.codex-agents/` inside the tracked project.
@@ -103,6 +104,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed roaming Hermes/OpenClaw tower avatars so unassigned sessions float just left of the visible tower with larger, faster bobbing sprites, velocity tilt, stable screen-space height during scroll, and scroll-only updates that do not spawn duplicate transfer ghosts or desk-seat copies.
 - Fixed completed roaming Hermes/OpenClaw sessions so they leave the floating tower layer after the finished cooldown instead of lingering as apparently active projectless hoverers.
 - Fixed transcript-only Claude sessions so untimestamped metadata touches and older `Read` tool records cannot keep a finished Claude Desktop chat seated as active work after a later final assistant reply.
+- Fixed Claude lead-agent labels so transcript `ai-title` rows and Agent SDK session titles win over model fallback names like `Claude opus 4 8`.
 - Fixed multiagents v2 local Codex subagent visibility by reading recent session JSONL metadata when the app-server omits child thread rows, preserving parent links, nicknames, roles, command activity, and latest messages in fleet snapshots.
 - Fixed Codex subagent parsing for direct `subAgentThreadSpawn` source shapes and top-level parent metadata, restoring child visibility when the app-server does not nest the spawn payload under `subAgent.thread_spawn`.
 - Fixed loaded active-status Codex subagents so a final-answer child no longer stays `isOngoing` or active just because the app-server keeps the thread loaded.

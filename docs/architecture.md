@@ -28,7 +28,7 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](./integrati
 
 3. Claude local session logs
 
-   `~/.claude/projects/*.jsonl` is a usable secondary source for project discovery and recent Claude activity. It is not equivalent to Codex app-server: the data is transcript-like and requires inference. That makes it suitable as a best-effort adapter layer, not as the primary truth source.
+   `~/.claude/projects/*.jsonl` and per-session `subagents/` JSONL files are usable secondary sources for project discovery, recent Claude activity, and workflow-managed child rows. They are not equivalent to Codex app-server: the data is transcript-like and requires inference. That makes them suitable as a best-effort adapter layer, not as the primary truth source.
 
 4. Claude Agent View background jobs
 
@@ -425,10 +425,11 @@ Claude support uses a deliberately weaker contract than Codex:
 - transcript-only Claude session state is still inferred from recent tool uses such as read, edit, bash, and task delegation when no typed hook signal exists
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl` can be produced either by a Claude Code hook script or by the exported Agent SDK sidecar bridge, and they upgrade Claude sessions to typed permission, tool, subagent, and stop state
 - Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records normalize to the same delegated-work activity family as Codex collab-agent items
-- hook records with `agent_id` and team records with `leadSessionId` now create child Claude agents through the shared `parentThreadId` hierarchy, while transcript-only delegation still preserves weaker Claude provenance/confidence
+- local Claude workflow/subagent files under the session `subagents/` directory create inferred child agents through the shared `parentThreadId` hierarchy, using transcript tails, matching `*.meta.json`, and workflow `journal.jsonl` records for label, role, state, and latest message
+- hook records with `agent_id` and team records with `leadSessionId` create child Claude agents through the shared `parentThreadId` hierarchy, with hook-backed rows overriding matching inferred workflow rows while transcript-only delegation still preserves weaker Claude provenance/confidence
 - the same Agent SDK sidecar bridge can now hold `PermissionRequest` and `Elicitation` hooks open while the browser writes a response file under the same project-scoped user-data area, then return the official hook decision back to Claude
 - the browser `Needs You` queue can now answer hook-backed Claude approval waits and schema-backed elicitation forms when the sidecar record came from that Agent SDK bridge
-- Claude Code dynamic workflows and `ultracode` are tracked as a research-preview boundary: they can orchestrate many subagents, but no stable local workflow run-state API is consumed here yet
+- Claude Code dynamic workflows and `ultracode` are tracked as a research-preview boundary: local workflow child transcripts and journals are consumed, but the complete `/workflows` phase/progress view still has no app-server-like API here
 - Claude Code OpenTelemetry export is the current official protocol candidate for hookless tool/model/subagent activity because it emits logs/traces with session and agent attributes, but Agents Office does not yet host an OTLP collector
 - Claude agents are rendered in the same room model, but with explicit provenance/confidence so transcript inference and hook-backed state do not pretend to have Codex-grade app-server coverage
 
