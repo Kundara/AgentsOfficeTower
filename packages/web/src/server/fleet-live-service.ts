@@ -11,6 +11,7 @@ import {
   discoverProjects,
   listCloudTasks,
   loadRoamingHermesSnapshotData,
+  loadRoamingOpenClawSnapshotData,
   projectPathIdentityKey,
   ProjectLiveMonitor,
   respondToClaudeHookInputRequest,
@@ -34,6 +35,9 @@ import {
 } from "./web-cli-query";
 
 export const DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const HERMES_FLOATING_AGENT_LIMIT = 12;
+const OPENCLAW_FLOATING_AGENT_LIMIT = 12;
+
 export function filterFreshDiscoveredProjects(
   projects: DiscoveredProject[],
   nowMs = Date.now(),
@@ -66,6 +70,42 @@ export function mergeDiscoveredProjectRootsWithSeeds(
   return roots;
 }
 
+function discoveredProjectSourceKinds(project: Pick<DiscoveredProject, "sourceKind" | "sourceKinds">): string[] {
+  const kinds = [
+    ...(Array.isArray(project.sourceKinds) ? project.sourceKinds : []),
+    project.sourceKind
+  ].filter((kind): kind is string => typeof kind === "string" && kind.trim().length > 0);
+  return Array.from(new Set(kinds));
+}
+
+function mergeSourceKinds(left: string[], right: string[]): string[] {
+  return Array.from(new Set([...left, ...right]));
+}
+
+function isCoworkOnlySourceKinds(sourceKinds: string[]): boolean {
+  return sourceKinds.length > 0
+    && sourceKinds.every((kind) => kind === "claude:cowork" || kind.startsWith("claude:cowork:"));
+}
+
+export function sortProjectRootsWithCoworkLast(
+  projectRoots: string[],
+  sourceKindsByIdentity: Map<string, string[]>
+): string[] {
+  return projectRoots
+    .map((root, index) => ({ root, index }))
+    .sort((left, right) => {
+      const leftIdentity = projectPathIdentityKey(left.root);
+      const rightIdentity = projectPathIdentityKey(right.root);
+      const leftTier = leftIdentity && isCoworkOnlySourceKinds(sourceKindsByIdentity.get(leftIdentity) ?? []) ? 1 : 0;
+      const rightTier = rightIdentity && isCoworkOnlySourceKinds(sourceKindsByIdentity.get(rightIdentity) ?? []) ? 1 : 0;
+      if (leftTier !== rightTier) {
+        return leftTier - rightTier;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.root);
+}
+
 export class FleetLiveService {
   private static readonly PROJECT_DISCOVERY_LIMIT = 200;
   private static readonly PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
@@ -82,7 +122,7 @@ export class FleetLiveService {
   private cloudTimer: NodeJS.Timeout | null = null;
   private cloudBackoffUntil = 0;
   private coordinatedTeamFleet: WebCliTeamFleetCache | null = null;
-  private readonly recentlyDiscoveredProjects = new Map<string, { root: string; lastSeenAt: number }>();
+  private readonly recentlyDiscoveredProjects = new Map<string, { root: string; lastSeenAt: number; sourceKinds: string[] }>();
 
   constructor(
     private readonly seedProjects: ProjectDescriptor[],
@@ -315,6 +355,7 @@ export class FleetLiveService {
     }
 
     await this.attachRoamingHermesAgents(snapshotsByRoot);
+    await this.attachRoamingOpenClawAgents(snapshotsByRoot);
     this.fleet = buildFleetResponse(this.projects, snapshotsByRoot);
 
     for (const response of this.clients) {
@@ -336,7 +377,7 @@ export class FleetLiveService {
     const roaming = await loadRoamingHermesSnapshotData({
       anchorProjectRoot: anchorProject.root,
       knownProjectRoots: this.projects.map((project) => project.root),
-      limit: 4
+      limit: HERMES_FLOATING_AGENT_LIMIT
     }).catch(() => null);
     if (!roaming || (roaming.agents.length === 0 && roaming.events.length === 0 && roaming.notes.length === 0)) {
       return;
@@ -352,6 +393,40 @@ export class FleetLiveService {
       events: [
         ...roaming.events,
         ...anchorSnapshot.events
+      ],
+      notes: [
+        ...anchorSnapshot.notes,
+        ...roaming.notes.filter((note) => !anchorSnapshot.notes.includes(note))
+      ]
+    });
+  }
+
+  private async attachRoamingOpenClawAgents(snapshotsByRoot: Map<string, DashboardSnapshot>): Promise<void> {
+    const anchorProject = this.projects[0] ?? null;
+    if (!anchorProject) {
+      return;
+    }
+
+    const anchorSnapshot = snapshotsByRoot.get(anchorProject.root) ?? null;
+    if (!anchorSnapshot) {
+      return;
+    }
+
+    const roaming = await loadRoamingOpenClawSnapshotData({
+      anchorProjectRoot: anchorProject.root,
+      knownProjectRoots: this.projects.map((project) => project.root),
+      limit: OPENCLAW_FLOATING_AGENT_LIMIT
+    }).catch(() => null);
+    if (!roaming || (roaming.agents.length === 0 && roaming.notes.length === 0)) {
+      return;
+    }
+
+    const existingAgentIds = new Set(anchorSnapshot.agents.map((agent) => agent.id));
+    snapshotsByRoot.set(anchorProject.root, {
+      ...anchorSnapshot,
+      agents: [
+        ...anchorSnapshot.agents,
+        ...roaming.agents.filter((agent) => !existingAgentIds.has(agent.id))
       ],
       notes: [
         ...anchorSnapshot.notes,
@@ -383,34 +458,49 @@ export class FleetLiveService {
       .filter((project): project is ProjectDescriptor & { identityKey: string } => Boolean(project));
     const preferredRootsByIdentity = new Map(normalizedSeeds.map((project) => [project.identityKey, project.root]));
 
-    const discoveredRoots = discoveredProjects
+    const sourceKindsByIdentity = new Map<string, string[]>();
+    const discoveredEntries = discoveredProjects
       .map((project) => {
         const identityKey = projectPathIdentityKey(project.root);
         if (!identityKey) {
           return null;
         }
-        return preferredRootsByIdentity.get(identityKey) ?? project.root;
+        const root = preferredRootsByIdentity.get(identityKey) ?? project.root;
+        return { root, identityKey, sourceKinds: discoveredProjectSourceKinds(project) };
       })
-      .filter((root): root is string => Boolean(root));
-    for (const root of discoveredRoots) {
-      const identityKey = projectPathIdentityKey(root);
-      if (identityKey) {
-        this.recentlyDiscoveredProjects.set(identityKey, { root, lastSeenAt: now });
-      }
+      .filter((entry): entry is { root: string; identityKey: string; sourceKinds: string[] } => Boolean(entry));
+    for (const entry of discoveredEntries) {
+      sourceKindsByIdentity.set(
+        entry.identityKey,
+        mergeSourceKinds(sourceKindsByIdentity.get(entry.identityKey) ?? [], entry.sourceKinds)
+      );
+      this.recentlyDiscoveredProjects.set(entry.identityKey, {
+        root: entry.root,
+        lastSeenAt: now,
+        sourceKinds: sourceKindsByIdentity.get(entry.identityKey) ?? entry.sourceKinds
+      });
     }
     for (const [identityKey, project] of Array.from(this.recentlyDiscoveredProjects.entries())) {
       if (now - project.lastSeenAt > FleetLiveService.PROJECT_DISCOVERY_RETENTION_MS) {
         this.recentlyDiscoveredProjects.delete(identityKey);
+      } else {
+        sourceKindsByIdentity.set(
+          identityKey,
+          mergeSourceKinds(sourceKindsByIdentity.get(identityKey) ?? [], project.sourceKinds)
+        );
       }
     }
     const retainedRoots = Array.from(this.recentlyDiscoveredProjects.values()).map((project) => project.root);
     const seedRoots = normalizedSeeds.map((project) => project.root);
-    const nextProjectRoots = this.explicitProjects
+    const unsortedProjectRoots = this.explicitProjects
       ? seedRoots
       : mergeDiscoveredProjectRootsWithSeeds(
-        [...discoveredRoots, ...retainedRoots],
+        [...discoveredEntries.map((entry) => entry.root), ...retainedRoots],
         seedRoots
       );
+    const nextProjectRoots = this.explicitProjects
+      ? unsortedProjectRoots
+      : sortProjectRootsWithCoworkLast(unsortedProjectRoots, sourceKindsByIdentity);
     const nextProjects = buildProjectDescriptors(nextProjectRoots);
     const nextRoots = new Set(nextProjects.map((project) => project.root));
 

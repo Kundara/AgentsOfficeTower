@@ -825,6 +825,12 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         if (!agent || agent.source === "cloud" || agent.source === "presence") {
           return false;
         }
+        if (
+          (agent.source === "hermes" && agent.sourceKind === "hermes:roaming")
+          || (agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming")
+        ) {
+          return false;
+        }
         return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;
       }
 
@@ -922,10 +928,20 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         return dynamicProjectOrder.get(root);
       }
 
+      function isClaudeCoworkProject(project) {
+        const agents = Array.isArray(project && project.agents) ? project.agents : [];
+        return agents.length > 0
+          && agents.every((agent) => String(agent && agent.sourceKind || "").startsWith("claude:cowork"));
+      }
+
       function visibleProjects(fleet) {
         const projects = [...(Array.isArray(fleet && fleet.projects) ? fleet.projects : [])];
         projects.forEach((project) => projectDisplayOrderValue(project));
         return projects.sort((left, right) => {
+          const sourceTierDelta = (isClaudeCoworkProject(left) ? 1 : 0) - (isClaudeCoworkProject(right) ? 1 : 0);
+          if (sourceTierDelta !== 0) {
+            return sourceTierDelta;
+          }
           const orderDelta = projectDisplayOrderValue(left) - projectDisplayOrderValue(right);
           if (orderDelta !== 0) {
             return orderDelta;

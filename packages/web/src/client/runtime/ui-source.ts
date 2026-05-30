@@ -901,6 +901,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         syncSkyParallax();
         if (state.view !== "map") {
           cleanupOfficeRenderers();
+          syncFloatingHermesAgents([]);
         }
 
         setHtmlIfChanged(heroSummary, renderHeroSummary(counts));
@@ -937,7 +938,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
             syncSessionFocusFromDom();
             syncWorkstationEffects();
             if (state.view === "map") {
-              void syncOfficeMapScenes(displayedProjects);
+              void syncOfficeMapScenes(displayedProjects, rawProjects);
             }
             renderNotifications();
             return;
@@ -982,7 +983,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
           syncSessionFocusFromDom();
           syncWorkstationEffects();
           if (state.view === "map") {
-            void syncOfficeMapScenes(snapshot ? [snapshot] : displayedProjects);
+            void syncOfficeMapScenes(snapshot ? [snapshot] : displayedProjects, rawProjects);
           }
           renderNotifications();
         } catch (error) {

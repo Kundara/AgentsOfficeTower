@@ -5,7 +5,8 @@ const { buildServerMeta } = require("../dist/server-metadata.js");
 const {
   DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS,
   filterFreshDiscoveredProjects,
-  mergeDiscoveredProjectRootsWithSeeds
+  mergeDiscoveredProjectRootsWithSeeds,
+  sortProjectRootsWithCoworkLast
 } = require("../dist/server/fleet-live-service.js");
 
 test("server metadata can reflect the live fleet project set", () => {
@@ -88,5 +89,21 @@ test("fleet discovery does not duplicate seed workspaces already found through a
       ["/mnt/c/Users/User/AgentsOfficeTower"]
     ),
     ["\\mnt\\c\\Users\\User\\AgentsOfficeTower"]
+  );
+});
+
+test("fleet discovery sorts Claude Co-work-only projects after normal workspaces", () => {
+  const sourceKindsByIdentity = new Map([
+    ["/work/main", ["codex"]],
+    ["/work/cowork", ["claude:cowork"]],
+    ["/work/mixed", ["codex", "claude:cowork"]]
+  ]);
+
+  assert.deepEqual(
+    sortProjectRootsWithCoworkLast(
+      ["/work/cowork", "/work/main", "/work/mixed"],
+      sourceKindsByIdentity
+    ),
+    ["/work/main", "/work/mixed", "/work/cowork"]
   );
 });

@@ -75,7 +75,10 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
         if (!agent || agent.source === "cloud" || agent.source === "presence") {
           return false;
         }
-        if (agent.source === "hermes" && agent.sourceKind === "hermes:roaming") {
+        if (
+          (agent.source === "hermes" && agent.sourceKind === "hermes:roaming")
+          || (agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming")
+        ) {
           return false;
         }
         if (agent.source === "local") {
@@ -137,7 +140,13 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
       }
 
       function isFinishedLeadForRec(agent) {
-        if (agent && agent.source === "hermes" && agent.sourceKind === "hermes:roaming") {
+        if (
+          agent
+          && (
+            (agent.source === "hermes" && agent.sourceKind === "hermes:roaming")
+            || (agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming")
+          )
+        ) {
           return false;
         }
         return isRecentLeadCandidate(agent)
@@ -150,6 +159,12 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
 
       function isLiveSceneAgent(agent) {
         if (!agent || agent.source === "cloud" || agent.source === "presence") {
+          return false;
+        }
+        if (
+          (agent.source === "hermes" && agent.sourceKind === "hermes:roaming")
+          || (agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming")
+        ) {
           return false;
         }
         return shouldSeatAtWorkstation(agent) || agent.isCurrent === true || isRuntimeActiveLocalAgent(agent);

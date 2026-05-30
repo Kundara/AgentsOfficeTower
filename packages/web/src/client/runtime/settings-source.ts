@@ -55,6 +55,7 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       const loadedOfficeAssetImages = new Map();
       const officeSceneRenderers = new Map();
       let latestOfficeMapProjects = [];
+      let latestFloatingHermesProjects = [];
       let officeSceneViewportSyncQueued = false;
       const NOTIFICATION_TTL_MS = 2400;
       const MESSAGE_NOTIFICATION_TTL_MS = 4600;

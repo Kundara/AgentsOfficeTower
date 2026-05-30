@@ -168,14 +168,16 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         return sortAgentsStably(
           \`\${snapshot.projectRoot}::\${compact ? "compact-resting" : "resting"}\`,
           snapshot.agents
-            .filter((agent) => isFinishedLeadForRec(agent))
+            .filter((agent) => isFinishedLeadForRec(agent) && !isFloatingOrchestratorAgent(agent))
         );
       }
 
-      function isFloatingHermesAgent(agent) {
+      function isFloatingOrchestratorAgent(agent) {
         return agent
-          && agent.source === "hermes"
-          && agent.sourceKind === "hermes:roaming";
+          && (
+            (agent.source === "hermes" && agent.sourceKind === "hermes:roaming")
+            || (agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming")
+          );
       }
 
       function chairSpriteForAgent(agent) {
@@ -193,20 +195,6 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           x: Math.min(roomPixelWidth - (compact ? 118 : 144), startX + column * stepX),
           y: walkwayY + (compact ? 2 : 4) + row * stepY + (column % 2 === 0 ? 0 : 2),
           flip: (index + row) % 2 === 1
-        };
-      }
-
-      function floatingHermesSlotAt(index, compact, roomPixelWidth, wallHeight) {
-        const columns = compact ? 3 : 4;
-        const column = index % columns;
-        const row = Math.floor(index / columns);
-        const stepX = compact ? 24 : 30;
-        const stepY = compact ? 13 : 15;
-        const startX = Math.max(compact ? 40 : 56, roomPixelWidth - (compact ? 126 : 158));
-        return {
-          x: Math.min(roomPixelWidth - (compact ? 62 : 76), startX + column * stepX),
-          y: Math.max(6, Math.min(wallHeight - (compact ? 34 : 42), (compact ? 9 : 11) + row * stepY + (column % 2 === 0 ? 0 : 2))),
-          flip: (index + row) % 2 === 0
         };
       }
 
@@ -694,12 +682,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const maxY = Math.max(...rooms.map((room) => room.y + room.height), 16);
         const waitingAgents = sortAgentsStably(
           \`\${snapshot.projectRoot}::\${compact ? "compact-waiting" : "waiting"}\`,
-          snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !isFloatingHermesAgent(agent) && !shouldSeatAtWorkstation(agent))
+          snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !isFloatingOrchestratorAgent(agent) && !shouldSeatAtWorkstation(agent))
         );
-        const floatingHermesAgents = sortAgentsStably(
-          \`\${snapshot.projectRoot}::\${compact ? "compact-floating-hermes" : "floating-hermes"}\`,
-          snapshot.agents.filter(isFloatingHermesAgent)
-        ).slice(0, 4);
         const allRestingAgents = restingAgentsFor(snapshot, compact);
         const restingAgents = allRestingAgents
           .filter((agent) =>
@@ -708,7 +692,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             && Boolean(agent.threadId || agent.taskId || agent.url || agent.source === "claude")
           )
           .slice(0, 4);
-        const offDeskAgentIds = new Set([...waitingAgents, ...allRestingAgents, ...floatingHermesAgents].map((agent) => agent.id));
+        const offDeskAgentIds = new Set([...waitingAgents, ...allRestingAgents].map((agent) => agent.id));
         const model = {
           projectRoot: snapshot.projectRoot,
           compact,
@@ -782,6 +766,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           const occupants = snapshot.agents.filter((agent) =>
             roomAgentId(agent) === room.id
             && agent.source !== "cloud"
+            && !isFloatingOrchestratorAgent(agent)
             && !offDeskAgentIds.has(agent.id)
           );
           const roomPixelWidth = room.width * tile;
@@ -1078,63 +1063,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           });
 
           if (isPrimaryRoom) {
-            const floatingHermesAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "floating-hermes", floatingHermesAgents, 4);
             const waitingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "waiting", waitingAgents);
             const restingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "resting", restingAgents, 4);
-            floatingHermesAssignments.forEach(({ agent, slotIndex }) => {
-              const slot = floatingHermesSlotAt(slotIndex, compact, roomPixelWidth, layoutConfig.deskTopY);
-              const stagedOffset = openThreadStageOffset(agent);
-              const avatarX = roomX + slot.x + stagedOffset.x;
-              const avatarY = roomY + slot.y + stagedOffset.y;
-              const anchorX = avatarX + Math.round(tile * 0.4);
-              const anchorY = avatarY + Math.round(tile * 0.55);
-              const avatarSize = avatarVisualSizeForAgent(agent, compact ? 0.92 : 1);
-              model.recAgents.push({
-                id: agent.id,
-                key: agentKey(snapshot.projectRoot, agent),
-                roomId: room.id,
-                kind: "floating",
-                label: agent.label,
-                state: agent.state,
-                role: agentRole(agent),
-                focusKey: focusAgentKey(snapshot, agent),
-                focusKeys: collectFocusedSessionKeys(snapshot, agent),
-                appearance: agent.appearance,
-                hatId: effectiveHatIdForAgent(agent),
-                needsUser: agent.needsUser || null,
-                turnSignal: recentTurnSignalForAgent(snapshot, agent),
-                activityCue: recentActivityCueForAgent(snapshot, agent),
-                statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
-                sprite: avatarSize.avatar.url,
-                x: avatarX,
-                y: avatarY,
-                width: avatarSize.width,
-                height: avatarSize.height,
-                depthBaseY: room.floorTop,
-                z: 18,
-                bubble: agent.isOngoing === true ? "..." : null,
-                flip: slot.flip
-              });
-              agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
-              registerThreadPanel(agent);
-              model.anchors.push({
-                id: "agent::" + agentKey(snapshot.projectRoot, agent),
-                type: "agent",
-                key: agentKey(snapshot.projectRoot, agent),
-                x: anchorX,
-                y: anchorY,
-                left: avatarX,
-                top: avatarY,
-                width: avatarSize.width,
-                height: avatarSize.height,
-                threadId: agent.threadId || "",
-                replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
-                focusKey: focusAgentKey(snapshot, agent),
-                focusKeys: collectFocusedSessionKeys(snapshot, agent),
-                hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
-                threadOpen: Boolean(sceneThreadPanelState(agent))
-              });
-            });
             waitingAssignments.forEach(({ agent, slotIndex }) => {
               const slot = wallsideWaitingSlotAt(slotIndex, compact, roomPixelWidth, layoutConfig.recAreaWalkwayGridY);
               const stagedOffset = openThreadStageOffset(agent);

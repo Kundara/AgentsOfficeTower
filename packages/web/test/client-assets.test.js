@@ -662,12 +662,15 @@ test("client runtime keeps workspace floor order stable across activity refreshe
   assert.ok(settingsSource.includes("const configuredProjectOrder = new Map(configuredProjects.map((project, index) => [project.root, index]));"));
   assert.ok(settingsSource.includes("const dynamicProjectOrder = new Map();"));
   assert.ok(layoutSource.includes("function projectDisplayOrderValue(project) {"));
+  assert.ok(layoutSource.includes("function isClaudeCoworkProject(project) {"));
+  assert.ok(layoutSource.includes('String(agent && agent.sourceKind || "").startsWith("claude:cowork")'));
   assert.ok(layoutSource.includes("if (configuredProjectOrder.has(root)) {"));
   assert.ok(layoutSource.includes("dynamicProjectOrder.set(root, nextDynamicProjectOrder);"));
   assert.match(
     layoutSource,
     /function visibleProjects\(fleet\) \{\n\s+const projects = \[\.\.\.\(Array\.isArray\(fleet && fleet\.projects\) \? fleet\.projects : \[\]\)\];\n\s+projects\.forEach\(\(project\) => projectDisplayOrderValue\(project\)\);\n\s+return projects\.sort\(\(left, right\) => \{/
   );
+  assert.ok(layoutSource.includes("const sourceTierDelta = (isClaudeCoworkProject(left) ? 1 : 0) - (isClaudeCoworkProject(right) ? 1 : 0);"));
   assert.ok(layoutSource.includes("const orderDelta = projectDisplayOrderValue(left) - projectDisplayOrderValue(right);"));
 });
 
@@ -690,6 +693,14 @@ test("client runtime clamps avatar walking delta after scene rebuilds", () => {
   assert.ok(sceneSource.includes("motionDeltaClampUntil: 0,"));
   assert.ok(sceneSource.includes("motionDebugSamples: [],"));
   assert.ok(navigationSource.includes("renderer.motionDeltaClampUntil = performance.now() + OFFICE_MOTION_REBUILD_DELTA_CLAMP_MS;"));
+  assert.match(
+    navigationSource,
+    /const seatedLayoutShifting = startSeatedLayoutShift\(previousState, agent\);[\s\S]*?renderer\.motionStates\.set\(agentKey, previousState\);[\s\S]*?syncMotionStateVisualPosition\(previousState\);\n\s+return avatarVisual\.nodes;/
+  );
+  assert.match(
+    navigationSource,
+    /renderer\.motionStates\.set\(motionState\.key, motionState\);[\s\S]*?renderer\.animatedSprites\.push\(motionState\);[\s\S]*?syncMotionStateVisualPosition\(motionState\);\n\s+return avatarVisual\.nodes;/
+  );
   assert.doesNotMatch(sceneSource, /const deltaMs = renderer\.app\?\.ticker\?\.deltaMS \|\| 16;/);
 });
 
@@ -1193,14 +1204,54 @@ test("runtime source keeps current agents in the map scene even when they are be
   const seatingSource = readRuntimeSource("seating-source.ts");
 
   assert.ok(layoutSource.includes("function isLiveSceneAgent(agent) {"));
+  assert.ok(layoutSource.includes('agent.source === "hermes" && agent.sourceKind === "hermes:roaming"'));
+  assert.ok(layoutSource.includes('agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming"'));
   assert.ok(layoutSource.includes("return agent.isCurrent === true || agent.isOngoing === true || isRuntimeActiveLocalAgent(agent);"));
   assert.ok(layoutSource.includes("return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;"));
   assert.ok(layoutSource.includes("const liveAgents = snapshot.agents.filter(isLiveSceneAgent);"));
   assert.ok(layoutSource.includes("const seenAgentIds = new Set();"));
-  assert.match(
-    seatingSource,
-    /function isLiveSceneAgent\(agent\) {\n\s+if \(!agent \|\| agent\.source === "cloud" \|\| agent\.source === "presence"\) {\n\s+return false;\n\s+}\n\s+return shouldSeatAtWorkstation\(agent\) \|\| agent\.isCurrent === true(?: \|\| isRuntimeActiveLocalAgent\(agent\))?;\n\s+}/
-  );
+  assert.ok(seatingSource.includes('agent.source === "hermes" && agent.sourceKind === "hermes:roaming"'));
+  assert.ok(seatingSource.includes('agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming"'));
+  assert.ok(seatingSource.includes("return shouldSeatAtWorkstation(agent) || agent.isCurrent === true || isRuntimeActiveLocalAgent(agent);"));
+});
+
+test("runtime source renders projectless Hermes agents in a left-of-tower floating layer", () => {
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+  const styleSource = readClientSource("styles-source.ts");
+  const servedStyles = readClientSource("styles.css");
+
+  assert.ok(sceneSource.includes("function isFloatingOrchestratorAgent(agent) {"));
+  assert.ok(sceneSource.includes('agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming"'));
+  assert.equal(sceneSource.includes("floatingHermesSlotAt"), false);
+  assert.equal(sceneSource.includes("stableSceneSlotAssignments(snapshot.projectRoot, \"floating-hermes\""), false);
+  assert.ok(navigationSource.includes("function syncFloatingHermesAgents(projects, options = {})"));
+  assert.ok(navigationSource.includes('agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming"'));
+  assert.ok(navigationSource.includes("const HERMES_FLOATING_FINISHED_COOLDOWN_MS = 3000;"));
+  assert.ok(navigationSource.includes("function shouldRenderScreenFloatingHermesAgent(agent)"));
+  assert.ok(navigationSource.includes("if (isFinishedScreenFloatingHermesAgent(agent))"));
+  assert.ok(navigationSource.includes('rememberHermesAssignedRect(rects, "openclaw:" + threadId, rect);'));
+  assert.ok(navigationSource.includes("function hermesFloatingSlotLayout(entries)"));
+  assert.ok(navigationSource.includes("function hermesFloatingVelocityTilt(fromX, fromY, toX, toY)"));
+  assert.ok(navigationSource.includes("function syncHermesFloatingMotionStyle(node, key)"));
+  assert.ok(navigationSource.includes("function spawnHermesAssignedTransferGhosts(previousRects, projects, activeFloatingKeys = new Set(), options = {})"));
+  assert.ok(navigationSource.includes("options.viewportOnly === true"));
+  assert.ok(navigationSource.includes("const assignedRects = new Map(lastHermesAssignedScreenRects);"));
+  assert.ok(navigationSource.includes("rememberHermesAssignedRect(assignedRects, key, rect);"));
+  assert.ok(navigationSource.includes("lastHermesAssignedScreenRects = snapshotHermesAssignedScreenRects();"));
+  assert.ok(navigationSource.includes("spawnHermesAssignedTransferGhosts(assignedRects, latestOfficeMapProjects, activeFloatingHermesKeys, options || {});"));
+  assert.ok(navigationSource.includes("syncOfficeMapScenes(latestOfficeMapProjects, latestFloatingHermesProjects, { viewportOnly: true });"));
+  assert.ok(navigationSource.includes("syncFloatingHermesAgents(latestFloatingHermesProjects.length > 0 ? latestFloatingHermesProjects : latestOfficeMapProjects"));
+  assert.ok(uiSource.includes("void syncOfficeMapScenes(displayedProjects, rawProjects);"));
+  assert.ok(sceneSource.includes("&& !isFloatingOrchestratorAgent(agent)"));
+  assert.ok(styleSource.includes(".hermes-float-layer"));
+  assert.ok(styleSource.includes(".hermes-float-agent.is-transfer"));
+  assert.ok(styleSource.includes("@keyframes hermes-float-hover"));
+  assert.ok(servedStyles.includes(".hermes-float-layer"));
+  assert.ok(servedStyles.includes(".hermes-float-agent.is-transfer"));
+  assert.ok(servedStyles.includes("@keyframes hermes-float-hover"));
+  assert.ok(servedStyles.includes("position: fixed;"));
 });
 
 test("toast renderer keeps the message, file-change, and command toast classes and chrome", () => {

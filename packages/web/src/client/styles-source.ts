@@ -980,6 +980,173 @@ export const CLIENT_STYLES = `
         transform: translate(-50%, 4px);
       }
 
+      .hermes-float-layer {
+        position: fixed;
+        inset: 0;
+        z-index: 390;
+        pointer-events: none;
+        overflow: visible;
+      }
+
+      .hermes-float-agent {
+        position: fixed;
+        left: 0;
+        top: 0;
+        pointer-events: auto;
+        z-index: 391;
+        image-rendering: pixelated;
+        transition:
+          transform 760ms cubic-bezier(0.16, 0.86, 0.22, 1),
+          opacity 220ms linear;
+        will-change: transform, opacity;
+        transform-origin: 50% 72%;
+      }
+
+      .hermes-float-agent:hover,
+      .hermes-float-agent:focus-within {
+        z-index: 398;
+      }
+
+      .hermes-float-agent.is-departing {
+        pointer-events: none;
+        z-index: 389;
+      }
+
+      .hermes-float-agent.is-transfer {
+        pointer-events: none;
+        z-index: 392;
+        transition:
+          transform 1080ms cubic-bezier(0.18, 0.9, 0.22, 1),
+          opacity 260ms linear;
+      }
+
+      .hermes-float-visual {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        min-width: 52px;
+        min-height: 52px;
+        display: grid;
+        place-items: center;
+        transform: translate(-50%, -50%);
+        transform-origin: 50% 74%;
+        animation: hermes-float-hover var(--hermes-float-duration, 2800ms) ease-in-out var(--hermes-float-delay, -600ms) infinite;
+        filter: drop-shadow(2px 3px 0 rgba(0,0,0,0.28));
+      }
+
+      .hermes-float-agent.is-transfer .hermes-float-visual {
+        animation: none;
+      }
+
+      @keyframes hermes-float-hover {
+        0%, 100% {
+          transform: translate(-50%, -50%) translate3d(var(--hermes-float-sway-left, -4px), var(--hermes-float-bob-down, 5px), 0);
+        }
+        34% {
+          transform: translate(-50%, -50%) translate3d(var(--hermes-float-sway-right, 6px), var(--hermes-float-bob-up, -10px), 0);
+        }
+        67% {
+          transform: translate(-50%, -50%) translate3d(1px, var(--hermes-float-bob-down, 5px), 0);
+        }
+      }
+
+      .hermes-float-visual::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 52%;
+        width: 52px;
+        height: 25px;
+        border: 1px solid rgba(112, 231, 194, 0.32);
+        border-radius: 50%;
+        background: rgba(37, 95, 83, 0.18);
+        transform: translate(-50%, -50%);
+      }
+
+      .hermes-float-avatar {
+        position: relative;
+        z-index: 2;
+        display: block;
+        object-fit: contain;
+        image-rendering: pixelated;
+      }
+
+      .hermes-float-initial {
+        position: relative;
+        z-index: 2;
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border: 2px solid rgba(112, 231, 194, 0.66);
+        background: rgba(8, 20, 18, 0.9);
+        color: var(--brand-hermes);
+        font-weight: 800;
+      }
+
+      .hermes-float-bubble {
+        position: absolute;
+        right: -5px;
+        top: -5px;
+        z-index: 3;
+        padding: 0 4px 2px;
+        border: 1px solid rgba(112, 231, 194, 0.62);
+        background: rgba(7, 18, 16, 0.92);
+        color: var(--brand-hermes);
+        font-size: 9px;
+        line-height: 1;
+      }
+
+      .hermes-float-trigger {
+        position: absolute;
+        inset: -8px;
+        z-index: 4;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+
+      .hermes-float-agent .hermes-float-hover {
+        left: calc(100% + 10px);
+        top: -8px;
+        bottom: auto;
+        width: min(340px, calc(100vw - 86px));
+        min-width: 250px;
+        max-width: 340px;
+        padding: 8px 10px;
+        font-size: calc(15px * var(--ui-text-scale));
+        line-height: 1.35;
+        transform: translate(-4px, 0);
+      }
+
+      .hermes-float-agent .hermes-float-hover .agent-hover-title {
+        font-size: calc(16px * var(--ui-text-scale));
+        margin-bottom: 4px;
+      }
+
+      .hermes-float-agent .hermes-float-hover .agent-hover-title strong {
+        font-size: calc(17px * var(--ui-text-scale));
+        line-height: 1.1;
+      }
+
+      .hermes-float-agent .hermes-float-hover .agent-hover-summary {
+        font-size: calc(13px * var(--ui-text-scale));
+        line-height: 1.35;
+      }
+
+      .hermes-float-agent .hermes-float-hover .agent-hover-meta {
+        margin-top: 5px;
+        font-size: calc(12px * var(--ui-text-scale));
+      }
+
+      .hermes-float-agent:hover .hermes-float-hover,
+      .hermes-float-agent:focus-within .hermes-float-hover {
+        opacity: 1;
+        transform: translate(0, 0);
+      }
+
       .office-map-thread-card {
         position: absolute;
         top: 42px;
