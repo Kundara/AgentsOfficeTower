@@ -30,19 +30,23 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](./integrati
 
    `~/.claude/projects/*.jsonl` is a usable secondary source for project discovery and recent Claude activity. It is not equivalent to Codex app-server: the data is transcript-like and requires inference. That makes it suitable as a best-effort adapter layer, not as the primary truth source.
 
-4. OpenClaw gateway sessions
+4. Claude Agent View background jobs
+
+   Claude Code Agent View persists background-session state under `~/.claude/jobs/<id>/state.json`. Agents Office treats that as a passive typed source for read-only background Claude rows and project-floor discovery. It is still weaker than Codex app-server because the documented state file is for Agent View rows, not a complete live event stream or workflow-subagent protocol.
+
+5. OpenClaw gateway sessions
 
    OpenClaw exposes an official Gateway control plane with agent-scoped sessions, session hierarchy, system presence, and agent workspace config. The current adapter treats that as a typed secondary source for session and workspace visibility, then maps configured agent workspaces back onto discovered office projects.
 
-5. Cursor cloud agents
+6. Cursor cloud agents
 
    Cursor exposes an official cloud-agent API with account-level agent status, target URLs, conversation history, webhooks, and model listing. The current adapter matches those agents back onto the selected project through normalized git remote URLs plus PR-backed repository URLs, so it is official and typed, but still weaker than Codex local app-server visibility.
 
-6. Per-project room config
+7. Per-project room config
 
    Each project can define its own spatial hierarchy in a saved `rooms.xml` file under Agents Office user data, keyed by project root. Rooms map to directory prefixes so the same session can move between rooms as its working files change. Legacy project-local `.codex-agents/rooms.xml` files are still readable as a fallback.
 
-7. Per-project appearance roster
+8. Per-project appearance roster
 
    New sessions get a deterministic random appearance. Overrides are stored in the matching per-project `agents.json` under Agents Office user data, which locks their look until changed.
 
@@ -172,7 +176,9 @@ Sources:
   - auto-generated room activity based on the currently mapped agent set
   - repeated workstation rows for repeated Codex agent roles
   - agent-anchored file-change notifications for current agents, showing filename-first copy and available `+/-` line deltas
-  - shared fleet-only sky backdrop with parallax pixel-cloud layers behind the tower, while individual rooms no longer paint their own cloud mural
+- shared fleet-only sky backdrop with parallax pixel-cloud layers behind the tower, while individual rooms no longer paint their own cloud mural
+- projectless Hermes orchestrators render in that sky as fixed screen-space avatars on the left edge, so they stay outside the building and ignore vertical tower scroll until they regain a workspace desk
+- Hermes identity handoff is screen-space when it crosses floor ownership: the fixed layer animates desk-to-sky, sky-to-desk, and known-floor-to-known-floor transfer ghosts from measured DOM hit rects while the Pixi room scenes keep owning settled desk avatars
 - hover/session detail surfaces for longer text instead of large scene overlays, while local Codex agents can now open a compact right-edge floor chat panel for recent typed history without routing through the session panel first
 - when a scene-native thread card is open, map hover tooltips are suppressed until the card closes so the reply/history surface does not fight for the same space; resting agents stage slightly left/down while their chat is open, and successful sends create a short desk-work intent until official live state catches up
 - the scene chat panel is reconciled by stable thread/message keys instead of being recreated on every fleet refresh, so live text updates do not replay the panel slide-in; only newly appended message bubbles get the short bottom-stack animation, and a bottom-scrolled history stays pinned to the newest content
@@ -411,6 +417,7 @@ Claude support uses a deliberately weaker contract than Codex:
 - Codex fleet startup also seeds workspace discovery from configured roots in `~/.codex/config.toml`, so trusted Codex projects can appear before their first visible thread update
 - when the Anthropic Agent SDK is available, Claude project discovery prefers `listSessions()` and per-session `cwd` metadata before falling back to raw directory scanning
 - Claude project discovery also reads fresh Agent Teams config under `~/.claude/teams`, using teammate `worktreePath` / `cwd` values as cowork project floors
+- Claude project discovery also reads Agent View background job state under `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json`, maps `<project>/.claude/worktrees/*` jobs back onto the owning project floor, and renders matching jobs as read-only `claude:background` agents with `claude attach <job>` resume commands
 - Claude project discovery also reads Claude Desktop Co-work app data under `local-agent-mode-sessions`, using `spaces.json` folders and per-session `userSelectedFolders` as Co-work project floors
 - the snapshot builder can include recent Claude sessions for matching project roots
 - recent Claude session messages can now be read through the supported Agent SDK `getSessionMessages()` API before falling back to raw JSONL transcript sampling
@@ -421,6 +428,8 @@ Claude support uses a deliberately weaker contract than Codex:
 - hook records with `agent_id` and team records with `leadSessionId` now create child Claude agents through the shared `parentThreadId` hierarchy, while transcript-only delegation still preserves weaker Claude provenance/confidence
 - the same Agent SDK sidecar bridge can now hold `PermissionRequest` and `Elicitation` hooks open while the browser writes a response file under the same project-scoped user-data area, then return the official hook decision back to Claude
 - the browser `Needs You` queue can now answer hook-backed Claude approval waits and schema-backed elicitation forms when the sidecar record came from that Agent SDK bridge
+- Claude Code dynamic workflows and `ultracode` are tracked as a research-preview boundary: they can orchestrate many subagents, but no stable local workflow run-state API is consumed here yet
+- Claude Code OpenTelemetry export is the current official protocol candidate for hookless tool/model/subagent activity because it emits logs/traces with session and agent attributes, but Agents Office does not yet host an OTLP collector
 - Claude agents are rendered in the same room model, but with explicit provenance/confidence so transcript inference and hook-backed state do not pretend to have Codex-grade app-server coverage
 
 This is useful because it broadens observability across the machine, but it should remain visually and architecturally secondary to the official Codex path.
@@ -455,8 +464,9 @@ OpenClaw support uses the official Gateway session model instead of trying to re
 
 - the adapter connects to the OpenClaw Gateway when `OPENCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` is configured
 - it reads typed session rows from `sessions.list` and typed workspace config from `config.get`
-- it maps OpenClaw agent workspaces onto office projects by normalized workspace path equality
+- it maps OpenClaw agent workspaces onto office projects by normalized workspace path equality or child-path containment under the project root
 - parent and child OpenClaw sessions are carried through `parentThreadId` and depth so delegated session trees stay visible
+- active OpenClaw sessions whose configured workspace is outside the current fleet project set attach as `openclaw:roaming` agents and use the same fixed screen-space sky layer, desk handoff, and cross-floor transfer motion as projectless Hermes orchestrators
 - the current integration is read-only and surfaces session/workspace presence, not OpenClaw action controls
 
 This keeps OpenClaw aligned with its real abstraction boundary, which is sessions inside configured agent workspaces rather than project tasks.
@@ -470,6 +480,7 @@ Hermes support follows the local runtime surfaces exposed by `nousresearch/herme
 - it uses live process cwd/env hints such as `HERMES_CWD`, `TERMINAL_CWD`, and `HERMES_HOME` when a Hermes CLI or TUI process is still running
 - it treats a Hermes session id as the stable agent and lets that agent move floors based on the latest project-bearing hook or DB activity
 - hook-only streams such as `default`, `process-<pid>`, and UUID tool/task files are activity sidecars, not agents; they are folded into the nearest durable SQLite session by explicit ids, platform/cwd hints, and recent timing
+- Hermes cron run ids such as `cron_<job>_<timestamp>` and SQLite sessions with `source = cron` render as temporary Hermes agents on the relevant project floor, using compact project tick labels and stripping the scheduler wrapper prompt from current-action text
 - Hermes command, process-management, planning, file-change, and MCP/tool hook events update `detail`, `activityEvent`, toasts, and session history; they do not replace `latestMessage`, which stays on the latest useful Hermes assistant/subagent text
 - Hermes hook `user_message` values can still seed session labels and user-message history, but they must not populate the agent `latestMessage` field because the map renders that field as agent speech
 - Hermes tool classification follows Hermes' registered/displayed tool vocabulary: `todo` maps to planning, `process`/`terminal`/`execute_code` map to command activity, `read_file`/`search_files`/`skill_view` map to scanning tool activity, and only Hermes' mutating file tools (`write_file` and `patch`) map to file edits
@@ -478,7 +489,9 @@ Hermes support follows the local runtime surfaces exposed by `nousresearch/herme
 - it maps work to projects by normalized cwd, system-prompt working directory, tool paths, payload paths, and git-root discovery rather than matching project names
 - it contributes project discovery roots only from a live Hermes process cwd or the latest current root of a fresh hook session, so old `state.db` history and the full set of touched hook paths cannot create floors
 - exact transient system roots such as `/tmp`, `/var/tmp`, and `/dev/shm` are not promoted into fleet workspaces, even if temporary hook cwd data or a stray `.git` directory makes them look project-like
-- hook sessions outside the current fleet project set are attached to an existing tower floor as floating `hermes:roaming` agents instead of creating new floors
+- hook sessions outside the current fleet project set are attached to the tower as `hermes:roaming` agents, but the browser renders them in a fixed left-side sky layer outside the building rather than inside any room scene
+- hook-backed Hermes project matching keeps the last project through 20 rootless hook actions; after that, the same session is treated as projectless until a new project-bearing hook path or cwd appears
+- the browser keeps the server contract simple here: `hermes:roaming` and `openclaw:roaming` remain attached to existing snapshots for fleet transport, while `syncFloatingHermesAgents(...)` pulls those orchestrators into the screen-space layer and keeps them out of rec-room placement
 - SQLite session exports, hook scan counts, hook file tails, hook line size, and request JSON bodies are bounded so Hermes history and sidecar payloads cannot grow the live web process without limit
 - the current integration is read-only; plugin-hook activity renders with `confidence = typed`, while SQLite/process fallback activity renders with `confidence = inferred`
 

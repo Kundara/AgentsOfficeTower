@@ -33,9 +33,21 @@
   Useful contrast with the Agent SDK: model API wrappers, not Claude Code session observability.
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
   Official hook lifecycle and input schema for `PermissionRequest`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, and related events.
+- [Claude Code dynamic workflows](https://code.claude.com/docs/en/workflows)
+  Official `workflow` / `ultracode` reference for script-orchestrated workflow runs, `/workflows` progress, agent limits, and workflow cost/permission behavior.
+- [Introducing dynamic workflows in Claude Code](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code)
+  Launch context for `ultracode`, workflow fan-out across subagents, confirmation prompts, resumable progress, and higher usage expectations.
+- [Claude Code Agent View](https://code.claude.com/docs/en/agent-view)
+  Official background-session reference for `claude agents`, `~/.claude/jobs/<id>/state.json`, and the local supervisor model.
+- [Claude Code monitoring](https://code.claude.com/docs/en/monitoring-usage)
+  Official OpenTelemetry reference for Claude Code logs, traces, tool events, and subagent span attributes such as `agent_id`, `parent_agent_id`, and `subagent_type`.
 - [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams)
   Product and workflow reference for Claude team leads, teammates, team names, and cowork/project behavior.
-- [Automate workflows with hooks](https://code.claude.com/docs/en/automate-workflows-with-hooks)
+- [Run agents in parallel](https://code.claude.com/docs/en/agents)
+  Official comparison of subagents, Agent View, Agent Teams, worktrees, and dynamic workflows.
+- [Claude Code monitoring / OpenTelemetry](https://code.claude.com/docs/en/monitoring-usage)
+  Official telemetry export reference for Claude Code metrics, log events, traces, and subagent-related span attributes such as `agent_id`, `parent_agent_id`, and `subagent_type`.
+- [Automate workflows with hooks](https://code.claude.com/docs/en/hooks-guide)
   Quickstart examples for wiring command hooks and project-local hook scripts.
 - [tanbiralam/claude-code source](https://github.com/tanbiralam/claude-code/tree/main/src)
   Implementation reference used to confirm current `agent_id` / `agent_type`, team config, teammate `sessionId`, and worktree metadata shapes; treat it as supporting evidence below official Claude docs, not a primary API contract.
@@ -50,7 +62,7 @@
 ## Hermes
 
 - [Hermes Agent repository](https://github.com/nousresearch/hermes-agent)
-  Primary upstream implementation for Hermes CLI/TUI behavior, local `~/.hermes/state.db` persistence, profile homes, and working-directory context handling.
+  Primary upstream implementation for Hermes CLI/TUI behavior, plugin hooks, cron-run sessions, local `~/.hermes/state.db` persistence, profile homes, and working-directory context handling.
 
 ## Cursor
 

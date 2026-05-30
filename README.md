@@ -11,7 +11,7 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 - **Live office map**: active agents sit at desks, blocked or waiting work is visible, and recent finished leads rest in the rec area.
 - **Fleet mode by default**: discovered Codex workspaces appear together, with optional focus on one project or worktree.
 - **Codex-first visibility**: local Codex app-server data, Codex CLI activity, cloud tasks, subagents, approvals, input waits, and typed events share one model.
-- **Hermes support**: durable Hermes sessions are read from `~/.hermes/state.db`, profile stores, live process hints, and optional hook sidecars; hook-only streams are folded into those sessions instead of becoming extra desk avatars.
+- **Hermes and OpenClaw support**: Hermes sessions come from durable state, live process hints, and optional hook sidecars, while OpenClaw sessions come from its Gateway; projectless Hermes and unmatched OpenClaw orchestrators hover in the left-side sky outside the tower instead of creating fake floors.
 - **CLI built in**: inspect snapshots, watch terminal views, launch the web server, or query the running tower from scripts.
 - **Repo-packaged skills**: Codex skills help agents run the tower CLI and coordinate with local or team workload data.
 - **Shared rooms**: sync agents across machines with PartyKit-backed rooms and per-project sharing controls.
@@ -31,10 +31,10 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 | --- | --- |
 | Codex local | Best support through `codex app-server`, CLI/runtime discovery, typed events, approvals, inputs, and subagents |
 | Codex cloud | Cloud task list through `codex cloud list --json` |
-| Claude | Local logs, Agent SDK session reads, hook-backed typed sidecars, subagent child rows from `agent_id`, Agent Teams cowork floors, and Claude Desktop Co-work project folders |
+| Claude | Local logs, Agent SDK session reads, hook-backed typed sidecars, subagent child rows from `agent_id`, Agent Teams cowork floors, Agent View background jobs, and Claude Desktop Co-work project folders |
 | Cursor | Local hook sidecars, workspace/log inference, and Cursor cloud agents |
 | Hermes | Durable `state.db` sessions, profile stores, live process cwd/env hints, and optional hook bridge sidecars folded into the matching session |
-| OpenClaw | Gateway sessions and config surfaces (untested) |
+| OpenClaw | Gateway sessions and config surfaces, with unmatched orchestrators rendered as fixed sky agents |
 | Shared rooms | Remote peer presence and agent snapshots from PartyKit rooms |
 
 ## Quick Start
@@ -85,9 +85,10 @@ They are designed for bounded visibility, not remote control. Skills can query t
 
 ## Optional Integrations
 
-- **Claude**: Claude sessions are read from the Agent SDK when available, then fall back to local project logs. Project-scoped hook sidecars can upgrade Claude sessions from inferred transcript state to typed state, including browser-answerable `PermissionRequest` / `Elicitation` waits and shared delegated-work events for Agent/Task and subagent hooks. Hook records with `agent_id` now appear as child agents under the lead Claude session, Agent Teams can add teammate child rows plus cowork/worktree floors, and Claude Desktop Co-work project folders can appear as read-only workspace floors.
+- **Claude**: Claude sessions are read from the Agent SDK when available, then fall back to local project logs. Project-scoped hook sidecars can upgrade Claude sessions from inferred transcript state to typed state, including browser-answerable `PermissionRequest` / `Elicitation` waits and shared delegated-work events for Agent/Task and subagent hooks. Hook records with `agent_id` now appear as child agents under the lead Claude session, Agent Teams can add teammate child rows plus cowork/worktree floors, Claude Agent View background jobs from `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json` can appear as read-only `claude:background` agents with `claude attach <job>` resume commands, and Claude Desktop Co-work project folders can appear as read-only workspace floors.
 
   Co-work support is intended to work across Windows, macOS, and Linux wherever Claude Desktop exposes the same local Co-work project data.
+  Dynamic workflows / `ultracode` can fan out many workflow-managed subagents, but Agents Office does not yet consume a stable workflow run-state file or subscription API. Workflow progress is visible through the owning Claude session and hook-derived task/subagent signals when those sidecars exist.
 
 - **Hermes**: install a user-level hook bridge:
 
@@ -95,7 +96,9 @@ They are designed for bounded visibility, not remote control. Skills can query t
   node packages/cli/dist/index.js agents link hermes
   ```
 
-  The command writes `~/.hermes/plugins/codex-agents-office`, enables it in `~/.hermes/config.yaml`, and records bounded Hermes lifecycle hooks into machine-local Agents Office storage. Normal workstation avatars still come from durable Hermes session ids; plugin streams such as `default`, `process-<pid>`, or tool-task UUIDs are activity sidecars. Hermes command, process, planning, file-edit, and MCP/tool hooks drive typed toasts, session history, and current action detail while the visible last message stays on Hermes assistant/subagent text rather than user prompts; read/search/skill-view tools stay scanning/tool activity instead of file edits.
+  The command writes `~/.hermes/plugins/codex-agents-office`, enables it in `~/.hermes/config.yaml`, and records bounded Hermes lifecycle hooks into machine-local Agents Office storage. Normal workstation avatars still come from durable Hermes session ids; plugin streams such as `default`, `process-<pid>`, or tool-task UUIDs are activity sidecars. Hermes sessions whose recent hook stream no longer points at a known workspace hover in the left-side sky until a project-bearing action seats them again; the last project relation expires after more than 20 rootless hook actions. Hermes cron sessions such as `cron_<job>_<timestamp>` render as temporary project tick agents. Hermes command, process, planning, file-edit, and MCP/tool hooks drive typed toasts, session history, and current action detail while the visible last message stays on Hermes assistant/subagent text rather than user prompts; read/search/skill-view tools stay scanning/tool activity instead of file edits.
+
+- **OpenClaw**: configure `OPENCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` to read the Gateway in read-only mode. Sessions whose configured agent workspace matches a known project root, including child paths under that root, sit at desks with OpenClaw parent/child structure preserved. Active sessions outside the known project set render as `openclaw:roaming` orchestrators in the same fixed left-side sky layer used for projectless Hermes, with screen-space desk handoffs and cross-floor transfer motion.
 
 - **Cursor**: this repo includes `.cursor/hooks.json` and `.cursor/hooks/capture-cursor-hook.mjs` for local hook sidecars. Cursor cloud visibility can use `CURSOR_API_KEY` or the browser settings flow.
 

@@ -36,7 +36,7 @@ A good iteration improves at least one of these:
 
 - Codex desktop session visibility is much stronger now, but desktop-backed observer attaches can still be slow enough to leave a restarted server temporarily read-only before subscription settles. The read-only fallback now preserves fresh `thread/list` timestamps when `thread/read` lags and uses fresh non-final local work events to keep active threads desk-seated, but subscription recovery should still be watched on restart.
 - Claude support still falls back to transcript inference when no project-scoped hook sidecars are configured in Agents Office user data.
-- OpenClaw support is currently workspace-path exact-match only, so broader OpenClaw workspaces do not yet project into per-repo office floors.
+- OpenClaw support now seats configured child workspaces under known project roots and floats unmatched active Gateway sessions as roaming orchestrators, but live Gateway validation should still watch for unexpected floor spam from broad harness roots.
 - Cursor local support is inferred from workspace storage and logs rather than coming from an official local session API, so it remains weaker and less explicit than Codex app-server visibility.
 - PixelOffice workstation composition still needs refinement and stricter prefab rules.
 - Most Codex event types now reach the snapshot as explicit events or diagnostic notes, and `npm run check:codex-protocol` catches app-server method drift, but many event categories still share the same notification/motion treatment.
@@ -59,8 +59,11 @@ A good iteration improves at least one of these:
 - verify Hermes discovery ignores exact transient system roots such as `/tmp`, `/var/tmp`, and `/dev/shm`, even when they contain temporary `.git` metadata
 - verify Hermes workstation agents use durable SQLite session ids and do not expose hook-only ids such as `hermes:default`, `hermes:process-<pid>`, or `hermes:<uuid>`
 - verify Hermes fleet reads stay bounded by checking `/api/fleet` response size and web-process memory after repeated refreshes against live hook files
-- verify out-of-workspace Hermes sessions appear only as floating `hermes:roaming` agents on an existing tower floor
+- verify out-of-workspace Hermes sessions appear only as floating `hermes:roaming` agents in the fixed left-side sky layer, not inside a floor scene
+- verify Hermes sessions leave a desk and become projectless after more than 20 rootless hook actions, then fly back from the sky layer when a known project root appears again
+- verify the same Hermes session moving between two known workspace floors creates a short fixed-layer transfer ghost between desk hit rects, without creating duplicate durable Hermes agents
 - verify active Hermes command/tool sessions keep the command or tool in `detail` / `activityEvent` while `latestMessage` remains Hermes assistant/subagent text only, not the user prompt or command text
+- verify Hermes cron runs appear as temporary `hermes:cron` agents with compact project tick labels, not raw cron ids or scheduled-job wrapper prompts
 - verify long Hermes hook streams still retain enough recent context to recover earlier conversation text after many tool calls
 - verify generic Hermes maintenance prompts do not replace the prior useful message in hover cards, session cards, or `web query` output
 - when validating Hermes fleet behavior, inspect `/api/server-meta` and `/api/fleet` with short timeouts and stop the listener immediately if unexpected workspace floors spike
@@ -126,8 +129,11 @@ A good iteration improves at least one of these:
 - verify hook-backed Claude `Elicitation` waits render schema-backed questions, ignore optional unanswered fields, and clear immediately after browser submit
 - verify Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records produce shared delegated-work activity and `subagent` dashboard events while preserving Claude provenance
 - verify Claude hook records with `agent_id` create child agent rows under the lead Claude session, and that Agent Teams config files create teammate child rows plus cowork/worktree project floors
+- verify Claude Agent View background jobs under `~/.claude/jobs/*/state.json` appear as read-only `claude:background` agents and workspace floors without requiring project hooks
 - verify Claude Desktop Co-work projects under `local-agent-mode-sessions` appear as workspace floors with read-only Claude agents and recent detected-file activity
-- verify OpenClaw gateway sessions appear only for projects whose normalized root matches the configured OpenClaw agent workspace
+- verify Claude Code `2.1.154+` dynamic workflow / `ultracode` runs with a real `/workflows` sample before claiming workflow-subagent coverage; if no stable state file exists, prototype an OpenTelemetry collector instead of expanding transcript scraping
+- verify OpenClaw gateway sessions appear on desks only when the configured agent workspace equals a known project root or sits under it
+- verify unmatched active OpenClaw harness/orchestrator sessions appear as `openclaw:roaming` avatars in the fixed left-side sky layer, stay out of room/rec placement, and animate desk/sky or cross-floor handoffs without duplicate agents
 - verify OpenClaw sessions preserve parent-child structure through the shared `parentThreadId` hierarchy
 - verify inferred local Cursor sessions appear for repos that Cursor has opened locally and are marked as inferred in hover/session detail
 - verify Cursor hook-backed local sessions are visibly marked as typed when the matching project-scoped Cursor hook sidecar exists in Agents Office user data
@@ -139,7 +145,7 @@ A good iteration improves at least one of these:
 - keep extending the typed event-to-scene mapping beyond the current turn badges, cue chips, workstation pulses, request-structure signatures, and Ops Wall summaries
 - keep tightening browser action affordances around typed local Codex waits, especially richer queue UX for multi-question inputs
 - decide whether Cursor hook sidecars should also capture `beforeReadFile` and Tab-specific events or stay focused on Agent-only workload visibility
-- decide whether OpenClaw needs broader workspace containment rules beyond exact workspace-root equality
+- decide whether OpenClaw needs provider-specific harness/root discovery beyond the current workspace containment plus roaming-orchestrator behavior
 - tighten the workstation prefab using only the intended PixelOffice station slices
 - improve side-facing avatar placement and interaction poses
 - refine empty-room presentation

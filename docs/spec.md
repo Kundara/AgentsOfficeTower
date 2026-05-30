@@ -299,7 +299,12 @@ Global text scale rules:
 - Fleet startup should include configured Codex workspaces from `~/.codex/config.toml` when available, not only workspaces that already emitted recent local thread activity.
 - Fleet mode should hide autodiscovered workspaces once their last session timestamp is more than 7 days old.
 - Claude Desktop Co-work spaces should become workspace floors from `local-agent-mode-sessions` when their saved folder roots are still present locally.
+- Claude Desktop Co-work-only floors should sort after normal workspaces so primary coding projects stay first in the tower.
 - Hermes-discovered workspaces should come only from a live Hermes process cwd or the latest current root of a fresh hook session; durable DB history, broad hook path sweeps, and exact transient roots such as `/tmp` must not create floors.
+- Hermes hook-backed project relation should persist through 20 rootless hook actions; after more than 20 actions without a known project root, the same Hermes session should become projectless until a new project-bearing path or cwd appears.
+- OpenClaw workspace matching should seat sessions when the configured agent workspace is the known project root or a child path under that root. Active OpenClaw sessions outside the known fleet project set should become `openclaw:roaming` orchestrators instead of creating fake floors.
+- Projectless Hermes sessions and roaming OpenClaw sessions should render as `hermes:roaming` / `openclaw:roaming` avatars in a fixed screen-space sky layer on the left outside the building. They should ignore vertical tower scroll, use deterministic non-colliding scatter for multiple floating orchestrators, and stay visually separate from room-scene rec/resting agents.
+- Hermes and OpenClaw movement between project states should preserve identity motion: desk-to-floating moves from the previous desk rect into the sky layer, floating-to-desk flies from the current screen-space avatar to the desk hit target, and known-project-to-known-project moves should create a short screen-space transfer ghost between the old and new desk rects.
 - The selected workspace changes browser focus only; it does not change the monitor set.
 - `/api/server-meta` must report the live bound fleet project set, not only startup seed projects.
 
@@ -314,6 +319,7 @@ Worktree identity rules:
 - Hermes hook user prompts should not be copied into `latestMessage`, because hover cards and the room scene render `latestMessage` as Hermes speech. Prompts can still appear as user-message history or session labels.
 - Hermes tool activity should preserve Hermes' own tool meanings: `todo` should look like planning, `read_file`/`search_files`/`skill_view` should look like scanning/tool activity, and only `write_file`/`patch` should count as file edits.
 - If a Hermes session has only command/tool activity and no visible prompt or assistant reply, hover should show a state summary such as `Running` plus the action row; it should not fabricate the command text as the last message.
+- Hermes cron sessions should appear as temporary project tick agents while active or recently done. Their raw `cron_<job>_<timestamp>` ids and scheduled-job wrapper prompts should not become avatar labels or current-action text.
 - Generic Hermes maintenance prompts such as skill-library review prompts should not overwrite the previous real message in hover cards or session panels.
 
 ### Shared-room behavior

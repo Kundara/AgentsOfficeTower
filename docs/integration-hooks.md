@@ -550,6 +550,7 @@ What we read:
 
 - `listSessions()` from `@anthropic-ai/claude-agent-sdk` when available
 - `~/.claude/projects/*/*.jsonl`
+- `$CLAUDE_CONFIG_DIR/jobs/*/state.json`, falling back to `~/.claude/jobs/*/state.json`, for Claude Code Agent View background sessions
 - Claude Desktop Co-work app data under `local-agent-mode-sessions`, including `spaces.json` and recent `local_*.json` session files
 
 How we use it:
@@ -559,6 +560,7 @@ How we use it:
 - fall back to sampling the head and tail of each log when the SDK path is unavailable
 - infer the project root from session `cwd`
 - add Co-work `spaces[].folders[].path` and session `userSelectedFolders` paths as workspace floors
+- add Agent View background job project roots as workspace floors with `sourceKind = claude:background`; jobs running under `<project>/.claude/worktrees/*` are grouped back to `<project>`
 - merge Claude-discovered roots into workspace discovery
 
 ### Claude session sampling
@@ -569,12 +571,14 @@ What we read:
 - recent JSONL records from the head and tail of each session file as fallback
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl`
 - Claude Agent Teams config files under `~/.claude/teams/*/config.json`
+- Claude Agent View background session state under `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json`
 - Claude Desktop Co-work session files under `local-agent-mode-sessions/**/local_*.json`
 - record timestamps
 - message model names
 - `cwd`
 - teammate `cwd` / `worktreePath`
 - Co-work `spaceId`, `title`, `initialMessage`, `lastActivityAt`, `userSelectedFolders`, and `fsDetectedFiles`
+- background job `sessionId`, `cwd`, `name`, `prompt`, state/status text, activity summary, and timestamps when present
 - `gitBranch`
 
 How we use it:
@@ -587,6 +591,8 @@ How we use it:
 - assign the Claude `sessionId` to the normalized `threadId` field so browser event matching can treat Claude like other tracked sessions
 - derive child Claude agents from hook `agent_id` and Agent Teams `leadSessionId` / teammate metadata when those typed identifiers are available
 - add teammate `worktreePath` or `cwd` values to Claude project discovery so cowork/team workspaces can appear as floors
+- add Agent View background jobs as read-only `claude:background` agents keyed by the Claude session id when available, otherwise by the background job id
+- expose `claude attach <job>` as the read-only resume command for those rows
 - add Claude Desktop Co-work project folders as floors and show matching Co-work local-agent sessions as read-only Claude agents
 - assign an appearance and render it as a `claude` agent
 
@@ -609,6 +615,34 @@ How Agents Office uses it:
 - recent `fsDetectedFiles` entries become file-change activity for hover cards, session history, and file-change surfaces
 - state is freshness-based because this local store does not expose a Codex-style live thread protocol
 - this is treated as observed local app state rather than an official Claude API contract
+
+### Claude Agent View background jobs
+
+Claude Code Agent View (`claude agents`) keeps a local supervisor roster and per-job state for background sessions. The documented useful path for Agents Office is `$CLAUDE_CONFIG_DIR/jobs/<id>/state.json`, falling back to `~/.claude/jobs/<id>/state.json`.
+
+What Agents Office reads from that store:
+
+- bounded scans of `$CLAUDE_CONFIG_DIR/jobs/*/state.json` and `~/.claude/jobs/*/state.json`
+- flexible background session metadata such as `sessionId`, `cwd`, `name`, `prompt`, `status`, `state`, `currentActivity`, `summary`, `createdAt`, and `updatedAt`
+
+How Agents Office uses it:
+
+- matching jobs become read-only Claude agents with `sourceKind = claude:background`
+- if the job exposes a Claude session id, that id is reused for the normalized lead-agent row so background state can merge with Agent SDK/transcript state
+- project roots from explicit project/workspace fields, workspace-root arrays, or `<project>/.claude/worktrees/*` paths become workspace floors in fleet mode
+- `claude attach <job>` becomes the row's resume command, but the browser still treats the row as read-only and does not send generic replies into Claude
+- state is mapped into the common activity model (`running`, `waiting`, `blocked`, `done`, or `idle`) from the job status/activity text and freshness
+- this path does not expose the subagents running inside a foreground session, and it is not a workflow progress API
+
+### Claude dynamic workflows and protocol boundary
+
+Claude Code dynamic workflows / `ultracode` are a separate research-preview surface. Official docs describe workflow scripts that coordinate dozens to hundreds of subagents, `/workflows` progress UI with phases, token totals, agent prompts/tool calls/results, and `ultracode` as `xhigh` effort plus automatic workflow orchestration.
+
+Agents Office does not currently consume a stable workflow run-state file or app-server-like API for that progress view. Hook sidecars remain the strongest implemented live path for local Claude subagent hierarchy today. The best official hookless protocol candidate is Claude Code OpenTelemetry export:
+
+- `OTEL_LOGS_EXPORTER` can export structured prompt, API, tool, permission, MCP, hook, compaction, skill, and other events
+- trace spans include `agent_id`, `parent_agent_id`, and `subagent_type` attributes for subagent/model/tool correlation
+- an Agents Office OTLP collector would be needed before this can replace hook sidecars for passive live workflow/subagent observability
 
 ### Official Claude hook surface
 
@@ -663,6 +697,8 @@ Current Claude transcript inference rules:
 | latest user text newer than latest assistant text | `planning` | planning summary |
 | recent assistant text | `thinking` | message summary, optional recent update notification |
 | older assistant text | `done` then `idle` | finished or idle state |
+
+Transcript inference is strictly timestamp-driven. Untimestamped metadata rows such as title or last-prompt updates do not refresh an old tool call, tool-result payloads do not become new user prompts, and a later assistant final reply wins over earlier `tool_use` records.
 
 ### Claude hook event rules
 
@@ -721,6 +757,7 @@ What Claude still does not provide here:
 - Codex-style resume/open command
 - Codex app-server style live push stream into this process without a user-configured hook bridge
 - a complete Codex-grade hierarchy for every child; hook `agent_id`, teammate `sessionId`, and team `leadSessionId` now provide typed hierarchy where available, while transcript-only delegation remains weaker
+- a stable documented local state file or API for `/workflows` phase/agent progress; Agent View jobs are visible, but workflow-managed subagents still need hooks or a future OpenTelemetry collector
 - a general thread-steer/reply API comparable to Codex app-server, so Claude session cards are still read-only even though hook-backed approval/input waits are now actionable
 
 ## OpenClaw Gateway Sessions
@@ -744,7 +781,8 @@ How we use it:
 - read configured agent workspace roots from `config.get`
 - read agent identities from `agents.list`
 - read typed session rows, parent links, timestamps, and previews from `sessions.list`
-- match OpenClaw workspaces onto the current office project by normalized workspace-path equality
+- match OpenClaw workspaces onto the current office project by normalized workspace-path equality or child-path containment under the project root
+- attach active sessions outside known fleet project roots as `sourceKind = openclaw:roaming` agents, so harness/orchestrator work floats instead of creating fake floors
 - map OpenClaw parent/child session structure into `parentThreadId` and depth instead of flattening it into project tasks
 
 ### Official OpenClaw surface
@@ -768,8 +806,15 @@ How this project uses that surface:
 - keeps the integration read-only
 - renders OpenClaw sessions with `confidence = typed`
 - discovers OpenClaw-backed workspace floors only from active recent sessions, not from guessed local transcript files
+- renders unmatched active OpenClaw orchestrators in the shared fixed left-side sky layer, with the same screen-space desk handoffs and cross-floor transfer ghost behavior used for projectless Hermes
 
 ### OpenClaw state mapping
+
+Operational validation:
+
+- `GET /api/fleet` should show assigned OpenClaw sessions on a project floor when their configured workspace equals the project root or sits underneath it
+- `GET /api/fleet` may show unmatched active OpenClaw sessions as `source = openclaw`, `sourceKind = openclaw:roaming`, attached to an existing snapshot for transport; the web client should render them in the fixed sky layer, not in a room or rec area
+- OpenClaw movement from roaming to an assigned floor, assigned floor to roaming, or one known floor to another should animate through screen-space rect handoffs without duplicating the durable OpenClaw session
 
 | OpenClaw signal | State | Representation |
 | --- | --- | --- |
@@ -803,6 +848,7 @@ How we use it:
 - write `codex-agents-office.status.json` in the hook output directory when the plugin registers or hits a record/register error, so gateway load state can be verified without waiting for a Hermes tool call
 - treat `hermes:<session-id>` as the stable agent identity across project floors
 - keep Hermes SQLite session ids as the only normal workstation agents; hook-only ids such as `default`, `process-<pid>`, and UUID task/tool streams are folded into the nearest durable Hermes session by direct session id, payload session id, platform, cwd, and time window instead of creating separate avatars
+- treat Hermes cron run ids such as `cron_<job>_<timestamp>` and SQLite rows with `source = cron` as temporary Hermes agents (`role = temporary`, `sourceKind = hermes:cron`) with compact project tick labels instead of raw scheduler prompts or raw cron ids
 - treat fresh `ended_at IS NULL` Hermes gateway sessions as current open work, even after the latest assistant reply, so the still-open main session stays desk-visible instead of only contributing activity history
 - treat Hermes compression-continuation children as the lead session, matching Hermes' own latest-descendant/session-list behavior, instead of rendering them as subagents under the compressed parent
 - keep Hermes `latestMessage` tied to the latest useful assistant/subagent conversation text; terminal commands, process-management calls, file changes, MCP calls, dynamic tool calls, and user prompts update `detail`, labels, typed events, and toasts/history instead of becoming the visible agent-speech message
@@ -811,13 +857,15 @@ How we use it:
 - decode Hermes tool hooks through Hermes' own registry/display semantics: `todo` is planning, `read_file`/`search_files`/`skill_view` are scanning tool activity, and only `write_file`/`patch` are file-edit activity
 - ignore generic Hermes maintenance prompts, including skill-library review prompts, when choosing display message text so they do not replace the prior real conversation message
 - prefer the latest project-bearing hook payload paths over Hermes process cwd when deciding which floor the session currently belongs on
+- keep that project relation through 20 rootless hook actions; after more than 20 actions with no known project root, the Hermes session becomes projectless/roaming until a new project-bearing hook path or cwd appears
 - use `system_prompt` working-directory text, live `HERMES_CWD` / `TERMINAL_CWD`, tool path arguments, and absolute paths in messages to associate work with a project
 - seat stored Hermes DB sessions on one current floor, chosen from the live process cwd when present or the latest project-bearing message path, instead of duplicating the same session across every historical project path
 - resolve discovered paths up to a git root when possible so nested file activity still seats on the repo floor
 - contribute fleet project discovery only from live Hermes process cwd roots and the latest current root of fresh hook sessions; Hermes database history and older hook path candidates are not broad-discovered into floors
 - ignore exact transient system roots such as `/tmp`, `/var/tmp`, and `/dev/shm` during project discovery, even if a temporary `.git` directory or hook cwd points there
 - ignore the Hermes gateway/runtime source checkout when it is discovered through Hermes' own adapter, so the running gateway does not create an empty `hermes-agent` floor
-- attach hook sessions whose latest activity is outside known workspace floors to the tower as `sourceKind = hermes:roaming` floating agents rather than creating new floors
+- attach hook sessions whose latest activity is outside known workspace floors to the tower as `sourceKind = hermes:roaming` agents rather than creating new floors; the browser renders those agents in the fixed left-side sky outside the building, with deterministic screen-space scatter and measured-rect handoff motion back to desks when the project relation returns
+- when the same durable Hermes session moves from one known workspace root to another, keep the server representation as one current-floor agent and let the browser show a short fixed-layer transfer ghost from the old desk hit rect to the new desk hit rect
 - map Hermes parent session ids into `parentThreadId` when present
 - keep browser actions read-only because Hermes does not expose an Agents Office-owned steering or approval channel here
 
@@ -833,8 +881,9 @@ The plugin writes observation sidecars and returns `None`; transform hooks are r
 Operational validation:
 
 - `GET /api/server-meta` may include a Hermes-discovered floor only when it comes from a live process cwd or a fresh hook session's latest current project root
-- `GET /api/fleet` may include `source = hermes` agents on matching floors, or `sourceKind = hermes:roaming` agents attached to an existing floor when the hook session is outside known workspace roots
+- `GET /api/fleet` may include `source = hermes` agents on matching floors, or `sourceKind = hermes:roaming` agents attached to an existing floor when the hook session is outside known workspace roots; the web client should show roaming Hermes in the sky layer, not inside a room, and should animate transitions using screen-space DOM hit rects rather than adding fake project/floor agents
 - `GET /api/fleet` should show durable ids like `hermes:20260515_...` or `hermes:cron_...`; it should not show hook-only ids such as `hermes:default`, `hermes:process-<pid>`, or `hermes:<uuid>`, including in roaming agents
+- `GET /api/fleet` should show Hermes cron runs as temporary `sourceKind = hermes:cron` agents while they are active or recently done; their `detail` / `activityEvent` should not expose the scheduler wrapper prompt
 - active Hermes command/process/planning/tool sessions should expose the command, process action, planning update, or tool in `detail` / `activityEvent`, while `latestMessage` remains either prior Hermes assistant/subagent text or `null`; a command string such as `sleep 75` should not appear as the agent's last message
 - the hook output directory should contain `codex-agents-office.status.json` with `status_event_name = registered` and the current gateway pid after Hermes reloads the plugin
 - if a Hermes validation run starts producing many unexpected workspace floors, stop the web listener immediately and inspect project discovery before restarting it; do not reintroduce DB-history or all-path hook sweeps as discovery inputs
@@ -844,6 +893,7 @@ Operational validation:
 | Hermes signal | State | Representation |
 | --- | --- | --- |
 | latest user message in a fresh open session | `planning` | inferred active Hermes prompt |
+| Hermes cron run id `cron_<job>_<timestamp>` or SQLite `source = cron` | `planning`, `thinking`, `done`, or `idle` by latest activity | temporary Hermes agent with a compact project tick label; scheduler wrapper prompt is stripped from display text |
 | plugin `pre_llm_call` / `pre_gateway_dispatch` | `planning` | typed prompt/session activity |
 | plugin `pre_tool_call` / `post_tool_call` / `transform_tool_result` / `transform_terminal_output` | `running`, `editing`, `scanning`, `delegating`, or `blocked` | typed tool activity by tool name, args, output, and result |
 | command, file, MCP, or dynamic tool hook while earlier assistant/subagent text exists | current tool-derived state | current action in `detail` / `activityEvent`; prior useful Hermes assistant/subagent text remains `latestMessage` |
