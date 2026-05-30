@@ -111,7 +111,8 @@ Delegated-work normalization:
 
 - Codex `collabToolCall` / `collabAgentToolCall` items and Claude Agent/Task/Subagent hook signals should converge on the shared `collabAgentToolCall` activity family where possible.
 - Shared delegated-work activity should produce `DashboardEvent.kind = "subagent"` so browser toasts, scene cues, session history, and future source adapters do not need separate per-provider event families for the same concept.
-- Claude hook `agent_id` and Agent Teams `leadSessionId` should create real `parentThreadId` child rows where available; transcript-only delegation should still keep Claude provenance/confidence and source-specific detail text visible because that path has weaker correlation.
+- Local Claude workflow/subagent transcripts, matching `*.meta.json`, and workflow `journal.jsonl` records should create inferred `parentThreadId` child rows under the lead Claude session, even when no hook sidecar exists.
+- Claude hook `agent_id` and Agent Teams `leadSessionId` should create or upgrade real `parentThreadId` child rows where available; hook-backed rows should win over matching inferred workflow/subagent rows, while transcript-only delegation should still keep Claude provenance/confidence and source-specific detail text visible because that path has weaker correlation.
 - Claude Desktop Co-work sessions should remain read-only Claude agents. They can seed workspace floors and file-change activity, but they must not imply Codex-style reply, resume, or subagent control.
 
 Recent typed turn lifecycle handling:
@@ -164,7 +165,7 @@ Prefer official Codex surfaces first:
 - saved per-project `rooms.xml` in Agents Office user data
 - saved per-project `agents.json` in Agents Office user data
 
-Claude local logs and Cursor background agents are secondary inputs. They can enrich visibility, but they should not blur the distinction between typed Codex truth and inferred state. When Claude hook sidecars are present, Claude may contribute typed file, command, input, approval, and delegated-agent events, but those events still carry Claude provenance.
+Claude local logs, local Claude workflow/subagent files, and Cursor background agents are secondary inputs. They can enrich visibility, but they should not blur the distinction between typed Codex truth and inferred state. Local Claude workflow/subagent children remain inferred unless a matching hook/team record upgrades them. When Claude hook sidecars are present, Claude may contribute typed file, command, input, approval, and delegated-agent events, but those events still carry Claude provenance.
 
 ## Browser behavior
 
@@ -300,6 +301,7 @@ Global text scale rules:
 - Fleet mode should hide autodiscovered workspaces once their last session timestamp is more than 7 days old.
 - Claude Desktop Co-work spaces should become workspace floors from `local-agent-mode-sessions` when their saved folder roots are still present locally.
 - Claude Desktop Co-work-only floors should sort after normal workspaces so primary coding projects stay first in the tower.
+- Claude workflow/subagent children should be seated under the owning lead session discovered for that project floor, not promoted into separate floors from their transcript paths alone.
 - Hermes-discovered workspaces should come only from a live Hermes process cwd or the latest current root of a fresh hook session; durable DB history, broad hook path sweeps, and exact transient roots such as `/tmp` must not create floors.
 - Hermes hook-backed project relation should persist through 20 rootless hook actions; after more than 20 actions without a known project root, the same Hermes session should become projectless until a new project-bearing path or cwd appears.
 - OpenClaw workspace matching should seat sessions when the configured agent workspace is the known project root or a child path under that root. Active OpenClaw sessions outside the known fleet project set should become `openclaw:roaming` orchestrators instead of creating fake floors.
@@ -473,7 +475,7 @@ Current-workload rules:
 - Ordinary polling or view refresh must not look like movement. If a destination did not meaningfully change, the agent should keep its current placement.
 - A visible room change should render as two motions: an old-room exit toward that room's door and a new-room entry from the destination room's door. The renderer must not reinterpret old-room coordinates inside the destination room.
 - Avoid large task-title overlays inside the room scene.
-- Keep Codex-native typed state visually distinct from inferred Claude state when provenance matters, while allowing typed Claude hook activity to reuse common visual families such as file-change, command, and delegated-agent work.
+- Keep Codex-native typed state visually distinct from inferred Claude state, including inferred Claude workflow/subagent children, while allowing typed Claude hook activity to reuse common visual families such as file-change, command, and delegated-agent work.
 - Avoid avatar flash-in/flash-out effects for workstation occupancy.
 - Exits should disappear cleanly without a lingering blink.
 - PixelOffice art should be assembled intentionally from the asset sheet, not from a pasted example scene.

@@ -1016,7 +1016,7 @@ The snapshot builder merges:
 - local Codex threads
 - cloud tasks
 - optional synthetic presence entries
-- Claude sessions from transcript inference or optional hook sidecars
+- Claude sessions from transcript/workflow inference or optional hook sidecars
 - Hermes sessions matched by cwd, system-prompt working directory, tool paths, and git-root discovery
 - OpenClaw gateway sessions matched by configured workspace root
 - Cursor background agents matched by normalized repository URL

@@ -33,6 +33,8 @@
   Useful contrast with the Agent SDK: model API wrappers, not Claude Code session observability.
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
   Official hook lifecycle and input schema for `PermissionRequest`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, and related events.
+- [Claude Code subagents](https://code.claude.com/docs/en/sub-agents)
+  Official reference for Claude subagent definitions, agent types, invocation behavior, and the conceptual parent/child model behind workflow-managed child work.
 - [Claude Code dynamic workflows](https://code.claude.com/docs/en/workflows)
   Official `workflow` / `ultracode` reference for script-orchestrated workflow runs, `/workflows` progress, agent limits, and workflow cost/permission behavior.
 - [Introducing dynamic workflows in Claude Code](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code)

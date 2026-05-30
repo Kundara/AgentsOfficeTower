@@ -31,7 +31,7 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 | --- | --- |
 | Codex local | Best support through `codex app-server`, CLI/runtime discovery, typed events, approvals, inputs, and subagents |
 | Codex cloud | Cloud task list through `codex cloud list --json` |
-| Claude | Local logs, Agent SDK session reads, hook-backed typed sidecars, subagent child rows from `agent_id`, Agent Teams cowork floors, Agent View background jobs, and Claude Desktop Co-work project folders |
+| Claude | Local logs, Agent SDK session reads, inferred workflow/subagent child rows from local `subagents` files, hook-backed typed sidecars, Agent Teams cowork floors, Agent View background jobs, and Claude Desktop Co-work project folders |
 | Cursor | Local hook sidecars, workspace/log inference, and Cursor cloud agents |
 | Hermes | Durable `state.db` sessions, profile stores, live process cwd/env hints, and optional hook bridge sidecars folded into the matching session |
 | OpenClaw | Gateway sessions and config surfaces, with unmatched orchestrators rendered as fixed sky agents |

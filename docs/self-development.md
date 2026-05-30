@@ -35,7 +35,7 @@ A good iteration improves at least one of these:
 ## Known weak spots
 
 - Codex desktop session visibility is much stronger now, but desktop-backed observer attaches can still be slow enough to leave a restarted server temporarily read-only before subscription settles. The read-only fallback now preserves fresh `thread/list` timestamps when `thread/read` lags and uses fresh non-final local work events to keep active threads desk-seated, but subscription recovery should still be watched on restart.
-- Claude support still falls back to transcript inference when no project-scoped hook sidecars are configured in Agents Office user data.
+- Claude support still falls back to inferred transcript/workflow state when no project-scoped hook sidecars are configured in Agents Office user data. Local workflow/subagent files now expose child rows without hooks, but they remain weaker than typed hook/team metadata.
 - OpenClaw support now seats configured child workspaces under known project roots and floats unmatched active Gateway sessions as roaming orchestrators, but live Gateway validation should still watch for unexpected floor spam from broad harness roots.
 - Cursor local support is inferred from workspace storage and logs rather than coming from an official local session API, so it remains weaker and less explicit than Codex app-server visibility.
 - PixelOffice workstation composition still needs refinement and stricter prefab rules.
@@ -129,9 +129,12 @@ A good iteration improves at least one of these:
 - verify hook-backed Claude `Elicitation` waits render schema-backed questions, ignore optional unanswered fields, and clear immediately after browser submit
 - verify Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records produce shared delegated-work activity and `subagent` dashboard events while preserving Claude provenance
 - verify Claude hook records with `agent_id` create child agent rows under the lead Claude session, and that Agent Teams config files create teammate child rows plus cowork/worktree project floors
+- verify local Claude workflow/subagent transcripts, matching `*.meta.json`, and workflow `journal.jsonl` records create inferred child agent rows under the lead Claude session without hook sidecars
+- verify Claude workflow journal `started` records create running child rows before a transcript has useful assistant text, and journal `result` records mark the matching child done with the result summary
+- verify hook-backed Claude `agent_id` rows override matching inferred workflow/subagent rows instead of duplicating the child
 - verify Claude Agent View background jobs under `~/.claude/jobs/*/state.json` appear as read-only `claude:background` agents and workspace floors without requiring project hooks
 - verify Claude Desktop Co-work projects under `local-agent-mode-sessions` appear as workspace floors with read-only Claude agents and recent detected-file activity
-- verify Claude Code `2.1.154+` dynamic workflow / `ultracode` runs with a real `/workflows` sample before claiming workflow-subagent coverage; if no stable state file exists, prototype an OpenTelemetry collector instead of expanding transcript scraping
+- verify Claude Code dynamic workflow / `ultracode` runs with a real `/workflows` sample and that local child transcripts/journals match the inferred child rows; if full phase/token progress is needed, prototype an OpenTelemetry collector instead of expanding transcript scraping
 - verify OpenClaw gateway sessions appear on desks only when the configured agent workspace equals a known project root or sits under it
 - verify unmatched active OpenClaw harness/orchestrator sessions appear as `openclaw:roaming` avatars in the fixed left-side sky layer, stay out of room/rec placement, and animate desk/sky or cross-floor handoffs without duplicate agents
 - verify OpenClaw sessions preserve parent-child structure through the shared `parentThreadId` hierarchy
