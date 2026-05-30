@@ -11,6 +11,8 @@ export interface DiscoveredProject {
   label: string;
   updatedAt: number;
   count: number;
+  sourceKind?: string;
+  sourceKinds?: string[];
 }
 
 const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
@@ -303,6 +305,14 @@ export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]>
   const merged = new Map<string, DiscoveredProject>();
   const { PROJECT_ADAPTERS } = await import("./adapters");
 
+  const projectSourceKinds = (project: DiscoveredProject): string[] => {
+    const kinds = [
+      ...(Array.isArray(project.sourceKinds) ? project.sourceKinds : []),
+      project.sourceKind
+    ].filter((kind): kind is string => typeof kind === "string" && kind.trim().length > 0);
+    return Array.from(new Set(kinds.length > 0 ? kinds : ["unknown"]));
+  };
+
   const withDiscoveryTimeout = (
     promise: Promise<DiscoveredProject[]>
   ): Promise<DiscoveredProject[]> =>
@@ -333,10 +343,16 @@ export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]>
         existing.updatedAt = Math.max(existing.updatedAt, project.updatedAt);
       }
       existing.count += project.count;
+      existing.sourceKinds = Array.from(new Set([
+        ...projectSourceKinds(existing),
+        ...projectSourceKinds(project)
+      ]));
+      existing.sourceKind = existing.sourceKinds[0];
       continue;
     }
 
-    merged.set(identityKey, { ...project });
+    const sourceKinds = projectSourceKinds(project);
+    merged.set(identityKey, { ...project, sourceKind: sourceKinds[0], sourceKinds });
   }
 
   return [...merged.values()]

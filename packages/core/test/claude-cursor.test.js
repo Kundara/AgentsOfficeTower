@@ -8,12 +8,15 @@ const { pathToFileURL } = require("node:url");
 const { promisify } = require("node:util");
 
 const {
+  buildClaudeBackgroundAgentsForTest,
   buildClaudeCoworkAgentsForTest,
   buildClaudeSubagentAgentsForTest,
   buildClaudeTeamAgentsForTest,
+  discoverClaudeProjectsFromBackgroundJobsForTest,
   buildClaudeSessionEventsForTest,
   discoverClaudeProjectsFromCoworkForTest,
   discoverClaudeProjectsFromTeamsForTest,
+  normalizeClaudeBackgroundJobForTest,
   summariseClaudeHookRecord,
   summariseClaudeSession
 } = require("../dist/claude.js");
@@ -476,8 +479,81 @@ test("Claude Co-work local agent sessions create workspace floors and read-only 
     assert.equal(agents[0].threadId, "local_93d9682b-41c3-4903-a969-9531b87dc7e4");
     assert.equal(agents[0].state, "thinking");
     assert.equal(agents[0].activityEvent?.type, "fileChange");
-    assert.ok(floors.some((floor) => floor.root === "/mnt/f/AI/Projects/ClaudeTest/Test Proj"));
+    const coworkFloor = floors.find((floor) => floor.root === "/mnt/f/AI/Projects/ClaudeTest/Test Proj");
+    assert.ok(coworkFloor);
+    assert.equal(coworkFloor.sourceKind, "claude:cowork");
+    assert.deepEqual(coworkFloor.sourceKinds, ["claude:cowork"]);
   });
+});
+
+test("Claude background job state creates workspace floors and read-only agents", async () => {
+  await withTempAppData("claude-background-rows-", async () => {
+    const now = Date.now();
+    const job = normalizeClaudeBackgroundJobForTest(
+      "job-123",
+      {
+        session: {
+          sessionId: "session-bg-123",
+          cwd: "/workspaces/CodexAgentsOffice/.claude/worktrees/job-123"
+        },
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        name: "collision detection",
+        status: "needs_input",
+        currentActivity: "needs input: choose double jump or wall climb",
+        prompt: "Fix the platformer collision regression",
+        updatedAt: new Date(now - 1_000).toISOString()
+      },
+      now
+    );
+
+    assert.ok(job);
+    assert.equal(job.state, "waiting");
+    assert.equal(job.isOngoing, true);
+
+    const agents = await buildClaudeBackgroundAgentsForTest({
+      projectRoot: "/workspaces/CodexAgentsOffice",
+      jobs: [job]
+    });
+    const floors = discoverClaudeProjectsFromBackgroundJobsForTest([job]);
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].id, "claude:session-bg-123");
+    assert.equal(agents[0].sourceKind, "claude:background");
+    assert.equal(agents[0].threadId, "session-bg-123");
+    assert.equal(agents[0].taskId, "job-123");
+    assert.equal(agents[0].state, "waiting");
+    assert.equal(agents[0].cwd, "/workspaces/CodexAgentsOffice/.claude/worktrees/job-123");
+    assert.equal(agents[0].resumeCommand, "claude attach job-123");
+    assert.deepEqual(agents[0].paths, [
+      "/workspaces/CodexAgentsOffice",
+      "/workspaces/CodexAgentsOffice/.claude/worktrees/job-123"
+    ]);
+    assert.equal(agents[0].latestMessage, null);
+    assert.equal(agents[0].liveSubscription, "readOnly");
+    assert.equal(agents[0].confidence, "typed");
+    const backgroundFloor = floors.find((floor) => floor.root === "/workspaces/CodexAgentsOffice");
+    assert.ok(backgroundFloor);
+    assert.equal(backgroundFloor.sourceKind, "claude:background");
+    assert.deepEqual(backgroundFloor.sourceKinds, ["claude:background"]);
+  });
+});
+
+test("failed Claude background job state cools off instead of staying ongoing", () => {
+  const now = Date.now();
+  const job = normalizeClaudeBackgroundJobForTest(
+    "job-failed",
+    {
+      cwd: "/workspaces/CodexAgentsOffice",
+      status: "failed",
+      message: "Tool process failed",
+      updatedAt: new Date(now - 1_000).toISOString()
+    },
+    now
+  );
+
+  assert.ok(job);
+  assert.equal(job.state, "blocked");
+  assert.equal(job.isOngoing, false);
 });
 
 test("synthetic Claude model placeholders do not leak into agent labels", () => {
@@ -771,6 +847,105 @@ test("synthetic Claude command wrapper user records do not override assistant re
 
   assert.equal(summary.latestMessage, "Actual assistant reply");
   assert.equal(summary.detail, "Actual assistant reply");
+});
+
+test("Claude transcript metadata touches do not revive stale tool activity after a final reply", () => {
+  const now = Date.now();
+  const toolAt = new Date(now - 21 * 60_000).toISOString();
+  const finalAt = new Date(now - 20 * 60_000).toISOString();
+  const summary = summariseClaudeSession(
+    "session-123",
+    "/workspaces/CodexAgentsOffice",
+    [
+      {
+        type: "assistant",
+        timestamp: toolAt,
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [
+            {
+              type: "tool_use",
+              name: "Read",
+              input: {
+                file_path: "/workspaces/CodexAgentsOffice/docs/spec.md"
+              }
+            }
+          ]
+        }
+      },
+      {
+        type: "user",
+        timestamp: new Date(now - 20 * 60_000 - 500).toISOString(),
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              content: "large file content should not become a user prompt"
+            }
+          ]
+        }
+      },
+      {
+        type: "assistant",
+        timestamp: finalAt,
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [
+            {
+              type: "text",
+              text: "Finished reviewing the project."
+            }
+          ]
+        }
+      },
+      {
+        type: "last-prompt",
+        lastPrompt: "review this",
+        sessionId: "session-123"
+      },
+      {
+        type: "ai-title",
+        aiTitle: "Review project",
+        sessionId: "session-123"
+      }
+    ],
+    now
+  );
+
+  assert.equal(summary.state, "idle");
+  assert.equal(summary.isOngoing, false);
+  assert.equal(summary.detail, "Finished reviewing the project.");
+  assert.equal(summary.latestMessage, "Finished reviewing the project.");
+  assert.equal(summary.activityEvent, null);
+  assert.equal(summary.updatedAt, finalAt);
+});
+
+test("recent Claude final replies cool off without staying ongoing as active work", () => {
+  const now = Date.now();
+  const finalAt = new Date(now - 5 * 60_000).toISOString();
+  const summary = summariseClaudeSession(
+    "session-123",
+    "/workspaces/CodexAgentsOffice",
+    [
+      {
+        type: "assistant",
+        timestamp: finalAt,
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [
+            {
+              type: "text",
+              text: "All done."
+            }
+          ]
+        }
+      }
+    ],
+    now
+  );
+
+  assert.equal(summary.state, "done");
+  assert.equal(summary.isOngoing, false);
 });
 
 test("Claude SDK sidecar hooks append typed hook records per session", async () => {

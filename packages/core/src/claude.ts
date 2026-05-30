@@ -7,8 +7,9 @@ import { getClaudeSdkSessionRecords, listClaudeSdkSessions, resolveReadableClaud
 import { sameProjectPath, type DiscoveredProject } from "./project-paths";
 import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
 
-const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
-const CLAUDE_TEAMS_DIR = join(homedir(), ".claude", "teams");
+const DEFAULT_CLAUDE_CONFIG_DIR = join(homedir(), ".claude");
+const CLAUDE_PROJECTS_DIR = join(DEFAULT_CLAUDE_CONFIG_DIR, "projects");
+const CLAUDE_TEAMS_DIR = join(DEFAULT_CLAUDE_CONFIG_DIR, "teams");
 const CLAUDE_COWORK_LOCAL_AGENT_DIR_NAME = "local-agent-mode-sessions";
 const LOG_HEAD_BYTES = 4096;
 const LOG_TAIL_BYTES = 65536;
@@ -18,6 +19,7 @@ const RECENT_DONE_WINDOW_MS = 15 * 60 * 1000;
 const RECENT_CLAUDE_TEAM_DISCOVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_CLAUDE_TEAM_DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const RECENT_CLAUDE_COWORK_DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const RECENT_CLAUDE_BACKGROUND_DISCOVERY_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const CLAUDE_COWORK_SCAN_FILE_LIMIT = 200;
 
 interface ClaudeProjectDir {
@@ -32,6 +34,8 @@ interface ClaudeSdkProject {
   root: string;
   updatedAt: number;
   count: number;
+  sourceKind?: string;
+  sourceKinds?: string[];
 }
 
 interface ClaudeSdkSessionEntry {
@@ -113,6 +117,22 @@ export interface ClaudeCoworkSession {
   createdAt: number;
   updatedAt: number;
   isArchived: boolean;
+}
+
+export interface ClaudeBackgroundJobSession {
+  jobId: string;
+  sessionId: string | null;
+  name: string | null;
+  prompt: string | null;
+  cwd: string;
+  projectRoot: string;
+  worktreePath: string | null;
+  state: ActivityState;
+  stateText: string | null;
+  detail: string;
+  updatedAt: number;
+  createdAt: number | null;
+  isOngoing: boolean;
 }
 
 const CLAUDE_EVENT_WINDOW_MS = 2 * 60 * 1000;
@@ -298,6 +318,26 @@ function appDataClaudeDirs(): string[] {
 
 function claudeCoworkLocalAgentDirs(): string[] {
   return appDataClaudeDirs().map((dir) => join(dir, CLAUDE_COWORK_LOCAL_AGENT_DIR_NAME));
+}
+
+function claudeConfigDirs(): string[] {
+  return Array.from(new Set([
+    process.env.CLAUDE_CONFIG_DIR,
+    DEFAULT_CLAUDE_CONFIG_DIR
+  ].filter((dir): dir is string => typeof dir === "string" && dir.trim().length > 0)));
+}
+
+function claudeJobsDirs(): string[] {
+  return claudeConfigDirs().map((dir) => join(dir, "jobs"));
+}
+
+function mergeClaudeProjectSourceKinds(project: ClaudeSdkProject, sourceKind: string): void {
+  project.sourceKinds = Array.from(new Set([
+    ...(Array.isArray(project.sourceKinds) ? project.sourceKinds : []),
+    project.sourceKind,
+    sourceKind
+  ].filter((kind): kind is string => typeof kind === "string" && kind.trim().length > 0)));
+  project.sourceKind = project.sourceKinds[0];
 }
 
 function titleCaseIdentifier(value: string): string {
@@ -754,6 +794,30 @@ function recordTimestampMs(record: Record<string, unknown>, fallback: number): n
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function explicitRecordTimestampMs(record: Record<string, unknown>): number {
+  return parseTimestampMs(record.timestamp);
+}
+
+function latestTimestampedRecord(
+  records: Array<Record<string, unknown>>,
+  predicate: (record: Record<string, unknown>) => boolean
+): Record<string, unknown> | null {
+  let latest: { record: Record<string, unknown>; timestamp: number; index: number } | null = null;
+  for (const [index, record] of records.entries()) {
+    if (!predicate(record)) {
+      continue;
+    }
+    const timestamp = explicitRecordTimestampMs(record);
+    if (!Number.isFinite(timestamp)) {
+      continue;
+    }
+    if (!latest || timestamp > latest.timestamp || (timestamp === latest.timestamp && index > latest.index)) {
+      latest = { record, timestamp, index };
+    }
+  }
+  return latest?.record ?? null;
+}
+
 function extractTextEntries(content: unknown): string[] {
   if (typeof content === "string") {
     return [content];
@@ -794,9 +858,14 @@ function extractUserText(record: Record<string, unknown>): string | null {
     return isMeaningfulTranscriptText(message.content) && !isSyntheticClaudeUserText(message.content) ? message.content : null;
   }
 
-  const text = extractTextEntries(message.content).find(
-    (entry) => isMeaningfulTranscriptText(entry) && !isSyntheticClaudeUserText(entry)
-  );
+  const text = Array.isArray(message.content)
+    ? message.content
+      .flatMap((entry) => {
+        const content = asRecord(entry);
+        return content?.type === "text" && typeof content.text === "string" ? [content.text] : [];
+      })
+      .find((entry) => isMeaningfulTranscriptText(entry) && !isSyntheticClaudeUserText(entry))
+    : null;
   return text ?? null;
 }
 
@@ -905,6 +974,19 @@ function stringValue(record: Record<string, unknown>, ...keys: string[]): string
   return null;
 }
 
+function firstStringValue(records: Array<Record<string, unknown> | null | undefined>, ...keys: string[]): string | null {
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    const value = stringValue(record, ...keys);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
 function numberValue(record: Record<string, unknown>, ...keys: string[]): number | null {
   for (const key of keys) {
     const candidate = record[key];
@@ -916,8 +998,55 @@ function numberValue(record: Record<string, unknown>, ...keys: string[]): number
   return null;
 }
 
+function timestampValueMs(record: Record<string, unknown>, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate < 10_000_000_000 ? candidate * 1000 : candidate;
+    }
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      const numeric = Number(candidate);
+      if (Number.isFinite(numeric)) {
+        return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+      }
+      const parsed = Date.parse(candidate);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return null;
+}
+
+function firstTimestampValueMs(records: Array<Record<string, unknown> | null | undefined>, ...keys: string[]): number | null {
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    const value = timestampValueMs(record, ...keys);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
 function booleanValue(record: Record<string, unknown>, key: string, fallback: boolean): boolean {
   return typeof record[key] === "boolean" ? record[key] : fallback;
+}
+
+function firstBooleanValue(records: Array<Record<string, unknown> | null | undefined>, ...keys: string[]): boolean | null {
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    for (const key of keys) {
+      if (typeof record[key] === "boolean") {
+        return record[key];
+      }
+    }
+  }
+  return null;
 }
 
 function normalizeClaudeTeamMember(value: unknown): ClaudeTeamMember | null {
@@ -1283,8 +1412,9 @@ function claudeProjectsFromTeams(teams: ClaudeTeamSnapshot[], limit = 50): Claud
       if (existing) {
         existing.count += 1;
         existing.updatedAt = Math.max(existing.updatedAt, updatedAt);
+        mergeClaudeProjectSourceKinds(existing, "claude:teams");
       } else {
-        grouped.set(root, { root, updatedAt, count: 1 });
+        grouped.set(root, { root, updatedAt, count: 1, sourceKind: "claude:teams", sourceKinds: ["claude:teams"] });
       }
     }
   }
@@ -1305,9 +1435,10 @@ function claudeProjectsFromCowork(input: {
     if (existing) {
       existing.count += 1;
       existing.updatedAt = Math.max(existing.updatedAt, updatedAt);
+      mergeClaudeProjectSourceKinds(existing, "claude:cowork");
       return;
     }
-    grouped.set(root, { root, updatedAt, count: 1 });
+    grouped.set(root, { root, updatedAt, count: 1, sourceKind: "claude:cowork", sourceKinds: ["claude:cowork"] });
   };
 
   for (const space of input.spaces) {
@@ -1322,6 +1453,232 @@ function claudeProjectsFromCowork(input: {
   return [...grouped.values()]
     .sort((left, right) => right.updatedAt - left.updatedAt)
     .slice(0, input.limit ?? 50);
+}
+
+function claudeBackgroundJobAgentId(job: ClaudeBackgroundJobSession): string {
+  return job.sessionId ? claudeLeadAgentId(job.sessionId) : `claude:bg:${job.jobId}`;
+}
+
+function claudeBackgroundJobRecords(record: Record<string, unknown>): Array<Record<string, unknown>> {
+  return [
+    record,
+    asRecord(record.job),
+    asRecord(record.session),
+    asRecord(record.sessionInfo),
+    asRecord(record.metadata),
+    asRecord(record.current),
+    asRecord(record.task),
+    asRecord(record.process)
+  ].filter((entry): entry is Record<string, unknown> => Boolean(entry));
+}
+
+function stringArrayValue(record: Record<string, unknown>, ...keys: string[]): string[] {
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+    }
+  }
+  return [];
+}
+
+function firstStringArrayValue(records: Array<Record<string, unknown>>, ...keys: string[]): string[] {
+  for (const record of records) {
+    const value = stringArrayValue(record, ...keys);
+    if (value.length > 0) {
+      return value;
+    }
+  }
+  return [];
+}
+
+function claudeProjectRootFromWorktreePath(path: string | null): string | null {
+  if (!path) {
+    return null;
+  }
+  const marker = "/.claude/worktrees/";
+  const normalized = path.replace(/\\/g, "/");
+  const markerIndex = normalized.indexOf(marker);
+  return markerIndex > 0 ? normalized.slice(0, markerIndex) : null;
+}
+
+function normalizeClaudeBackgroundJobState(input: {
+  stateText: string | null;
+  detail: string;
+  needsInput: boolean;
+  isRunning: boolean | null;
+  updatedAt: number;
+}): ActivityState {
+  const text = `${input.stateText ?? ""} ${input.detail}`.toLowerCase();
+  if (input.needsInput || /\b(needs?\s+(input|approval|permission|you)|waiting|blocked on user|prompt)\b/.test(text)) {
+    return "waiting";
+  }
+  if (/\b(error|failed|failure|crash|killed|denied|blocked)\b/.test(text)) {
+    return "blocked";
+  }
+  if (/\b(review|paused|sleep|suspended)\b/.test(text)) {
+    return "waiting";
+  }
+  if (/\b(done|complete|completed|success|exited|stopped|finished)\b/.test(text)) {
+    return "done";
+  }
+  if (input.isRunning === true || /\b(working|running|active|executing|processing|busy)\b/.test(text)) {
+    return "running";
+  }
+  if (/\b(queued|pending|created|dispatch|starting)\b/.test(text)) {
+    return "planning";
+  }
+  const ageMs = Date.now() - input.updatedAt;
+  if (ageMs <= RECENT_CLAUDE_HOOK_ACTIVE_WINDOW_MS) {
+    return "thinking";
+  }
+  return ageMs <= RECENT_DONE_WINDOW_MS ? "done" : "idle";
+}
+
+function isClaudeBackgroundJobOngoing(state: ActivityState): boolean {
+  return state !== "done" && state !== "idle" && state !== "blocked";
+}
+
+export function normalizeClaudeBackgroundJobForTest(
+  jobId: string,
+  value: unknown,
+  fallbackUpdatedAt: number
+): ClaudeBackgroundJobSession | null {
+  return normalizeClaudeBackgroundJob(jobId, value, fallbackUpdatedAt);
+}
+
+function normalizeClaudeBackgroundJob(
+  jobId: string,
+  value: unknown,
+  fallbackUpdatedAt: number
+): ClaudeBackgroundJobSession | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const records = claudeBackgroundJobRecords(record);
+  const cwd =
+    canonicalizeProjectPath(firstStringValue(records, "cwd", "dir", "directory", "workingDirectory", "working_directory"))
+    ?? null;
+  const explicitWorktreePath = canonicalizeProjectPath(firstStringValue(records, "worktreePath", "worktree_path"));
+  const worktreePath = explicitWorktreePath ?? (claudeProjectRootFromWorktreePath(cwd) ? cwd : null);
+  const explicitProjectRoot =
+    canonicalizeProjectPath(firstStringValue(records, "projectRoot", "project_root", "workspacePath", "workspace_path", "repoPath", "repo_path", "root"))
+    ?? firstStringArrayValue(records, "workspaceRoots", "workspace_roots", "hostPaths", "host_paths", "roots")
+      .map((root) => canonicalizeProjectPath(root))
+      .find((root): root is string => Boolean(root))
+    ?? null;
+  const resolvedProjectRoot = explicitProjectRoot ?? claudeProjectRootFromWorktreePath(worktreePath ?? cwd) ?? cwd;
+  if (!resolvedProjectRoot) {
+    return null;
+  }
+  const resolvedCwd = cwd ?? worktreePath ?? resolvedProjectRoot;
+
+  const sessionId = firstStringValue(records, "sessionId", "session_id", "cliSessionId", "cli_session_id", "conversationId", "conversation_id");
+  const name = firstStringValue(records, "name", "title", "label");
+  const prompt = firstStringValue(records, "prompt", "initialPrompt", "initial_prompt", "input", "userPrompt", "user_prompt");
+  const detail =
+    firstStringValue(records, "currentActivity", "current_activity", "activity", "summary", "statusMessage", "status_message", "message", "need", "lastActivity", "last_activity")
+    ?? prompt
+    ?? name
+    ?? "Claude background session";
+  const stateText = firstStringValue(records, "state", "status", "phase", "lifecycle", "runState", "run_state");
+  const updatedAt =
+    firstTimestampValueMs(records, "updatedAt", "updated_at", "lastUpdatedAt", "last_updated_at", "lastModified", "last_modified", "lastActivityAt", "last_activity_at", "mtimeMs")
+    ?? fallbackUpdatedAt;
+  const createdAt =
+    firstTimestampValueMs(records, "createdAt", "created_at", "startedAt", "started_at")
+    ?? null;
+  const needsInput = firstBooleanValue(records, "needsInput", "needs_input", "needsUser", "needs_user", "waitingForInput", "waiting_for_input") ?? false;
+  const isRunning = firstBooleanValue(records, "isRunning", "is_running", "running", "active");
+  const state = normalizeClaudeBackgroundJobState({
+    stateText,
+    detail,
+    needsInput,
+    isRunning,
+    updatedAt
+  });
+
+  return {
+    jobId,
+    sessionId,
+    name,
+    prompt,
+    cwd: resolvedCwd,
+    projectRoot: resolvedProjectRoot,
+    worktreePath,
+    state,
+    stateText,
+    detail: shorten(detail, 88),
+    updatedAt,
+    createdAt,
+    isOngoing: isClaudeBackgroundJobOngoing(state)
+  };
+}
+
+async function readClaudeBackgroundJobs(limit = 50): Promise<ClaudeBackgroundJobSession[]> {
+  const jobsById = new Map<string, ClaudeBackgroundJobSession>();
+
+  for (const jobsDir of claudeJobsDirs()) {
+    const entries = await readdir(jobsDir, { withFileTypes: true }).catch(() => []);
+    const jobs = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          const statePath = join(jobsDir, entry.name, "state.json");
+          try {
+            const [content, fileStats] = await Promise.all([
+              readFile(statePath, "utf8"),
+              stat(statePath)
+            ]);
+            return normalizeClaudeBackgroundJob(entry.name, JSON.parse(content) as unknown, fileStats.mtimeMs);
+          } catch {
+            return null;
+          }
+        })
+    );
+
+    for (const job of jobs) {
+      if (!job) {
+        continue;
+      }
+      const key = job.sessionId ?? job.jobId;
+      const existing = jobsById.get(key);
+      if (!existing || job.updatedAt >= existing.updatedAt) {
+        jobsById.set(key, job);
+      }
+    }
+  }
+
+  const now = Date.now();
+  return [...jobsById.values()]
+    .filter((job) => job.isOngoing || now - job.updatedAt <= RECENT_CLAUDE_BACKGROUND_DISCOVERY_WINDOW_MS)
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, limit);
+}
+
+function claudeProjectsFromBackgroundJobs(jobs: ClaudeBackgroundJobSession[], limit = 50): ClaudeSdkProject[] {
+  const grouped = new Map<string, ClaudeSdkProject>();
+  for (const job of jobs) {
+    const existing = [...grouped.values()].find((candidate) => sameProjectPath(candidate.root, job.projectRoot));
+    if (existing) {
+      existing.count += 1;
+      existing.updatedAt = Math.max(existing.updatedAt, job.updatedAt);
+      mergeClaudeProjectSourceKinds(existing, "claude:background");
+      continue;
+    }
+    grouped.set(job.projectRoot, {
+      root: job.projectRoot,
+      updatedAt: job.updatedAt,
+      count: 1,
+      sourceKind: "claude:background",
+      sourceKinds: ["claude:background"]
+    });
+  }
+
+  return [...grouped.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, limit);
 }
 
 function claudeToolSummary(input: {
@@ -2140,7 +2497,9 @@ async function discoverClaudeProjectsViaSdk(limit = 50): Promise<ClaudeSdkProjec
     grouped.set(root, {
       root,
       updatedAt: session.lastModified,
-      count: 1
+      count: 1,
+      sourceKind: "claude:sdk",
+      sourceKinds: ["claude:sdk"]
     });
   }
 
@@ -2740,6 +3099,79 @@ async function buildClaudeCoworkAgentsForProject(input: {
   ));
 }
 
+async function claudeAgentFromBackgroundJob(input: {
+  projectRoot: string;
+  job: ClaudeBackgroundJobSession;
+}): Promise<DashboardAgent> {
+  const id = claudeBackgroundJobAgentId(input.job);
+  const appearance = await ensureAgentAppearance(input.projectRoot, id);
+  const updatedAt = new Date(input.job.updatedAt).toISOString();
+  const label = input.job.name ?? (input.job.sessionId ? labelFromModel(null, input.job.sessionId) : `Claude ${input.job.jobId.slice(0, 4)}`);
+  const paths = mergePathLists(
+    [input.job.projectRoot, input.job.cwd],
+    input.job.worktreePath ? [input.job.worktreePath] : []
+  );
+
+  return {
+    id,
+    label,
+    source: "claude",
+    sourceKind: "claude:background",
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: false,
+    isOngoing: input.job.isOngoing,
+    statusText: input.job.stateText ?? "background",
+    role: "background",
+    nickname: input.job.name,
+    isSubagent: false,
+    state: input.job.state,
+    detail: input.job.detail,
+    cwd: input.job.cwd,
+    roomId: null,
+    appearance,
+    updatedAt,
+    stoppedAt: input.job.isOngoing ? null : updatedAt,
+    paths,
+    activityEvent: {
+      type: input.job.state === "waiting" || input.job.state === "blocked" ? "other" : "agentMessage",
+      action: "updated",
+      path: input.job.cwd,
+      title: input.job.detail,
+      isImage: false
+    },
+    latestMessage: null,
+    threadId: input.job.sessionId ?? input.job.jobId,
+    taskId: input.job.jobId,
+    resumeCommand: `claude attach ${input.job.jobId}`,
+    url: null,
+    git: null,
+    provenance: "claude",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly",
+    network: null
+  };
+}
+
+async function buildClaudeBackgroundAgentsForProject(input: {
+  projectRoot: string;
+  jobs: ClaudeBackgroundJobSession[];
+  limit?: number;
+}): Promise<DashboardAgent[]> {
+  const matching = input.jobs
+    .filter((job) => sameProjectPath(job.projectRoot, input.projectRoot))
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, input.limit ?? 8);
+
+  return Promise.all(matching.map((job) =>
+    claudeAgentFromBackgroundJob({
+      projectRoot: input.projectRoot,
+      job
+    })
+  ));
+}
+
 export async function loadClaudeProjectSnapshotData(projectRoot: string, limit = 12): Promise<{
   agents: DashboardAgent[];
   events: DashboardEvent[];
@@ -2749,14 +3181,15 @@ export async function loadClaudeProjectSnapshotData(projectRoot: string, limit =
     return { agents: [], events: [] };
   }
 
-  const [sessions, teams] = await Promise.all([
+  const [sessions, teams, backgroundJobs] = await Promise.all([
     collectClaudeLoadedSessions(canonicalRoot, limit),
-    readClaudeTeamSnapshots(limit * 4)
+    readClaudeTeamSnapshots(limit * 4),
+    readClaudeBackgroundJobs(limit * 4)
   ]);
   const coworkSessions = await readClaudeCoworkSessions(limit * 4);
   const inferredLeadSessionIds = inferClaudeTeamLeadSessionIds(teams, sessions);
   const teamIndex = buildClaudeTeamIndex(teams, inferredLeadSessionIds);
-  const [teamAgents, coworkAgents] = await Promise.all([
+  const [teamAgents, coworkAgents, backgroundAgents] = await Promise.all([
     buildClaudeTeamAgentsForProject({
       projectRoot: canonicalRoot,
       sessions,
@@ -2766,9 +3199,14 @@ export async function loadClaudeProjectSnapshotData(projectRoot: string, limit =
       projectRoot: canonicalRoot,
       sessions: coworkSessions,
       limit
+    }),
+    buildClaudeBackgroundAgentsForProject({
+      projectRoot: canonicalRoot,
+      jobs: backgroundJobs,
+      limit
     })
   ]);
-  if (sessions.length === 0 && teamAgents.length === 0 && coworkAgents.length === 0) {
+  if (sessions.length === 0 && teamAgents.length === 0 && coworkAgents.length === 0 && backgroundAgents.length === 0) {
     return { agents: [], events: [] };
   }
 
@@ -2808,6 +3246,9 @@ export async function loadClaudeProjectSnapshotData(projectRoot: string, limit =
   for (const coworkAgent of coworkAgents) {
     upsertAgent(coworkAgent);
   }
+  for (const backgroundAgent of backgroundAgents) {
+    upsertAgent(backgroundAgent);
+  }
 
   return {
     agents: [...agentsById.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
@@ -2822,18 +3263,28 @@ export function summariseClaudeSession(
   fallbackUpdatedAt: number,
   hookRecords: Array<Record<string, unknown>> = []
 ): ClaudeActivitySummary {
-  const ordered = [...records].sort((left, right) => recordTimestampMs(left, fallbackUpdatedAt) - recordTimestampMs(right, fallbackUpdatedAt));
+  const timestampedRecords = records
+    .map((record, index) => ({ record, index, timestamp: explicitRecordTimestampMs(record) }))
+    .filter((entry) => Number.isFinite(entry.timestamp))
+    .sort((left, right) => left.timestamp - right.timestamp || left.index - right.index)
+    .map((entry) => entry.record);
+  const ordered = timestampedRecords.length > 0 ? timestampedRecords : [...records];
   const latestRecord = ordered.at(-1) ?? null;
-  const latestAssistant = [...ordered].reverse().find((record) => record.type === "assistant") ?? null;
-  const latestToolRecord = [...ordered].reverse().find((record) => Boolean(extractAssistantTool(record))) ?? null;
-  const latestUserTextRecord = [...ordered].reverse().find((record) => Boolean(extractUserText(record))) ?? null;
-  const latestAssistantTextRecord = [...ordered].reverse().find((record) => Boolean(extractAssistantText(record))) ?? null;
+  const latestAssistant = latestTimestampedRecord(records, (record) => record.type === "assistant")
+    ?? [...records].reverse().find((record) => record.type === "assistant")
+    ?? null;
+  const latestToolRecord = latestTimestampedRecord(records, (record) => Boolean(extractAssistantTool(record)));
+  const latestUserTextRecord = latestTimestampedRecord(records, (record) => Boolean(extractUserText(record)));
+  const latestAssistantTextRecord = latestTimestampedRecord(records, (record) => Boolean(extractAssistantText(record)));
 
   const latestMessage = latestAssistant ? messageObject(latestAssistant) : null;
   const model = latestMessage && typeof latestMessage.model === "string" ? latestMessage.model : null;
   const updatedAtMs = latestRecord ? recordTimestampMs(latestRecord, fallbackUpdatedAt) : fallbackUpdatedAt;
   const updatedAt = new Date(updatedAtMs).toISOString();
   const gitBranch = latestRecord && typeof latestRecord.gitBranch === "string" ? latestRecord.gitBranch : null;
+  const latestToolUpdatedAt = latestToolRecord ? recordTimestampMs(latestToolRecord, fallbackUpdatedAt) : Number.NEGATIVE_INFINITY;
+  const latestUserTextUpdatedAt = latestUserTextRecord ? recordTimestampMs(latestUserTextRecord, fallbackUpdatedAt) : Number.NEGATIVE_INFINITY;
+  const latestAssistantTextUpdatedAt = latestAssistantTextRecord ? recordTimestampMs(latestAssistantTextRecord, fallbackUpdatedAt) : Number.NEGATIVE_INFINITY;
   const latestHookSummary = [...hookRecords]
     .reverse()
     .map((record) => summariseClaudeHookRecord({
@@ -2855,51 +3306,10 @@ export function summariseClaudeSession(
     });
   }
 
-  if (latestToolRecord) {
-    const tool = extractAssistantTool(latestToolRecord);
-    if (tool) {
-      const toolSummary = claudeToolSummary({
-        sessionId,
-        model,
-        fallbackCwd,
-        gitBranch,
-        updatedAt,
-        toolName: tool.name,
-        toolInput: tool.input,
-        failed: false
-      });
-      if (toolSummary) {
-        return {
-          ...toolSummary,
-          confidence: "inferred"
-        };
-      }
-    }
-  }
-
-  if (latestUserTextRecord && (!latestAssistantTextRecord || recordTimestampMs(latestUserTextRecord, fallbackUpdatedAt) >= recordTimestampMs(latestAssistantTextRecord, fallbackUpdatedAt))) {
-    const text = extractUserText(latestUserTextRecord) ?? "Assigned work";
-    const paths = extractPathsFromText(text);
-    return {
-      label: labelFromModel(model, sessionId),
-      sourceKind: sourceKindFromModel(model),
-      state: "planning",
-      detail: shorten(text, 88),
-      updatedAt,
-      paths: paths.length > 0 ? paths : [fallbackCwd],
-      activityEvent: null,
-      gitBranch,
-      confidence: "inferred",
-      needsUser: null,
-      latestMessage: null,
-      isOngoing: true
-    };
-  }
-
-  if (latestAssistantTextRecord) {
+  if (latestAssistantTextRecord && latestAssistantTextUpdatedAt >= Math.max(latestToolUpdatedAt, latestUserTextUpdatedAt)) {
     const text = extractAssistantText(latestAssistantTextRecord) ?? "Responded";
     const textPaths = extractPathsFromText(text);
-    const ageMs = Date.now() - recordTimestampMs(latestAssistantTextRecord, fallbackUpdatedAt);
+    const ageMs = Date.now() - latestAssistantTextUpdatedAt;
     const state =
       ageMs <= 2 * 60 * 1000 ? "thinking"
       : ageMs <= RECENT_DONE_WINDOW_MS ? "done"
@@ -2925,7 +3335,48 @@ export function summariseClaudeSession(
       confidence: "inferred",
       needsUser: null,
       latestMessage: text,
-      isOngoing: ageMs <= RECENT_DONE_WINDOW_MS
+      isOngoing: state === "thinking"
+    };
+  }
+
+  if (latestToolRecord && latestToolUpdatedAt >= latestUserTextUpdatedAt) {
+    const tool = extractAssistantTool(latestToolRecord);
+    if (tool) {
+      const toolSummary = claudeToolSummary({
+        sessionId,
+        model,
+        fallbackCwd,
+        gitBranch,
+        updatedAt: new Date(latestToolUpdatedAt).toISOString(),
+        toolName: tool.name,
+        toolInput: tool.input,
+        failed: false
+      });
+      if (toolSummary) {
+        return {
+          ...toolSummary,
+          confidence: "inferred"
+        };
+      }
+    }
+  }
+
+  if (latestUserTextRecord) {
+    const text = extractUserText(latestUserTextRecord) ?? "Assigned work";
+    const paths = extractPathsFromText(text);
+    return {
+      label: labelFromModel(model, sessionId),
+      sourceKind: sourceKindFromModel(model),
+      state: "planning",
+      detail: shorten(text, 88),
+      updatedAt: new Date(latestUserTextUpdatedAt).toISOString(),
+      paths: paths.length > 0 ? paths : [fallbackCwd],
+      activityEvent: null,
+      gitBranch,
+      confidence: "inferred",
+      needsUser: null,
+      latestMessage: null,
+      isOngoing: true
     };
   }
 
@@ -2946,11 +3397,12 @@ export function summariseClaudeSession(
 }
 
 export async function discoverClaudeProjects(limit = 50): Promise<DiscoveredProject[]> {
-  const [sdkProjects, teams, coworkSpaces, coworkSessions] = await Promise.all([
+  const [sdkProjects, teams, coworkSpaces, coworkSessions, backgroundJobs] = await Promise.all([
     discoverClaudeProjectsViaSdk(limit),
     readClaudeTeamSnapshots(limit * 4),
     readClaudeCoworkSpaces(limit * 4),
-    readClaudeCoworkSessions(limit * 4)
+    readClaudeCoworkSessions(limit * 4),
+    readClaudeBackgroundJobs(limit * 4)
   ]);
   const fallbackProjects = sdkProjects.length > 0 ? [] : await scanClaudeProjectDirs();
   const grouped = new Map<string, ClaudeSdkProject>();
@@ -2960,19 +3412,25 @@ export async function discoverClaudeProjects(limit = 50): Promise<DiscoveredProj
     ...fallbackProjects.map((project) => ({
       root: project.root,
       updatedAt: project.updatedAt,
-      count: project.count
+      count: project.count,
+      sourceKind: "claude:transcript",
+      sourceKinds: ["claude:transcript"]
     })),
     ...claudeProjectsFromTeams(teams, limit),
     ...claudeProjectsFromCowork({
       spaces: coworkSpaces,
       sessions: coworkSessions,
       limit
-    })
+    }),
+    ...claudeProjectsFromBackgroundJobs(backgroundJobs, limit)
   ]) {
     const existing = [...grouped.values()].find((candidate) => sameProjectPath(candidate.root, project.root));
     if (existing) {
       existing.count += project.count;
       existing.updatedAt = Math.max(existing.updatedAt, project.updatedAt);
+      for (const sourceKind of project.sourceKinds ?? (project.sourceKind ? [project.sourceKind] : [])) {
+        mergeClaudeProjectSourceKinds(existing, sourceKind);
+      }
       continue;
     }
     grouped.set(project.root, { ...project });
@@ -2985,7 +3443,9 @@ export async function discoverClaudeProjects(limit = 50): Promise<DiscoveredProj
       root: project.root,
       label: basename(project.root) || project.root,
       updatedAt: project.updatedAt,
-      count: project.count
+      count: project.count,
+      sourceKind: project.sourceKind,
+      sourceKinds: project.sourceKinds
     }));
 }
 
@@ -2994,7 +3454,9 @@ export function discoverClaudeProjectsFromTeamsForTest(teams: ClaudeTeamSnapshot
     root: project.root,
     label: basename(project.root) || project.root,
     updatedAt: project.updatedAt,
-    count: project.count
+    count: project.count,
+    sourceKind: project.sourceKind,
+    sourceKinds: project.sourceKinds
   }));
 }
 
@@ -3011,7 +3473,20 @@ export function discoverClaudeProjectsFromCoworkForTest(input: {
     root: project.root,
     label: basename(project.root) || project.root,
     updatedAt: project.updatedAt,
-    count: project.count
+    count: project.count,
+    sourceKind: project.sourceKind,
+    sourceKinds: project.sourceKinds
+  }));
+}
+
+export function discoverClaudeProjectsFromBackgroundJobsForTest(jobs: ClaudeBackgroundJobSession[], limit = 50): DiscoveredProject[] {
+  return claudeProjectsFromBackgroundJobs(jobs, limit).map((project) => ({
+    root: project.root,
+    label: basename(project.root) || project.root,
+    updatedAt: project.updatedAt,
+    count: project.count,
+    sourceKind: project.sourceKind,
+    sourceKinds: project.sourceKinds
   }));
 }
 
@@ -3069,6 +3544,16 @@ export async function buildClaudeCoworkAgentsForTest(input: {
   return buildClaudeCoworkAgentsForProject({
     projectRoot: canonicalizeProjectPath(input.projectRoot) ?? input.projectRoot,
     sessions: input.sessions
+  });
+}
+
+export async function buildClaudeBackgroundAgentsForTest(input: {
+  projectRoot: string;
+  jobs: ClaudeBackgroundJobSession[];
+}): Promise<DashboardAgent[]> {
+  return buildClaudeBackgroundAgentsForProject({
+    projectRoot: canonicalizeProjectPath(input.projectRoot) ?? input.projectRoot,
+    jobs: input.jobs
   });
 }
 
