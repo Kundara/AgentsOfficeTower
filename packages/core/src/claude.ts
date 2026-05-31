@@ -3904,7 +3904,7 @@ export function summariseClaudeSession(
       });
       if (toolSummary) {
         return {
-          ...toolSummary,
+          ...ageClaudeSummary(toolSummary),
           label: displayLabel,
           confidence: "inferred"
         };
@@ -3915,7 +3915,7 @@ export function summariseClaudeSession(
   if (latestUserTextRecord) {
     const text = extractUserText(latestUserTextRecord) ?? "Assigned work";
     const paths = extractPathsFromText(text);
-    return {
+    return ageClaudeSummary({
       label: displayLabel,
       sourceKind: sourceKindFromModel(model),
       state: "planning",
@@ -3928,7 +3928,7 @@ export function summariseClaudeSession(
       needsUser: null,
       latestMessage: null,
       isOngoing: true
-    };
+    });
   }
 
   return {

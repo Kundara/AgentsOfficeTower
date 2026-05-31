@@ -107,6 +107,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Fixed Claude workflow/subagent duplication by keeping child `agent_id` hook activity out of lead-session summaries while still routing typed events and child rows to the child thread, and by preserving separate same-named workflow children from distinct workflow ids.
 - Fixed local Codex discovery polling so an already-known thread without a final answer keeps its workstation seat through idle/read-only list refreshes instead of bouncing to the rec room between messages.
 - Fixed non-local live agents so ongoing Claude/Cursor-style sessions seat at workstations even when they are not the current local workload.
+- Fixed stale transcript-inferred Claude tool/user activity so days-old Edit or prompt records decay to idle instead of rendering as ongoing desk work.
 - Fixed dormant local Codex subagents so subscription refreshes no longer revive stopped child rows from recent timestamps, preventing child workers from repeatedly popping back onto desks after they have already cooled down.
 - Fixed roaming Hermes/OpenClaw tower avatars so unassigned sessions float just left of the visible tower with larger, faster bobbing sprites, velocity tilt, stable screen-space height during scroll, and scroll-only updates that do not spawn duplicate transfer ghosts or desk-seat copies.
 - Fixed completed roaming Hermes/OpenClaw sessions so they leave the floating tower layer after the finished cooldown instead of lingering as apparently active projectless hoverers.

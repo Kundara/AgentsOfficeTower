@@ -1045,6 +1045,63 @@ test("stale Claude hook-backed live states decay to done instead of staying ongo
   assert.equal(summary.activityEvent, null);
 });
 
+test("stale Claude transcript tool activity does not stay ongoing forever", () => {
+  const now = Date.now();
+  const oldTimestamp = new Date(now - 11 * 24 * 60 * 60 * 1000).toISOString();
+  const summary = summariseClaudeSession(
+    "session-123",
+    "/workspaces/CodexAgentsOffice",
+    [
+      {
+        type: "assistant",
+        timestamp: oldTimestamp,
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [
+            {
+              type: "tool_use",
+              name: "Edit",
+              input: {
+                file_path: "/workspaces/CodexAgentsOffice/.claude/settings.local.json"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    now
+  );
+
+  assert.equal(summary.state, "idle");
+  assert.equal(summary.detail, "Idle");
+  assert.equal(summary.isOngoing, false);
+  assert.equal(summary.activityEvent, null);
+});
+
+test("stale Claude transcript user prompts do not stay in planning forever", () => {
+  const now = Date.now();
+  const oldTimestamp = new Date(now - 11 * 24 * 60 * 60 * 1000).toISOString();
+  const summary = summariseClaudeSession(
+    "session-123",
+    "/workspaces/CodexAgentsOffice",
+    [
+      {
+        type: "user",
+        timestamp: oldTimestamp,
+        message: {
+          content: "Fix the renderer and update settings.local.json"
+        }
+      }
+    ],
+    now
+  );
+
+  assert.equal(summary.state, "idle");
+  assert.equal(summary.detail, "Idle");
+  assert.equal(summary.isOngoing, false);
+  assert.equal(summary.activityEvent, null);
+});
+
 test("hook-backed Claude sessions still surface assistant reply text", () => {
   const now = Date.now();
   const toolTimestamp = new Date(now - 60 * 1000).toISOString();
