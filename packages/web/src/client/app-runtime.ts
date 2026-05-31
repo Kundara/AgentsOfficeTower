@@ -4613,7 +4613,7 @@ export function startClientApp(): void {
           }
           return agent.statusText !== "notLoaded" && isDeskLiveLocalState(agent.state);
         }
-        return agent.isCurrent === true;
+        return agent.isOngoing === true || agent.isCurrent === true;
       }
 
       function isFinishedLeadForRec(agent) {

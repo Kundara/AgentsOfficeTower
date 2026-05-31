@@ -208,6 +208,15 @@ test("client runtime seats current local workload even when its latest item summ
   );
 });
 
+test("client runtime seats ongoing non-local agents at workstations", () => {
+  const seatingSource = readRuntimeSource("seating-source.ts");
+
+  assert.match(
+    seatingSource,
+    /return agent\.isOngoing === true \|\| agent\.isCurrent === true;/
+  );
+});
+
 test("client runtime active counters group subagents under their lead session", () => {
   const layoutSource = readRuntimeSource("layout-source.ts");
 

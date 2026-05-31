@@ -136,7 +136,7 @@ export const CLIENT_RUNTIME_SEATING_SOURCE = `
           }
           return agent.statusText !== "notLoaded" && isDeskLiveLocalState(agent.state);
         }
-        return agent.isCurrent === true;
+        return agent.isOngoing === true || agent.isCurrent === true;
       }
 
       function isFinishedLeadForRec(agent) {
