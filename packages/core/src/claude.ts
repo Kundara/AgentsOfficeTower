@@ -2710,8 +2710,8 @@ function mergePathLists(...pathLists: string[][]): string[] {
   return Array.from(new Set(pathLists.flat().filter(Boolean)));
 }
 
-function maxIsoTimestamp(...timestamps: Array<string | number | null | undefined>): string {
-  const ms = Math.max(
+function maxTimestampMs(...timestamps: Array<string | number | null | undefined>): number {
+  return Math.max(
     0,
     ...timestamps
       .map((timestamp) => {
@@ -2725,7 +2725,47 @@ function maxIsoTimestamp(...timestamps: Array<string | number | null | undefined
         return 0;
       })
   );
+}
+
+function maxIsoTimestamp(...timestamps: Array<string | number | null | undefined>): string {
+  const ms = maxTimestampMs(...timestamps);
   return new Date(ms || Date.now()).toISOString();
+}
+
+function isRecentClaudeEvidence(timestampMs: number, windowMs = RECENT_DONE_WINDOW_MS, now = Date.now()): boolean {
+  return Number.isFinite(timestampMs) && timestampMs > 0 && timestampMs >= now - windowMs;
+}
+
+function latestFreshClaudeHookEvidence(input: { records: Array<Record<string, unknown>>; fallbackUpdatedAt: number }): boolean {
+  return input.records.some((record) => isRecentClaudeEvidence(recordTimestampMs(record, input.fallbackUpdatedAt)));
+}
+
+function claudeTeamMemberBaseUpdatedAt(context: ClaudeTeamMemberContext): number {
+  return maxTimestampMs(context.team.updatedAt, context.member.joinedAt);
+}
+
+function hasFreshClaudeTeamActivity(input: {
+  context: ClaudeTeamMemberContext;
+  latestHook?: { updatedAtMs: number } | null;
+  fallbackHookRecords?: Array<Record<string, unknown>>;
+  fallbackUpdatedAt?: number;
+}): boolean {
+  if (!input.context.member.isActive) {
+    return false;
+  }
+  if (isRecentClaudeEvidence(claudeTeamMemberBaseUpdatedAt(input.context))) {
+    return true;
+  }
+  if (input.latestHook && isRecentClaudeEvidence(input.latestHook.updatedAtMs)) {
+    return true;
+  }
+  if (input.fallbackHookRecords && typeof input.fallbackUpdatedAt === "number") {
+    return latestFreshClaudeHookEvidence({
+      records: input.fallbackHookRecords,
+      fallbackUpdatedAt: input.fallbackUpdatedAt
+    });
+  }
+  return false;
 }
 
 function claudeAgentFromLoadedSession(
@@ -2738,14 +2778,20 @@ function claudeAgentFromLoadedSession(
   const updatedAt = teamContext
     ? maxIsoTimestamp(session.summary.updatedAt, teamContext.team.updatedAt, teamContext.member.joinedAt)
     : session.summary.updatedAt;
-  const memberIsActive = teamContext?.member.isActive ?? false;
+  const memberIsFreshActive = teamContext
+    ? hasFreshClaudeTeamActivity({
+      context: teamContext,
+      fallbackHookRecords: session.hookRecords.filter((record) => !isClaudeChildHookRecord(record)),
+      fallbackUpdatedAt: session.updatedAt
+    })
+    : false;
   const state =
-    memberIsActive && (session.summary.state === "idle" || session.summary.state === "done")
+    memberIsFreshActive && (session.summary.state === "idle" || session.summary.state === "done")
       ? "running"
       : session.summary.state;
-  const isOngoing = session.summary.isOngoing || memberIsActive;
+  const isOngoing = session.summary.isOngoing || memberIsFreshActive;
   const detail =
-    memberIsActive && (session.summary.state === "idle" || session.summary.state === "done")
+    memberIsFreshActive && (session.summary.state === "idle" || session.summary.state === "done")
       ? `${teamContext?.member.name ?? "Teammate"} active in ${teamContext?.team.name ?? "Claude team"}`
       : session.summary.detail;
   const paths = teamContext
@@ -2764,7 +2810,7 @@ function claudeAgentFromLoadedSession(
     depth: parentThreadId ? 1 : 0,
     isCurrent: false,
     isOngoing,
-    statusText: teamContext ? (teamContext.member.isActive ? "running" : "idle") : "claude",
+    statusText: teamContext ? (memberIsFreshActive ? "running" : "idle") : "claude",
     role: teamContext?.member.agentType ?? "claude",
     nickname: teamContext?.member.name ?? null,
     isSubagent: Boolean(teamContext),
@@ -2876,11 +2922,16 @@ function claudeTeamMemberSummary(input: {
 }): ClaudeActivitySummary {
   const primaryCwd = claudeTeamMemberPrimaryCwd(input.context.member);
   const baseUpdatedAt = Math.max(input.context.team.updatedAt, input.context.member.joinedAt ?? 0);
+  const latestHook = latestClaudeTeamHookSummary(input);
+  const memberIsFreshActive = hasFreshClaudeTeamActivity({
+    context: input.context,
+    latestHook
+  });
   const base: ClaudeActivitySummary = {
     label: input.context.member.name,
     sourceKind: `claude:team:${input.context.team.name}`,
-    state: input.context.member.isActive ? "running" : "waiting",
-    detail: input.context.member.isActive
+    state: memberIsFreshActive ? "running" : "idle",
+    detail: memberIsFreshActive
       ? `${input.context.member.name} active in ${input.context.team.name}`
       : `${input.context.member.name} idle in ${input.context.team.name}`,
     updatedAt: new Date(baseUpdatedAt || Date.now()).toISOString(),
@@ -2890,15 +2941,14 @@ function claudeTeamMemberSummary(input: {
     confidence: "typed",
     needsUser: null,
     latestMessage: null,
-    isOngoing: true
+    isOngoing: memberIsFreshActive
   };
-  const latestHook = latestClaudeTeamHookSummary(input);
   if (!latestHook) {
     return base;
   }
 
   const hookState =
-    input.context.member.isActive && (latestHook.summary.state === "done" || latestHook.summary.state === "idle")
+    memberIsFreshActive && (latestHook.summary.state === "done" || latestHook.summary.state === "idle")
       ? "running"
       : latestHook.summary.state;
   return {
@@ -2910,7 +2960,7 @@ function claudeTeamMemberSummary(input: {
     activityEvent: latestHook.summary.activityEvent,
     latestMessage: latestHook.summary.latestMessage,
     needsUser: latestHook.summary.needsUser,
-    isOngoing: input.context.member.isActive || latestHook.summary.isOngoing
+    isOngoing: memberIsFreshActive || latestHook.summary.isOngoing
   };
 }
 
@@ -2937,7 +2987,7 @@ async function claudeAgentFromTeamMemberContext(input: {
     depth: parentThreadId ? 1 : 0,
     isCurrent: false,
     isOngoing: summary.isOngoing,
-    statusText: input.context.member.isActive ? "running" : "idle",
+    statusText: summary.isOngoing ? "running" : "idle",
     role: input.context.member.agentType ?? "teammate",
     nickname: input.context.member.name,
     isSubagent: true,
@@ -4039,6 +4089,39 @@ export function discoverClaudeProjectsFromBackgroundJobsForTest(jobs: ClaudeBack
     sourceKind: project.sourceKind,
     sourceKinds: project.sourceKinds
   }));
+}
+
+export async function buildClaudeLeadAgentsForTest(input: {
+  projectRoot: string;
+  sessionId: string;
+  cwd: string;
+  gitBranch?: string | null;
+  updatedAt: number;
+  records?: Array<Record<string, unknown>>;
+  hookRecords?: Array<Record<string, unknown>>;
+  teams?: ClaudeTeamSnapshot[];
+}): Promise<DashboardAgent[]> {
+  const session: ClaudeLoadedSession = {
+    sessionId: input.sessionId,
+    title: extractClaudeSessionTitle(input.records ?? []),
+    projectDirPath: null,
+    cwd: canonicalizeProjectPath(input.cwd) ?? input.cwd,
+    gitBranch: input.gitBranch ?? null,
+    updatedAt: input.updatedAt,
+    records: input.records ?? [],
+    hookRecords: input.hookRecords ?? [],
+    summary: summariseClaudeSession(
+      input.sessionId,
+      canonicalizeProjectPath(input.cwd) ?? input.cwd,
+      input.records ?? [],
+      input.updatedAt,
+      input.hookRecords ?? []
+    )
+  };
+  const teamIndex = buildClaudeTeamIndex(input.teams ?? [], inferClaudeTeamLeadSessionIds(input.teams ?? [], [session]));
+  const teamContext = teamIndex.bySessionId.get(session.sessionId) ?? null;
+  const appearance = await ensureAgentAppearance(canonicalizeProjectPath(input.projectRoot) ?? input.projectRoot, claudeLeadAgentId(session.sessionId));
+  return [claudeAgentFromLoadedSession(session, appearance, teamContext)];
 }
 
 export async function buildClaudeSubagentAgentsForTest(input: {

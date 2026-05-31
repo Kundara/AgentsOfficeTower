@@ -10,6 +10,7 @@ const { promisify } = require("node:util");
 const {
   buildClaudeBackgroundAgentsForTest,
   buildClaudeCoworkAgentsForTest,
+  buildClaudeLeadAgentsForTest,
   buildClaudeSubagentAgentsForTest,
   buildClaudeTeamAgentsForTest,
   discoverClaudeProjectsFromBackgroundJobsForTest,
@@ -734,6 +735,120 @@ test("Claude team files create teammate child agents and project floors", async 
   });
 });
 
+test("stale Claude team active flags do not force loaded lead sessions to run forever", async () => {
+  await withTempAppData("claude-stale-team-lead-", async () => {
+    const now = Date.now();
+    const old = now - 11 * 24 * 60 * 60 * 1000;
+    const agents = await buildClaudeLeadAgentsForTest({
+      projectRoot: "/workspaces/CodexAgentsOffice",
+      sessionId: "lead-123",
+      cwd: "/workspaces/CodexAgentsOffice",
+      updatedAt: old,
+      records: [
+        {
+          type: "user",
+          timestamp: new Date(old).toISOString(),
+          message: {
+            content: "Review settings.local.json"
+          }
+        }
+      ],
+      hookRecords: [],
+      teams: [
+        {
+          name: "review",
+          description: "Review team",
+          leadAgentId: "team-lead@review",
+          leadSessionId: "lead-123",
+          updatedAt: old,
+          members: [
+            {
+              agentId: "security@review",
+              name: "security",
+              agentType: "security-reviewer",
+              model: "claude-sonnet-4-6",
+              prompt: null,
+              color: null,
+              joinedAt: old,
+              tmuxPaneId: "%0",
+              cwd: "/workspaces/CodexAgentsOffice",
+              worktreePath: null,
+              sessionId: "lead-123",
+              subscriptions: [],
+              backendType: "tmux",
+              isActive: true,
+              mode: "default"
+            }
+          ]
+        }
+      ]
+    });
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].state, "idle");
+    assert.equal(agents[0].isOngoing, false);
+    assert.equal(agents[0].statusText, "idle");
+    assert.equal(agents[0].activityEvent, null);
+  });
+});
+
+test("fresh Claude team active flags can still keep loaded lead sessions running", async () => {
+  await withTempAppData("claude-fresh-team-lead-", async () => {
+    const now = Date.now();
+    const old = now - 11 * 24 * 60 * 60 * 1000;
+    const agents = await buildClaudeLeadAgentsForTest({
+      projectRoot: "/workspaces/CodexAgentsOffice",
+      sessionId: "lead-123",
+      cwd: "/workspaces/CodexAgentsOffice",
+      updatedAt: old,
+      records: [
+        {
+          type: "assistant",
+          timestamp: new Date(old).toISOString(),
+          message: {
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "Older summary." }]
+          }
+        }
+      ],
+      hookRecords: [],
+      teams: [
+        {
+          name: "review",
+          description: "Review team",
+          leadAgentId: "team-lead@review",
+          leadSessionId: "lead-123",
+          updatedAt: now - 30_000,
+          members: [
+            {
+              agentId: "security@review",
+              name: "security",
+              agentType: "security-reviewer",
+              model: "claude-sonnet-4-6",
+              prompt: null,
+              color: null,
+              joinedAt: old,
+              tmuxPaneId: "%0",
+              cwd: "/workspaces/CodexAgentsOffice",
+              worktreePath: null,
+              sessionId: "lead-123",
+              subscriptions: [],
+              backendType: "tmux",
+              isActive: true,
+              mode: "default"
+            }
+          ]
+        }
+      ]
+    });
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].state, "running");
+    assert.equal(agents[0].isOngoing, true);
+    assert.equal(agents[0].statusText, "running");
+  });
+});
+
 test("Claude Co-work local agent sessions create workspace floors and read-only agents", async () => {
   await withTempAppData("claude-cowork-rows-", async () => {
     const now = Date.now();
@@ -1048,21 +1163,59 @@ test("stale Claude hook-backed live states decay to done instead of staying ongo
 test("stale Claude transcript tool activity does not stay ongoing forever", () => {
   const now = Date.now();
   const oldTimestamp = new Date(now - 11 * 24 * 60 * 60 * 1000).toISOString();
+
+  for (const [toolName, input] of [
+    ["Edit", { file_path: "/workspaces/CodexAgentsOffice/.claude/settings.local.json" }],
+    ["Bash", { command: "npm test", cwd: "/workspaces/CodexAgentsOffice" }]
+  ]) {
+    const summary = summariseClaudeSession(
+      `session-${toolName}`,
+      "/workspaces/CodexAgentsOffice",
+      [
+        {
+          type: "assistant",
+          timestamp: oldTimestamp,
+          message: {
+            model: "claude-sonnet-4-6",
+            content: [
+              {
+                type: "tool_use",
+                name: toolName,
+                input
+              }
+            ]
+          }
+        }
+      ],
+      now
+    );
+
+    assert.equal(summary.state, "idle");
+    assert.equal(summary.detail, "Idle");
+    assert.equal(summary.isOngoing, false);
+    assert.equal(summary.activityEvent, null);
+  }
+});
+
+test("fresh Claude transcript tool activity still stays ongoing", () => {
+  const now = Date.now();
+  const freshTimestamp = new Date(now - 30 * 1000).toISOString();
   const summary = summariseClaudeSession(
-    "session-123",
+    "session-fresh-bash",
     "/workspaces/CodexAgentsOffice",
     [
       {
         type: "assistant",
-        timestamp: oldTimestamp,
+        timestamp: freshTimestamp,
         message: {
           model: "claude-sonnet-4-6",
           content: [
             {
               type: "tool_use",
-              name: "Edit",
+              name: "Bash",
               input: {
-                file_path: "/workspaces/CodexAgentsOffice/.claude/settings.local.json"
+                command: "npm test",
+                cwd: "/workspaces/CodexAgentsOffice"
               }
             }
           ]
@@ -1072,10 +1225,9 @@ test("stale Claude transcript tool activity does not stay ongoing forever", () =
     now
   );
 
-  assert.equal(summary.state, "idle");
-  assert.equal(summary.detail, "Idle");
-  assert.equal(summary.isOngoing, false);
-  assert.equal(summary.activityEvent, null);
+  assert.equal(summary.state, "validating");
+  assert.equal(summary.isOngoing, true);
+  assert.equal(summary.activityEvent?.type, "commandExecution");
 });
 
 test("stale Claude transcript user prompts do not stay in planning forever", () => {

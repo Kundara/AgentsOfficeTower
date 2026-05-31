@@ -437,9 +437,23 @@ export const MULTIPLAYER_SCRIPT = `
         }
       }
 
+      function isStaleSharedOngoingAgent(agent) {
+        if (!agent || agent.isOngoing !== true) {
+          return false;
+        }
+        const updatedAt = Date.parse(agent.updatedAt || "");
+        return !Number.isFinite(updatedAt) || Date.now() - updatedAt > RESTING_DORMANT_MS;
+      }
+
+      function idleStatusTextForStaleSharedAgent(agent) {
+        const activeStatuses = new Set(["active", "running", "editing", "validating", "planning", "thinking", "scanning", "claude"]);
+        return activeStatuses.has(String(agent && agent.statusText || "")) ? "idle" : agent.statusText;
+      }
+
       function mergeSharedAgent(localSnapshot, remoteSnapshot, agent, peer) {
         const cwd = remapSharedPath(remoteSnapshot.projectRoot, localSnapshot.projectRoot, agent.cwd);
         const paths = remapSharedPaths(remoteSnapshot.projectRoot, localSnapshot.projectRoot, agent.paths);
+        const staleOngoing = isStaleSharedOngoingAgent(agent);
         return {
           ...agent,
           id: "shared:" + peer.peerId + ":" + agent.id,
@@ -450,13 +464,18 @@ export const MULTIPLAYER_SCRIPT = `
           paths,
           roomId: roomIdForSharedPaths(localSnapshot, paths.length > 0 ? paths : cwd ? [cwd] : []),
           resumeCommand: null,
-          activityEvent: agent.activityEvent
+          isCurrent: staleOngoing ? false : agent.isCurrent,
+          isOngoing: staleOngoing ? false : agent.isOngoing,
+          state: staleOngoing ? "idle" : agent.state,
+          statusText: staleOngoing ? idleStatusTextForStaleSharedAgent(agent) : agent.statusText,
+          stoppedAt: staleOngoing ? (agent.stoppedAt || agent.updatedAt || new Date().toISOString()) : agent.stoppedAt,
+          activityEvent: !staleOngoing && agent.activityEvent
             ? {
               ...agent.activityEvent,
               path: remapSharedPath(remoteSnapshot.projectRoot, localSnapshot.projectRoot, agent.activityEvent.path)
             }
             : null,
-          needsUser: agent.needsUser
+          needsUser: !staleOngoing && agent.needsUser
             ? {
               ...agent.needsUser,
               cwd: remapSharedPath(remoteSnapshot.projectRoot, localSnapshot.projectRoot, agent.needsUser.cwd) || undefined,

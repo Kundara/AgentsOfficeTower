@@ -217,6 +217,19 @@ test("client runtime seats ongoing non-local agents at workstations", () => {
   );
 });
 
+test("multiplayer merge cools stale remote ongoing agents before seating", () => {
+  const multiplayerSource = readClientSource("multiplayer-source.ts");
+
+  assert.match(
+    multiplayerSource,
+    /function isStaleSharedOngoingAgent\(agent\) \{[\s\S]*agent\.isOngoing !== true[\s\S]*Date\.now\(\) - updatedAt > RESTING_DORMANT_MS;/
+  );
+  assert.match(
+    multiplayerSource,
+    /const staleOngoing = isStaleSharedOngoingAgent\(agent\);[\s\S]*isCurrent: staleOngoing \? false : agent\.isCurrent,[\s\S]*isOngoing: staleOngoing \? false : agent\.isOngoing,[\s\S]*state: staleOngoing \? "idle" : agent\.state,[\s\S]*activityEvent: !staleOngoing && agent\.activityEvent[\s\S]*needsUser: !staleOngoing && agent\.needsUser/
+  );
+});
+
 test("client runtime active counters group subagents under their lead session", () => {
   const layoutSource = readRuntimeSource("layout-source.ts");
 
