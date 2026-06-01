@@ -1586,6 +1586,27 @@ test("message toasts only clear older toasts for the same agent", () => {
   );
 });
 
+test("shared peer prefixes are removed only from toast notification subject keys", () => {
+  const layoutSource = readRuntimeSource("layout-source.ts");
+
+  assert.ok(
+    layoutSource.includes("function normalizeSharedNotificationSubjectId(value) {"),
+    "layout runtime should define a shared-prefix normalizer for notification subjects"
+  );
+  assert.match(
+    layoutSource,
+    /const match = subjectId\.match\(\/\^shared:\[\^:\]\+:\(\.\+\)\$\/\);\n\s+return match \? match\[1\] : subjectId;/
+  );
+  assert.ok(
+    layoutSource.includes("return \\`\\${projectRoot}::thread::\\${normalizeSharedNotificationSubjectId(subjectThreadId)}\\`;"),
+    "thread notification keys should dedupe shared peers by underlying thread id"
+  );
+  assert.ok(
+    layoutSource.includes("return \\`\\${projectRoot}::agent::\\${normalizeSharedNotificationSubjectId(agent && agent.id ? agent.id : \"unknown\")}\\`;"),
+    "agent fallback notification keys should use the same subject-only normalization"
+  );
+});
+
 test("toast notifications use the merged worktree view so unsplit floors keep matching scene anchors", () => {
   const multiplayerSource = readClientSource("multiplayer-source.ts");
 

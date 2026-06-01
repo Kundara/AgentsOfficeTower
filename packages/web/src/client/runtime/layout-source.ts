@@ -715,6 +715,12 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         return snapshot.agents.filter(isBusyAgent).length;
       }
 
+      function normalizeSharedNotificationSubjectId(value) {
+        const subjectId = typeof value === "string" ? value : "";
+        const match = subjectId.match(/^shared:[^:]+:(.+)$/);
+        return match ? match[1] : subjectId;
+      }
+
       function notificationSubjectKey(projectRoot, agent, threadId) {
         const explicitThreadId = typeof threadId === "string" && threadId.length > 0 ? threadId : null;
         const agentThreadId = agent && typeof agent.threadId === "string" && agent.threadId.length > 0
@@ -722,9 +728,9 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           : null;
         const subjectThreadId = explicitThreadId || agentThreadId;
         if (subjectThreadId) {
-          return \`\${projectRoot}::thread::\${subjectThreadId}\`;
+          return \`\${projectRoot}::thread::\${normalizeSharedNotificationSubjectId(subjectThreadId)}\`;
         }
-        return \`\${projectRoot}::agent::\${agent && agent.id ? agent.id : "unknown"}\`;
+        return \`\${projectRoot}::agent::\${normalizeSharedNotificationSubjectId(agent && agent.id ? agent.id : "unknown")}\`;
       }
 
       function projectHydrationBaselineAt(projectRoot) {
