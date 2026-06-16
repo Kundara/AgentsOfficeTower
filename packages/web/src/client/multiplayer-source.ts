@@ -2,7 +2,6 @@ export const MULTIPLAYER_SCRIPT = `
       const multiplayerPeerId = loadMultiplayerPeerId();
       const multiplayerDeviceId = loadMultiplayerDeviceId();
       const multiplayerPeers = new Map();
-      const multiplayerRemoteProjects = new Map();
       let multiplayerSocket = null;
       let multiplayerModulePromise = null;
       let multiplayerBroadcastTimer = null;
@@ -10,10 +9,20 @@ export const MULTIPLAYER_SCRIPT = `
       let webCliTeamFleetSyncTimer = null;
       let pendingWebCliTeamFleet = null;
       const MULTIPLAYER_STALE_MS = 30000;
-      const MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS = 60 * 60 * 1000;
       const MULTIPLAYER_BROADCAST_DEBOUNCE_MS = 700;
       const WEB_CLI_TEAM_FLEET_SYNC_DEBOUNCE_MS = 1000;
       const MULTIPLAYER_NICKNAME_MAX_LENGTH = 12;
+      const MULTIPLAYER_ACTIVE_AGENT_STATES = new Set([
+        "editing",
+        "running",
+        "validating",
+        "scanning",
+        "thinking",
+        "planning",
+        "delegating",
+        "waiting",
+        "blocked"
+      ]);
 
       function sanitizeMultiplayerField(value) {
         return typeof value === "string" ? value.trim() : "";
@@ -65,10 +74,10 @@ export const MULTIPLAYER_SCRIPT = `
           const next = {};
           for (const [projectRoot, shared] of Object.entries(parsed)) {
             const normalizedRoot = sanitizeMultiplayerField(projectRoot);
-            if (!normalizedRoot || shared !== false) {
+            if (!normalizedRoot || shared !== true) {
               continue;
             }
-            next[normalizedRoot] = false;
+            next[normalizedRoot] = true;
           }
           return next;
         } catch {
@@ -88,9 +97,9 @@ export const MULTIPLAYER_SCRIPT = `
       function isProjectSharedWithRoom(projectRoot) {
         const normalizedRoot = sanitizeMultiplayerField(projectRoot);
         if (!normalizedRoot) {
-          return true;
+          return false;
         }
-        return state.multiplayerProjectShares?.[normalizedRoot] !== false;
+        return state.multiplayerProjectShares?.[normalizedRoot] === true;
       }
 
       function setProjectRootsSharedWithRoom(projectRoots, shared) {
@@ -102,14 +111,15 @@ export const MULTIPLAYER_SCRIPT = `
         }
         const nextShares = { ...(state.multiplayerProjectShares || {}) };
         for (const projectRoot of normalizedRoots) {
-          if (shared === false) {
-            nextShares[projectRoot] = false;
+          if (shared === true) {
+            nextShares[projectRoot] = true;
           } else {
             delete nextShares[projectRoot];
           }
         }
         state.multiplayerProjectShares = nextShares;
         saveMultiplayerProjectShares();
+        applyFleet(state.localFleet);
         render();
         scheduleMultiplayerBroadcast();
       }
@@ -268,10 +278,6 @@ export const MULTIPLAYER_SCRIPT = `
           : "Shared room connected · " + peerCount + " remote peer" + (peerCount === 1 ? "" : "s");
       }
 
-      function sharedProjectCooldownNote() {
-        return "Shared project cooldown · keep remote-only floors visible for up to 1 hour after sharing stops.";
-      }
-
       function ensureSnapshotNotes(snapshot) {
         if (!Array.isArray(snapshot.notes)) {
           snapshot.notes = [];
@@ -302,18 +308,50 @@ export const MULTIPLAYER_SCRIPT = `
         snapshot.notes = notes;
       }
 
-      function setSnapshotCooldownNote(snapshot) {
-        const notes = ensureSnapshotNotes(snapshot).filter((note) => note !== sharedProjectCooldownNote());
-        notes.push(sharedProjectCooldownNote());
-        snapshot.notes = notes;
+      function snapshotShareRoots(snapshot) {
+        if (!snapshot) {
+          return [];
+        }
+        if (typeof projectShareToggleRoots === "function") {
+          return projectShareToggleRoots(snapshot);
+        }
+        const root = sanitizeMultiplayerField(snapshot.projectRoot);
+        return root ? [root] : [];
+      }
+
+      function isSnapshotSharedWithRoom(snapshot) {
+        const roots = snapshotShareRoots(snapshot);
+        return roots.length > 0 && roots.every((projectRoot) => isProjectSharedWithRoom(projectRoot));
+      }
+
+      function isActiveSharedAgent(agent) {
+        if (!agent || typeof agent !== "object") {
+          return false;
+        }
+        if (agent.isCurrent === true || agent.isOngoing === true || agent.needsUser) {
+          return true;
+        }
+        const state = String(agent.state || "").toLowerCase();
+        if (MULTIPLAYER_ACTIVE_AGENT_STATES.has(state)) {
+          return true;
+        }
+        return String(agent.statusText || "").toLowerCase() === "active"
+          && state !== "idle"
+          && state !== "done";
+      }
+
+      function snapshotActiveSharedAgents(snapshot) {
+        return (Array.isArray(snapshot && snapshot.agents) ? snapshot.agents : [])
+          .filter((agent) => isActiveSharedAgent(agent));
+      }
+
+      function snapshotHasActiveSharedAgents(snapshot) {
+        return snapshotActiveSharedAgents(snapshot).length > 0;
       }
 
       function snapshotHasSharedData(snapshot) {
         if (!snapshot || typeof snapshot !== "object") {
           return false;
-        }
-        if (snapshot.sharedRemoteOnly === true) {
-          return true;
         }
         if (Array.isArray(snapshot.sharedParticipantLabels) && snapshot.sharedParticipantLabels.length > 0) {
           return true;
@@ -544,45 +582,6 @@ export const MULTIPLAYER_SCRIPT = `
           .slice(0, 12);
       }
 
-      function remoteProjectMemoryEntry(snapshot, participantLabels, receivedAt) {
-        return {
-          snapshot: cloneValue(snapshot),
-          participantLabels: Array.from(new Set((Array.isArray(participantLabels) ? participantLabels : []).filter(Boolean))),
-          receivedAt
-        };
-      }
-
-      function cooledRemoteProjectSnapshot(entry) {
-        const cooledAtIso = new Date(entry.receivedAt).toISOString();
-        const snapshot = cloneValue(entry.snapshot);
-        snapshot.agents = (Array.isArray(snapshot.agents) ? snapshot.agents : []).map((agent) => ({
-          ...agent,
-          isCurrent: false,
-          isOngoing: false,
-          needsUser: null,
-          stoppedAt: agent.stoppedAt || cooledAtIso,
-          statusText: agent.source === "local" && agent.statusText === "active" ? "idle" : agent.statusText
-        }));
-        snapshot.generatedAt = cooledAtIso;
-        snapshot.sharedRemoteOnly = true;
-        snapshot.sharedCoolingDown = true;
-        setSnapshotSharedParticipants(snapshot, entry.participantLabels);
-        setSnapshotCooldownNote(snapshot);
-        return snapshot;
-      }
-
-      function pruneRemoteProjectCooldowns() {
-        const cutoff = Date.now() - MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS;
-        let changed = false;
-        for (const [projectKey, entry] of multiplayerRemoteProjects.entries()) {
-          if (!entry || entry.receivedAt < cutoff) {
-            multiplayerRemoteProjects.delete(projectKey);
-            changed = true;
-          }
-        }
-        return changed;
-      }
-
       function sharedAgentIdentityKeys(agent) {
         const keys = [];
         if (!agent || typeof agent !== "object") {
@@ -610,41 +609,12 @@ export const MULTIPLAYER_SCRIPT = `
         return keys;
       }
 
-      function ensureRemoteSharedBucket(remoteProjectsByKey, remoteSnapshot, peer) {
-        const projectKey = snapshotWorkspaceKey(remoteSnapshot);
-        let bucket = remoteProjectsByKey.get(projectKey);
-        if (!bucket) {
-          const snapshot = cloneValue(remoteSnapshot);
-          snapshot.agents = [];
-          snapshot.events = [];
-          snapshot.activity = {
-            generatedAt: remoteSnapshot.activity && remoteSnapshot.activity.generatedAt || remoteSnapshot.generatedAt || new Date().toISOString(),
-            hotChanges: [],
-            hotTools: [],
-            runningCommands: []
-          };
-          snapshot.sharedRemoteOnly = true;
-          snapshot.sharedCoolingDown = false;
-          setSnapshotSharedParticipants(snapshot, []);
-          bucket = {
-            key: projectKey,
-            snapshot,
-            participantLabels: new Set(),
-            agentIdentityKeys: new Set()
-          };
-          remoteProjectsByKey.set(projectKey, bucket);
-        }
-        bucket.participantLabels.add(peer.peerLabel);
-        return bucket;
-      }
-
       function buildSharedFleet(localFleet) {
         if (!localFleet) {
           return null;
         }
         const mergedFleet = cloneValue(localFleet);
         const localProjectsByKey = new Map(mergedFleet.projects.map((snapshot) => [snapshotWorkspaceKey(snapshot), snapshot]));
-        const remoteProjectsByKey = new Map();
         let sharedPeerCount = 0;
 
         for (const peer of multiplayerPeers.values()) {
@@ -655,28 +625,15 @@ export const MULTIPLAYER_SCRIPT = `
           for (const remoteSnapshot of peer.projects) {
             const projectKey = snapshotWorkspaceKey(remoteSnapshot);
             const localSnapshot = localProjectsByKey.get(projectKey);
-            if (!localSnapshot) {
-              const bucket = ensureRemoteSharedBucket(remoteProjectsByKey, remoteSnapshot, peer);
-              const mergedEvents = (Array.isArray(remoteSnapshot.events) ? remoteSnapshot.events : [])
-                .map((event) => mergeSharedEvent(bucket.snapshot, remoteSnapshot, event, peer));
-              const mergedAgents = (Array.isArray(remoteSnapshot.agents) ? remoteSnapshot.agents : [])
-                .filter((agent) => {
-                  const identityKeys = sharedAgentIdentityKeys(agent);
-                  return !identityKeys.some((key) => bucket.agentIdentityKeys.has(key));
-                })
-                .map((agent) => {
-                  for (const key of sharedAgentIdentityKeys(agent)) {
-                    bucket.agentIdentityKeys.add(key);
-                  }
-                  return mergeSharedAgent(bucket.snapshot, remoteSnapshot, agent, peer);
-                });
-              bucket.snapshot.agents = bucket.snapshot.agents.concat(mergedAgents);
-              bucket.snapshot.events = bucket.snapshot.events.concat(mergedEvents).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-              mergeSharedActivity(bucket.snapshot, remoteSnapshot, peer);
+            if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {
+              continue;
+            }
+            const remoteAgents = snapshotActiveSharedAgents(remoteSnapshot);
+            if (remoteAgents.length === 0) {
               continue;
             }
             const localAgentIdentityKeys = collectSharedAgentIdentityKeys(localSnapshot.agents);
-            const mergedAgents = (Array.isArray(remoteSnapshot.agents) ? remoteSnapshot.agents : [])
+            const mergedAgents = remoteAgents
               .filter((agent) => !sharedAgentIdentityKeys(agent).some((key) => localAgentIdentityKeys.has(key)))
               .map((agent) => mergeSharedAgent(localSnapshot, remoteSnapshot, agent, peer));
             const mergedEvents = (Array.isArray(remoteSnapshot.events) ? remoteSnapshot.events : [])
@@ -700,27 +657,6 @@ export const MULTIPLAYER_SCRIPT = `
           if (Array.isArray(snapshot.sharedParticipantLabels) && snapshot.sharedParticipantLabels.length > 0) {
             setSnapshotSharedPeerCount(snapshot, sharedPeerCount);
           }
-        }
-
-        for (const [projectKey, bucket] of remoteProjectsByKey.entries()) {
-          setSnapshotSharedParticipants(bucket.snapshot, [...bucket.participantLabels]);
-          setSnapshotSharedPeerCount(bucket.snapshot, sharedPeerCount);
-          multiplayerRemoteProjects.set(
-            projectKey,
-            remoteProjectMemoryEntry(bucket.snapshot, [...bucket.participantLabels], Date.now())
-          );
-          mergedFleet.projects.push(bucket.snapshot);
-        }
-
-        for (const [projectKey, entry] of multiplayerRemoteProjects.entries()) {
-          if (remoteProjectsByKey.has(projectKey) || localProjectsByKey.has(projectKey)) {
-            continue;
-          }
-          if (Date.now() - entry.receivedAt > MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS) {
-            multiplayerRemoteProjects.delete(projectKey);
-            continue;
-          }
-          mergedFleet.projects.push(cooledRemoteProjectSnapshot(entry));
         }
 
         return {
@@ -776,9 +712,6 @@ export const MULTIPLAYER_SCRIPT = `
             changed = true;
           }
         }
-        if (pruneRemoteProjectCooldowns()) {
-          changed = true;
-        }
         if (changed) {
           applyFleet(state.localFleet);
         }
@@ -815,10 +748,6 @@ export const MULTIPLAYER_SCRIPT = `
           socket.close(1000, "reconfigure");
         }
         multiplayerPeers.clear();
-        if (!options.preserveStatus) {
-          multiplayerRemoteProjects.clear();
-        }
-        pruneRemoteProjectCooldowns();
         applyFleet(state.localFleet);
         if (!options.preserveStatus) {
           setMultiplayerStatus("disabled", "Shared room sync is off.");
@@ -832,10 +761,10 @@ export const MULTIPLAYER_SCRIPT = `
         const nickname = sanitizeMultiplayerNickname(state.multiplayerSettings.nickname);
         const localHatId = currentSelectedHatId();
         const sharedProjects = state.localFleet.projects
-          .filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot))
+          .filter((snapshot) => isSnapshotSharedWithRoom(snapshot) && snapshotHasActiveSharedAgents(snapshot))
           .map((snapshot) => {
             const cloned = cloneValue(snapshot);
-            cloned.agents = (Array.isArray(cloned.agents) ? cloned.agents : []).map((agent) => ({
+            cloned.agents = snapshotActiveSharedAgents(cloned).map((agent) => ({
               ...agent,
               hatId: localHatId
             }));

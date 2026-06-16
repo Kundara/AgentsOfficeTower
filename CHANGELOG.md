@@ -78,6 +78,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added a `/scene-effects-audit` browser route that runs the normal client bundle against mocked typed approval/input fleet data so the new request-specific scene effects can be visually checked on demand.
 - Changed the scene audit fixture so mocked request threads now include typed message history, making the new click-open thread cards visually inspectable on the audit route as well.
 - Changed the in-scene Ops Wall into a smaller minimal hot-stuff board with a 3x2 file/tool grid, heat bars, a slim command-status list, and blank empty sections instead of "no changes" placeholders.
+- Changed shared-room project sharing to default off, broadcast only active agents from explicitly shared projects, merge room data only into matching local projects that are also shared, and remove remote-only cooldown floors when sharing stops.
 - Changed shared-room fleet payloads so each peer now broadcasts its selected `hatId`, letting merged remote agents keep their own hat styling instead of collapsing to the viewer's local cosmetic choice.
 - Changed office avatar rendering so spawned subagents display at 75% per nesting depth while retaining the same workstation, depth, hat, and hover-hit behavior, including nested multi-agent v2 descendant trees.
 - Changed local Codex thread selection so tracked parent sessions also retain listed subagent descendants, keeping spawned workers visible even when they would otherwise fall outside the local thread slice.
@@ -103,6 +104,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed office scene agent and hot-stuff hover cards so they render through a fixed body-level overlay layer instead of being clipped by the scrollable scene viewport.
 - Fixed wide office workspaces so workstation layouts that exceed the visible panel render to a horizontally scrollable scene with continuous wall/floor art, without squeezing the room scale or adding a tall blank floor card, with mouse-wheel scrolling while hovering the map and a wide-office audit route for fake-avatar scroll validation.
 - Fixed Claude workflow/subagent duplication by keeping child `agent_id` hook activity out of lead-session summaries while still routing typed events and child rows to the child thread, and by preserving separate same-named workflow children from distinct workflow ids.
 - Fixed local Codex discovery polling so an already-known thread without a final answer keeps its workstation seat through idle/read-only list refreshes instead of bouncing to the rec room between messages.

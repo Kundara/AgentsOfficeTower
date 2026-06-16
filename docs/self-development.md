@@ -119,10 +119,12 @@ A good iteration improves at least one of these:
 - verify tiny same-slot refresh deltas do not trigger visible rerouting or seat jitter
 - verify the Settings hat picker applies immediately to all local agents without showing file names, and that the first slot cleanly renders as `no hat`
 - verify shared-room peers keep their own selected hats after fleet merge instead of inheriting the local viewer's hat choice
+- verify shared-room projects default to not shared, inactive shared projects are not broadcast, and switching a project off hides it from other connected clients without a remote-only cooldown
 - verify the browser session panel exposes the durable approval/input "needs you" queue
 - verify typed `tool/requestUserInput` queue prompts keep `Send` disabled until every required question has an answer, then resolve cleanly back to app-server
 - verify clicking a local Codex agent in the map opens a read-only thread history card with no reply, resume, launch, or copy controls, and closes cleanly on outside click / `Escape`
 - verify hovering the same agent while its thread card is open does not reopen the ordinary hover tooltip over the card
+- verify agent and hot-stuff hover cards render above the scrollable scene viewport without clipping at desktop and narrow browser widths
 - verify Claude-derived sessions are visibly marked as inferred in hover/session detail
 - verify Claude hook-backed sessions are visibly marked as typed rather than inferred when the matching project-scoped Claude hook sidecar exists in Agents Office user data
 - verify hook-backed Claude `PermissionRequest` waits can be accepted/declined from the browser queue and clear immediately through the local response-file bridge

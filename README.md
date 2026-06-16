@@ -14,9 +14,9 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 - **Hermes and OpenClaw support**: Hermes sessions come from durable state, live process hints, and optional hook sidecars, while OpenClaw sessions come from its Gateway; projectless Hermes and unmatched OpenClaw orchestrators hover in the left-side sky outside the tower instead of creating fake floors.
 - **CLI built in**: inspect snapshots, watch terminal views, launch the web server, or query the running tower from scripts.
 - **Repo-packaged skills**: Codex skills help agents run the tower CLI and coordinate with local or team workload data.
-- **Shared rooms**: sync agents across machines with PartyKit-backed rooms and per-project sharing controls.
+- **Shared rooms**: sync active agents across machines with PartyKit-backed rooms and explicit per-project sharing controls.
 - **Same model everywhere**: browser, terminal, and VS Code surfaces render the same normalized snapshot.
-- **Subtle scene intelligence**: hover cards, session panels, command toasts, hot-file cues, and the `Needs You` queue surface detail without turning the map into a dashboard.
+- **Subtle scene intelligence**: viewport-level hover cards, session panels, command toasts, hot-file cues, and the `Needs You` queue surface detail without turning the map into a dashboard.
 
 ## Surfaces
 
@@ -35,7 +35,7 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 | Cursor | Local hook sidecars, workspace/log inference, and Cursor cloud agents |
 | Hermes | Durable `state.db` sessions, profile stores, live process cwd/env hints, and optional hook bridge sidecars folded into the matching session |
 | OpenClaw | Gateway sessions and config surfaces, with unmatched orchestrators rendered as fixed sky agents |
-| Shared rooms | Remote peer presence and agent snapshots from PartyKit rooms |
+| Shared rooms | Remote peer presence and active agent snapshots from explicitly shared PartyKit rooms |
 
 ## Quick Start
 
@@ -102,7 +102,7 @@ They are designed for bounded visibility, not remote control. Skills can query t
 
 - **Cursor**: this repo includes `.cursor/hooks.json` and `.cursor/hooks/capture-cursor-hook.mjs` for local hook sidecars. Cursor cloud visibility can use `CURSOR_API_KEY` or the browser settings flow.
 
-- **Shared rooms**: use the browser `Settings` popup to join a PartyKit room. Each local project floor also has a persisted `Shared` toggle.
+- **Shared rooms**: use the browser `Settings` popup to join a PartyKit room. Each local project floor also has a persisted `Shared` toggle that defaults off; only shared projects with active agents are broadcast, and remote activity appears only on matching local projects that you also marked shared.
 
   ```bash
   npm run party:dev

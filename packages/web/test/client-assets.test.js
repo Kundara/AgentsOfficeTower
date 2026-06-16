@@ -417,6 +417,8 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(renderSource.includes('class="agent-hover-worktree"'));
   assert.ok(navigationSource.includes('data-wall-hot-meta'));
   assert.ok(navigationSource.includes("function collectReusableOfficeOverlayNodes(layer, selector, datasetKey)"));
+  assert.ok(navigationSource.includes("function ensureOfficeMapHoverLayer()"));
+  assert.ok(navigationSource.includes("function setOfficeMapHoverHtml(node, html, kind)"));
   assert.ok(navigationSource.includes("function setOfficeOverlayHtml(node, html)"));
   assert.ok(navigationSource.includes("function syncAgentOverlayNode(node, anchor, scale)"));
   assert.ok(navigationSource.includes("function syncWorkstationOverlayNode(node, anchor, scale)"));
@@ -428,7 +430,12 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes('const reusableFurnitureNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-furniture-hit", "furnitureId");'));
   assert.ok(navigationSource.includes('const reusableHotNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-wall-hot-hit", "wallHotKey");'));
   assert.ok(navigationSource.includes("let node = reusableAgentNodes.get(anchor.key);"));
-  assert.ok(navigationSource.includes("setOfficeOverlayHtml(node, triggerHtml + (anchor.hoverHtml || \"\"));"));
+  assert.ok(navigationSource.includes("setOfficeOverlayHtml(node, triggerHtml);"));
+  assert.ok(navigationSource.includes('setOfficeMapHoverHtml(node, anchor.hoverHtml || "", "agent");'));
+  assert.ok(navigationSource.includes('setOfficeMapHoverHtml(node, renderWallDashboardHotHover(row), "hot");'));
+  assert.ok(stylesSource.includes(".office-map-hover-layer {"));
+  assert.ok(stylesSource.includes("position: fixed;"));
+  assert.ok(servedStyles.includes(".office-map-hover-layer {"));
   assert.ok(navigationSource.includes("const gridInset = 3;"));
   assert.ok(navigationSource.includes("const columnGap = 3;"));
   assert.ok(navigationSource.includes("const contentWidth = Math.max(24, width - gridInset * 2);"));
@@ -837,7 +844,7 @@ test("blocked failure hover summaries prefer the current error detail over stale
   assert.ok(stylesSource.includes(".agent-hover-summary-error {"));
 });
 
-test("multiplayer runtime persists per-project sharing and cools remote-only projects for one hour", () => {
+test("multiplayer runtime persists explicit per-project sharing and hides inactive room projects", () => {
   const bootstrapSource = readRuntimeSource("bootstrap-source.ts");
   const settingsSource = readRuntimeSource("settings-source.ts");
   const uiSource = readRuntimeSource("ui-source.ts");
@@ -849,21 +856,30 @@ test("multiplayer runtime persists per-project sharing and cools remote-only pro
   assert.ok(settingsSource.includes("multiplayerProjectShares: loadMultiplayerProjectShares(),"));
   assert.ok(settingsSource.includes("function effectiveHatIdForAgent(agent) {"));
   assert.ok(settingsSource.includes("multiplayerDraft: { ...defaultIntegrationSettings().multiplayer },"));
-  assert.ok(multiplayerSource.includes("const MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS = 60 * 60 * 1000;"));
+  assert.ok(multiplayerSource.includes("const MULTIPLAYER_ACTIVE_AGENT_STATES = new Set(["));
   assert.ok(multiplayerSource.includes("function normalizeMultiplayerSettings(settings, options = {}) {"));
   assert.ok(multiplayerSource.includes("const deviceId = sanitizeMultiplayerField(settings && settings.deviceId);"));
   assert.ok(multiplayerSource.includes("const fallbackEnabled = options && typeof options.fallbackEnabled === \"boolean\""));
   assert.ok(multiplayerSource.includes("function currentMultiplayerDeviceId() {"));
   assert.ok(multiplayerSource.includes("function syncStoredMultiplayerSettings(settings) {"));
   assert.ok(multiplayerSource.includes("function loadMultiplayerProjectShares() {"));
+  assert.ok(multiplayerSource.includes("if (!normalizedRoot || shared !== true) {"));
+  assert.ok(multiplayerSource.includes("return state.multiplayerProjectShares?.[normalizedRoot] === true;"));
   assert.ok(multiplayerSource.includes("function setProjectRootsSharedWithRoom(projectRoots, shared) {"));
-  assert.ok(multiplayerSource.includes("function cooledRemoteProjectSnapshot(entry) {"));
+  assert.ok(multiplayerSource.includes("nextShares[projectRoot] = true;"));
+  assert.ok(multiplayerSource.includes("function isSnapshotSharedWithRoom(snapshot) {"));
+  assert.ok(multiplayerSource.includes("function snapshotActiveSharedAgents(snapshot) {"));
+  assert.ok(multiplayerSource.includes("if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {"));
+  assert.ok(multiplayerSource.includes("const remoteAgents = snapshotActiveSharedAgents(remoteSnapshot);"));
+  assert.ok(multiplayerSource.includes(".filter((snapshot) => isSnapshotSharedWithRoom(snapshot) && snapshotHasActiveSharedAgents(snapshot))"));
+  assert.ok(multiplayerSource.includes("cloned.agents = snapshotActiveSharedAgents(cloned).map((agent) => ({"));
+  assert.ok(!multiplayerSource.includes("MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS"));
+  assert.ok(!multiplayerSource.includes("function cooledRemoteProjectSnapshot(entry) {"));
+  assert.ok(!multiplayerSource.includes("ensureRemoteSharedBucket"));
   assert.ok(multiplayerSource.includes("function mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer)"));
   assert.ok(multiplayerSource.includes("function mergeSharedActivity(localSnapshot, remoteSnapshot, peer)"));
   assert.ok(multiplayerSource.includes("const users = uniqueSharedList([...(change && Array.isArray(change.users) ? change.users : []), peer.peerLabel]);"));
   assert.ok(multiplayerSource.includes("hotChanges: []"));
-  assert.ok(multiplayerSource.includes("Shared project cooldown · keep remote-only floors visible for up to 1 hour after sharing stops."));
-  assert.ok(multiplayerSource.includes(".filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot))"));
   assert.ok(multiplayerSource.includes("const localHatId = currentSelectedHatId();"));
   assert.ok(multiplayerSource.includes("hatId: localHatId"));
   assert.ok(multiplayerSource.includes("deviceId: currentMultiplayerDeviceId(),"));
@@ -875,7 +891,7 @@ test("multiplayer runtime persists per-project sharing and cools remote-only pro
   assert.ok(multiplayerSource.includes("const fallbackEnabled = previousConfigured"));
 });
 
-test("workspace floors show multiplayer participants, grey remote-only titles, and expose a shared toggle", () => {
+test("workspace floors show multiplayer participants and expose a shared toggle", () => {
   const settingsSource = readRuntimeSource("settings-source.ts");
   const sceneSource = readRuntimeSource("scene-source.ts");
   const uiSource = readRuntimeSource("ui-source.ts");
@@ -884,9 +900,7 @@ test("workspace floors show multiplayer participants, grey remote-only titles, a
   assert.ok(settingsSource.includes("function sharedParticipantLabelsForSnapshot(snapshot) {"));
   assert.ok(sceneSource.includes('class="tower-floor-participants"'));
   assert.ok(sceneSource.includes('data-action="toggle-project-share"'));
-  assert.ok(sceneSource.includes('const remoteOnlyTitleClass = snapshotHasLocalProject(snapshot) ? "" : " is-remote-only";'));
   assert.ok(uiSource.includes('if (action === "toggle-project-share") {'));
-  assert.ok(styles.includes(".tower-floor-title.is-remote-only .tower-floor-title-project {"));
   assert.ok(styles.includes(".tower-floor-participants {"));
   assert.ok(styles.includes(".tower-floor-share.active {"));
 });

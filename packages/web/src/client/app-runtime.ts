@@ -1973,7 +1973,6 @@ export function startClientApp(): void {
       const multiplayerPeerId = loadMultiplayerPeerId();
       const multiplayerDeviceId = loadMultiplayerDeviceId();
       const multiplayerPeers = new Map();
-      const multiplayerRemoteProjects = new Map();
       let multiplayerSocket = null;
       let multiplayerModulePromise = null;
       let multiplayerBroadcastTimer = null;
@@ -1981,10 +1980,20 @@ export function startClientApp(): void {
       let webCliTeamFleetSyncTimer = null;
       let pendingWebCliTeamFleet = null;
       const MULTIPLAYER_STALE_MS = 30000;
-      const MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS = 60 * 60 * 1000;
       const MULTIPLAYER_BROADCAST_DEBOUNCE_MS = 700;
       const WEB_CLI_TEAM_FLEET_SYNC_DEBOUNCE_MS = 1000;
       const MULTIPLAYER_NICKNAME_MAX_LENGTH = 12;
+      const MULTIPLAYER_ACTIVE_AGENT_STATES = new Set([
+        "editing",
+        "running",
+        "validating",
+        "scanning",
+        "thinking",
+        "planning",
+        "delegating",
+        "waiting",
+        "blocked"
+      ]);
 
       function sanitizeMultiplayerField(value) {
         return typeof value === "string" ? value.trim() : "";
@@ -2036,10 +2045,10 @@ export function startClientApp(): void {
           const next = {};
           for (const [projectRoot, shared] of Object.entries(parsed)) {
             const normalizedRoot = sanitizeMultiplayerField(projectRoot);
-            if (!normalizedRoot || shared !== false) {
+            if (!normalizedRoot || shared !== true) {
               continue;
             }
-            next[normalizedRoot] = false;
+            next[normalizedRoot] = true;
           }
           return next;
         } catch {
@@ -2059,9 +2068,9 @@ export function startClientApp(): void {
       function isProjectSharedWithRoom(projectRoot) {
         const normalizedRoot = sanitizeMultiplayerField(projectRoot);
         if (!normalizedRoot) {
-          return true;
+          return false;
         }
-        return state.multiplayerProjectShares?.[normalizedRoot] !== false;
+        return state.multiplayerProjectShares?.[normalizedRoot] === true;
       }
 
       function setProjectRootsSharedWithRoom(projectRoots, shared) {
@@ -2073,14 +2082,15 @@ export function startClientApp(): void {
         }
         const nextShares = { ...(state.multiplayerProjectShares || {}) };
         for (const projectRoot of normalizedRoots) {
-          if (shared === false) {
-            nextShares[projectRoot] = false;
+          if (shared === true) {
+            nextShares[projectRoot] = true;
           } else {
             delete nextShares[projectRoot];
           }
         }
         state.multiplayerProjectShares = nextShares;
         saveMultiplayerProjectShares();
+        applyFleet(state.localFleet);
         render();
         scheduleMultiplayerBroadcast();
       }
@@ -2239,10 +2249,6 @@ export function startClientApp(): void {
           : "Shared room connected · " + peerCount + " remote peer" + (peerCount === 1 ? "" : "s");
       }
 
-      function sharedProjectCooldownNote() {
-        return "Shared project cooldown · keep remote-only floors visible for up to 1 hour after sharing stops.";
-      }
-
       function ensureSnapshotNotes(snapshot) {
         if (!Array.isArray(snapshot.notes)) {
           snapshot.notes = [];
@@ -2273,18 +2279,50 @@ export function startClientApp(): void {
         snapshot.notes = notes;
       }
 
-      function setSnapshotCooldownNote(snapshot) {
-        const notes = ensureSnapshotNotes(snapshot).filter((note) => note !== sharedProjectCooldownNote());
-        notes.push(sharedProjectCooldownNote());
-        snapshot.notes = notes;
+      function snapshotShareRoots(snapshot) {
+        if (!snapshot) {
+          return [];
+        }
+        if (typeof projectShareToggleRoots === "function") {
+          return projectShareToggleRoots(snapshot);
+        }
+        const root = sanitizeMultiplayerField(snapshot.projectRoot);
+        return root ? [root] : [];
+      }
+
+      function isSnapshotSharedWithRoom(snapshot) {
+        const roots = snapshotShareRoots(snapshot);
+        return roots.length > 0 && roots.every((projectRoot) => isProjectSharedWithRoom(projectRoot));
+      }
+
+      function isActiveSharedAgent(agent) {
+        if (!agent || typeof agent !== "object") {
+          return false;
+        }
+        if (agent.isCurrent === true || agent.isOngoing === true || agent.needsUser) {
+          return true;
+        }
+        const state = String(agent.state || "").toLowerCase();
+        if (MULTIPLAYER_ACTIVE_AGENT_STATES.has(state)) {
+          return true;
+        }
+        return String(agent.statusText || "").toLowerCase() === "active"
+          && state !== "idle"
+          && state !== "done";
+      }
+
+      function snapshotActiveSharedAgents(snapshot) {
+        return (Array.isArray(snapshot && snapshot.agents) ? snapshot.agents : [])
+          .filter((agent) => isActiveSharedAgent(agent));
+      }
+
+      function snapshotHasActiveSharedAgents(snapshot) {
+        return snapshotActiveSharedAgents(snapshot).length > 0;
       }
 
       function snapshotHasSharedData(snapshot) {
         if (!snapshot || typeof snapshot !== "object") {
           return false;
-        }
-        if (snapshot.sharedRemoteOnly === true) {
-          return true;
         }
         if (Array.isArray(snapshot.sharedParticipantLabels) && snapshot.sharedParticipantLabels.length > 0) {
           return true;
@@ -2515,45 +2553,6 @@ export function startClientApp(): void {
           .slice(0, 12);
       }
 
-      function remoteProjectMemoryEntry(snapshot, participantLabels, receivedAt) {
-        return {
-          snapshot: cloneValue(snapshot),
-          participantLabels: Array.from(new Set((Array.isArray(participantLabels) ? participantLabels : []).filter(Boolean))),
-          receivedAt
-        };
-      }
-
-      function cooledRemoteProjectSnapshot(entry) {
-        const cooledAtIso = new Date(entry.receivedAt).toISOString();
-        const snapshot = cloneValue(entry.snapshot);
-        snapshot.agents = (Array.isArray(snapshot.agents) ? snapshot.agents : []).map((agent) => ({
-          ...agent,
-          isCurrent: false,
-          isOngoing: false,
-          needsUser: null,
-          stoppedAt: agent.stoppedAt || cooledAtIso,
-          statusText: agent.source === "local" && agent.statusText === "active" ? "idle" : agent.statusText
-        }));
-        snapshot.generatedAt = cooledAtIso;
-        snapshot.sharedRemoteOnly = true;
-        snapshot.sharedCoolingDown = true;
-        setSnapshotSharedParticipants(snapshot, entry.participantLabels);
-        setSnapshotCooldownNote(snapshot);
-        return snapshot;
-      }
-
-      function pruneRemoteProjectCooldowns() {
-        const cutoff = Date.now() - MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS;
-        let changed = false;
-        for (const [projectKey, entry] of multiplayerRemoteProjects.entries()) {
-          if (!entry || entry.receivedAt < cutoff) {
-            multiplayerRemoteProjects.delete(projectKey);
-            changed = true;
-          }
-        }
-        return changed;
-      }
-
       function sharedAgentIdentityKeys(agent) {
         const keys = [];
         if (!agent || typeof agent !== "object") {
@@ -2581,41 +2580,12 @@ export function startClientApp(): void {
         return keys;
       }
 
-      function ensureRemoteSharedBucket(remoteProjectsByKey, remoteSnapshot, peer) {
-        const projectKey = snapshotWorkspaceKey(remoteSnapshot);
-        let bucket = remoteProjectsByKey.get(projectKey);
-        if (!bucket) {
-          const snapshot = cloneValue(remoteSnapshot);
-          snapshot.agents = [];
-          snapshot.events = [];
-          snapshot.activity = {
-            generatedAt: remoteSnapshot.activity && remoteSnapshot.activity.generatedAt || remoteSnapshot.generatedAt || new Date().toISOString(),
-            hotChanges: [],
-            hotTools: [],
-            runningCommands: []
-          };
-          snapshot.sharedRemoteOnly = true;
-          snapshot.sharedCoolingDown = false;
-          setSnapshotSharedParticipants(snapshot, []);
-          bucket = {
-            key: projectKey,
-            snapshot,
-            participantLabels: new Set(),
-            agentIdentityKeys: new Set()
-          };
-          remoteProjectsByKey.set(projectKey, bucket);
-        }
-        bucket.participantLabels.add(peer.peerLabel);
-        return bucket;
-      }
-
       function buildSharedFleet(localFleet) {
         if (!localFleet) {
           return null;
         }
         const mergedFleet = cloneValue(localFleet);
         const localProjectsByKey = new Map(mergedFleet.projects.map((snapshot) => [snapshotWorkspaceKey(snapshot), snapshot]));
-        const remoteProjectsByKey = new Map();
         let sharedPeerCount = 0;
 
         for (const peer of multiplayerPeers.values()) {
@@ -2626,28 +2596,15 @@ export function startClientApp(): void {
           for (const remoteSnapshot of peer.projects) {
             const projectKey = snapshotWorkspaceKey(remoteSnapshot);
             const localSnapshot = localProjectsByKey.get(projectKey);
-            if (!localSnapshot) {
-              const bucket = ensureRemoteSharedBucket(remoteProjectsByKey, remoteSnapshot, peer);
-              const mergedEvents = (Array.isArray(remoteSnapshot.events) ? remoteSnapshot.events : [])
-                .map((event) => mergeSharedEvent(bucket.snapshot, remoteSnapshot, event, peer));
-              const mergedAgents = (Array.isArray(remoteSnapshot.agents) ? remoteSnapshot.agents : [])
-                .filter((agent) => {
-                  const identityKeys = sharedAgentIdentityKeys(agent);
-                  return !identityKeys.some((key) => bucket.agentIdentityKeys.has(key));
-                })
-                .map((agent) => {
-                  for (const key of sharedAgentIdentityKeys(agent)) {
-                    bucket.agentIdentityKeys.add(key);
-                  }
-                  return mergeSharedAgent(bucket.snapshot, remoteSnapshot, agent, peer);
-                });
-              bucket.snapshot.agents = bucket.snapshot.agents.concat(mergedAgents);
-              bucket.snapshot.events = bucket.snapshot.events.concat(mergedEvents).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-              mergeSharedActivity(bucket.snapshot, remoteSnapshot, peer);
+            if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {
+              continue;
+            }
+            const remoteAgents = snapshotActiveSharedAgents(remoteSnapshot);
+            if (remoteAgents.length === 0) {
               continue;
             }
             const localAgentIdentityKeys = collectSharedAgentIdentityKeys(localSnapshot.agents);
-            const mergedAgents = (Array.isArray(remoteSnapshot.agents) ? remoteSnapshot.agents : [])
+            const mergedAgents = remoteAgents
               .filter((agent) => !sharedAgentIdentityKeys(agent).some((key) => localAgentIdentityKeys.has(key)))
               .map((agent) => mergeSharedAgent(localSnapshot, remoteSnapshot, agent, peer));
             const mergedEvents = (Array.isArray(remoteSnapshot.events) ? remoteSnapshot.events : [])
@@ -2671,27 +2628,6 @@ export function startClientApp(): void {
           if (Array.isArray(snapshot.sharedParticipantLabels) && snapshot.sharedParticipantLabels.length > 0) {
             setSnapshotSharedPeerCount(snapshot, sharedPeerCount);
           }
-        }
-
-        for (const [projectKey, bucket] of remoteProjectsByKey.entries()) {
-          setSnapshotSharedParticipants(bucket.snapshot, [...bucket.participantLabels]);
-          setSnapshotSharedPeerCount(bucket.snapshot, sharedPeerCount);
-          multiplayerRemoteProjects.set(
-            projectKey,
-            remoteProjectMemoryEntry(bucket.snapshot, [...bucket.participantLabels], Date.now())
-          );
-          mergedFleet.projects.push(bucket.snapshot);
-        }
-
-        for (const [projectKey, entry] of multiplayerRemoteProjects.entries()) {
-          if (remoteProjectsByKey.has(projectKey) || localProjectsByKey.has(projectKey)) {
-            continue;
-          }
-          if (Date.now() - entry.receivedAt > MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS) {
-            multiplayerRemoteProjects.delete(projectKey);
-            continue;
-          }
-          mergedFleet.projects.push(cooledRemoteProjectSnapshot(entry));
         }
 
         return {
@@ -2747,9 +2683,6 @@ export function startClientApp(): void {
             changed = true;
           }
         }
-        if (pruneRemoteProjectCooldowns()) {
-          changed = true;
-        }
         if (changed) {
           applyFleet(state.localFleet);
         }
@@ -2786,10 +2719,6 @@ export function startClientApp(): void {
           socket.close(1000, "reconfigure");
         }
         multiplayerPeers.clear();
-        if (!options.preserveStatus) {
-          multiplayerRemoteProjects.clear();
-        }
-        pruneRemoteProjectCooldowns();
         applyFleet(state.localFleet);
         if (!options.preserveStatus) {
           setMultiplayerStatus("disabled", "Shared room sync is off.");
@@ -2803,10 +2732,10 @@ export function startClientApp(): void {
         const nickname = sanitizeMultiplayerNickname(state.multiplayerSettings.nickname);
         const localHatId = currentSelectedHatId();
         const sharedProjects = state.localFleet.projects
-          .filter((snapshot) => isProjectSharedWithRoom(snapshot.projectRoot))
+          .filter((snapshot) => isSnapshotSharedWithRoom(snapshot) && snapshotHasActiveSharedAgents(snapshot))
           .map((snapshot) => {
             const cloned = cloneValue(snapshot);
-            cloned.agents = (Array.isArray(cloned.agents) ? cloned.agents : []).map((agent) => ({
+            cloned.agents = snapshotActiveSharedAgents(cloned).map((agent) => ({
               ...agent,
               hatId: localHatId
             }));
@@ -7741,6 +7670,9 @@ export function startClientApp(): void {
         }
         renderer.destroyed = true;
         try {
+          if (renderer.host && officeMapHoverTarget instanceof HTMLElement && renderer.host.contains(officeMapHoverTarget)) {
+            hideOfficeMapHover(officeMapHoverTarget);
+          }
           if (renderer.resizeObserver) {
             renderer.resizeObserver.disconnect();
             renderer.resizeObserver = null;
@@ -8787,6 +8719,12 @@ const stableAgentTileReservations = new Map();
       const HERMES_ASSIGNED_TRANSFER_SETTLE_MS = 90;
       const HERMES_ASSIGNED_TRANSFER_MS = 1080;
       const WORKSTATION_REVEAL_BLINK_DURATION_MS = 280;
+      const OFFICE_MAP_HOVER_MARGIN_PX = 12;
+      let officeMapHoverLayer = null;
+      let officeMapHoverTarget = null;
+      let officeMapHoverKind = "";
+      let officeMapHoverPositionFrame = 0;
+      let officeMapHoverViewportListenersBound = false;
 
       function reserveAgentTiles(model, roomById) {
         const reservations = new Map();
@@ -9027,6 +8965,195 @@ const stableAgentTileReservations = new Map();
         motionState.anchorNode.style.top = Math.round(motionState.currentY * renderer.scale) + "px";
         motionState.anchorNode.style.width = Math.max(8, Math.round(motionState.width * renderer.scale)) + "px";
         motionState.anchorNode.style.height = Math.max(8, Math.round(motionState.height * renderer.scale)) + "px";
+        if (officeMapHoverTarget === motionState.anchorNode) {
+          scheduleOfficeMapHoverPosition();
+        }
+      }
+
+      function bindOfficeMapHoverViewportListeners() {
+        if (officeMapHoverViewportListenersBound) {
+          return;
+        }
+        officeMapHoverViewportListenersBound = true;
+        document.addEventListener("scroll", scheduleOfficeMapHoverPosition, {
+          capture: true,
+          passive: true
+        });
+        window.addEventListener("resize", scheduleOfficeMapHoverPosition, { passive: true });
+      }
+
+      function ensureOfficeMapHoverLayer() {
+        if (officeMapHoverLayer instanceof HTMLElement && officeMapHoverLayer.isConnected) {
+          return officeMapHoverLayer;
+        }
+        const existing = document.querySelector("[data-office-map-hover-layer]");
+        if (existing instanceof HTMLElement) {
+          officeMapHoverLayer = existing;
+        } else {
+          officeMapHoverLayer = document.createElement("div");
+          officeMapHoverLayer.className = "office-map-hover-layer";
+          officeMapHoverLayer.dataset.officeMapHoverLayer = "true";
+          document.body.appendChild(officeMapHoverLayer);
+        }
+        bindOfficeMapHoverViewportListeners();
+        return officeMapHoverLayer;
+      }
+
+      function officeMapHoverHtmlForTarget(target) {
+        return typeof target.__officeMapHoverHtml === "string" ? target.__officeMapHoverHtml : "";
+      }
+
+      function officeMapHoverKindForTarget(target) {
+        return typeof target.__officeMapHoverKind === "string" && target.__officeMapHoverKind
+          ? target.__officeMapHoverKind
+          : target.dataset.officeMapHoverKind || "";
+      }
+
+      function clampOfficeMapHoverPosition(value, min, max) {
+        const upper = Math.max(min, max);
+        return Math.max(min, Math.min(upper, value));
+      }
+
+      function positionOfficeMapHover() {
+        if (!(officeMapHoverLayer instanceof HTMLElement)) {
+          return;
+        }
+        const target = officeMapHoverTarget;
+        if (!(target instanceof HTMLElement) || !target.isConnected) {
+          hideOfficeMapHover();
+          return;
+        }
+        const card = officeMapHoverLayer.firstElementChild;
+        if (!(card instanceof HTMLElement)) {
+          hideOfficeMapHover();
+          return;
+        }
+        const targetRect = target.getBoundingClientRect();
+        if (targetRect.width <= 0 || targetRect.height <= 0) {
+          hideOfficeMapHover();
+          return;
+        }
+        const viewportWidth = Math.max(320, Math.round(window.innerWidth || document.documentElement.clientWidth || 0));
+        const viewportHeight = Math.max(240, Math.round(window.innerHeight || document.documentElement.clientHeight || 0));
+        const cardRect = card.getBoundingClientRect();
+        const cardWidth = Math.min(Math.max(1, cardRect.width), Math.max(1, viewportWidth - OFFICE_MAP_HOVER_MARGIN_PX * 2));
+        const cardHeight = Math.min(Math.max(1, cardRect.height), Math.max(1, viewportHeight - OFFICE_MAP_HOVER_MARGIN_PX * 2));
+        const kind = officeMapHoverKind || officeMapHoverKindForTarget(target);
+        const gap = kind === "hot" ? 26 : 8;
+        const preferredLeft = kind === "hot"
+          ? targetRect.left
+          : targetRect.left + targetRect.width / 2 - cardWidth / 2;
+        const left = clampOfficeMapHoverPosition(
+          Math.round(preferredLeft),
+          OFFICE_MAP_HOVER_MARGIN_PX,
+          viewportWidth - cardWidth - OFFICE_MAP_HOVER_MARGIN_PX
+        );
+        let top = Math.round(targetRect.top - cardHeight - gap);
+        let placement = "top";
+        if (top < OFFICE_MAP_HOVER_MARGIN_PX && targetRect.bottom + gap + cardHeight <= viewportHeight - OFFICE_MAP_HOVER_MARGIN_PX) {
+          top = Math.round(targetRect.bottom + gap);
+          placement = "bottom";
+        }
+        top = clampOfficeMapHoverPosition(
+          top,
+          OFFICE_MAP_HOVER_MARGIN_PX,
+          viewportHeight - cardHeight - OFFICE_MAP_HOVER_MARGIN_PX
+        );
+        setPixelStyleIfChanged(card, "left", left + "px");
+        setPixelStyleIfChanged(card, "top", top + "px");
+        card.dataset.hoverPlacement = placement;
+      }
+
+      function scheduleOfficeMapHoverPosition() {
+        if (!(officeMapHoverTarget instanceof HTMLElement)) {
+          return;
+        }
+        if (officeMapHoverPositionFrame) {
+          return;
+        }
+        officeMapHoverPositionFrame = window.requestAnimationFrame(() => {
+          officeMapHoverPositionFrame = 0;
+          positionOfficeMapHover();
+        });
+      }
+
+      function hideOfficeMapHover(target = null) {
+        if (target instanceof HTMLElement && officeMapHoverTarget !== target) {
+          return;
+        }
+        officeMapHoverTarget = null;
+        officeMapHoverKind = "";
+        if (officeMapHoverPositionFrame) {
+          window.cancelAnimationFrame(officeMapHoverPositionFrame);
+          officeMapHoverPositionFrame = 0;
+        }
+        if (officeMapHoverLayer instanceof HTMLElement) {
+          officeMapHoverLayer.classList.remove("is-visible");
+          officeMapHoverLayer.innerHTML = "";
+          delete officeMapHoverLayer.dataset.hoverKind;
+          delete officeMapHoverLayer.dataset.renderHtml;
+        }
+      }
+
+      function showOfficeMapHover(target, kind = "") {
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const resolvedKind = kind || officeMapHoverKindForTarget(target);
+        if (resolvedKind === "hot") {
+          syncOfficeWallDashboardHeatNode(target);
+        }
+        const html = officeMapHoverHtmlForTarget(target);
+        if (!html) {
+          hideOfficeMapHover(target);
+          return;
+        }
+        const layer = ensureOfficeMapHoverLayer();
+        officeMapHoverTarget = target;
+        officeMapHoverKind = resolvedKind;
+        layer.dataset.hoverKind = resolvedKind;
+        if (layer.dataset.renderHtml !== html) {
+          layer.innerHTML = html;
+          layer.dataset.renderHtml = html;
+        }
+        layer.classList.add("is-visible");
+        positionOfficeMapHover();
+      }
+
+      function bindOfficeMapHoverNode(node) {
+        if (!(node instanceof HTMLElement) || node.dataset.officeMapHoverBound === "1") {
+          return;
+        }
+        node.dataset.officeMapHoverBound = "1";
+        node.addEventListener("mouseenter", () => showOfficeMapHover(node));
+        node.addEventListener("mousemove", scheduleOfficeMapHoverPosition);
+        node.addEventListener("mouseleave", () => hideOfficeMapHover(node));
+        node.addEventListener("focusin", () => showOfficeMapHover(node));
+        node.addEventListener("focusout", (event) => {
+          const relatedTarget = event.relatedTarget;
+          if (relatedTarget instanceof Node && node.contains(relatedTarget)) {
+            return;
+          }
+          hideOfficeMapHover(node);
+        });
+      }
+
+      function setOfficeMapHoverHtml(node, html, kind) {
+        if (!(node instanceof HTMLElement)) {
+          return;
+        }
+        const nextHtml = html || "";
+        node.__officeMapHoverHtml = nextHtml;
+        node.__officeMapHoverKind = nextHtml ? kind || "" : "";
+        setOfficeOverlayDataset(node, "officeMapHoverKind", node.__officeMapHoverKind);
+        bindOfficeMapHoverNode(node);
+        if (officeMapHoverTarget === node) {
+          if (nextHtml) {
+            showOfficeMapHover(node, node.__officeMapHoverKind);
+          } else {
+            hideOfficeMapHover(node);
+          }
+        }
       }
 
       function threadHistoryAtBottom(history) {
@@ -9098,13 +9225,17 @@ const stableAgentTileReservations = new Map();
         if (!(node instanceof HTMLElement)) {
           return;
         }
-          const heat = wallDashboardHotHeatFromValues(
-            node.dataset.wallHotScore,
-            node.dataset.wallHotGeneratedAt,
-            node.dataset.wallHotHeat
-          );
-          node.dataset.wallHotHeat = String(heat);
-          const meta = node.querySelector("[data-wall-hot-meta]");
+        const heat = wallDashboardHotHeatFromValues(
+          node.dataset.wallHotScore,
+          node.dataset.wallHotGeneratedAt,
+          node.dataset.wallHotHeat
+        );
+        node.dataset.wallHotHeat = String(heat);
+        const updateHoverContent = (root) => {
+          if (!root || typeof root.querySelector !== "function") {
+            return;
+          }
+          const meta = root.querySelector("[data-wall-hot-meta]");
           if (meta) {
             const type = node.dataset.wallHotType || "file";
             const updatedAt = node.dataset.wallHotUpdatedAt || "";
@@ -9113,10 +9244,23 @@ const stableAgentTileReservations = new Map();
             const userText = users.length > 0 ? " · by " + users.join(", ") : "";
             meta.textContent = type + " · heat " + heat + "% · " + time + userText;
           }
-          const fill = node.querySelector("[data-wall-hot-heat-fill]");
+          const fill = root.querySelector("[data-wall-hot-heat-fill]");
           if (fill instanceof HTMLElement) {
             fill.style.width = Math.max(1, Math.min(100, heat)) + "%";
           }
+        };
+        if (node.__officeMapHoverHtml) {
+          const template = document.createElement("template");
+          template.innerHTML = node.__officeMapHoverHtml;
+          updateHoverContent(template.content);
+          node.__officeMapHoverHtml = template.innerHTML;
+        }
+        updateHoverContent(node);
+        if (officeMapHoverTarget === node && officeMapHoverLayer instanceof HTMLElement) {
+          updateHoverContent(officeMapHoverLayer);
+          officeMapHoverLayer.dataset.renderHtml = node.__officeMapHoverHtml || officeMapHoverLayer.innerHTML;
+          scheduleOfficeMapHoverPosition();
+        }
       }
 
       function syncOfficeWallDashboardHeat() {
@@ -9158,8 +9302,10 @@ const stableAgentTileReservations = new Map();
         node.style.width = Math.max(12, Math.round(layout.columnWidth * scale)) + "px";
         node.style.height = Math.max(8, Math.round(layout.cellHeight * scale)) + "px";
         const renderKey = wallDashboardHotNodeRenderKey(row);
+        setOfficeMapHoverHtml(node, renderWallDashboardHotHover(row), "hot");
         if (node.dataset.wallHotRenderKey !== renderKey) {
-          node.innerHTML = renderWallDashboardHotHover(row);
+          node.innerHTML = "";
+          node.dataset.renderHtml = "";
           node.dataset.wallHotRenderKey = renderKey;
         }
         syncOfficeWallDashboardHeatNode(node);
@@ -9249,7 +9395,11 @@ const stableAgentTileReservations = new Map();
         const triggerHtml = anchor.replyProjectRoot && anchor.threadId
           ? '<button type="button" class="office-map-agent-trigger" data-action="open-agent-thread" data-project-root="' + escapeHtml(anchor.replyProjectRoot) + '" data-thread-id="' + escapeHtml(anchor.threadId) + '" aria-label="Open ' + escapeHtml(anchor.key) + ' chat"></button>'
           : "";
-        setOfficeOverlayHtml(node, triggerHtml + (anchor.hoverHtml || ""));
+        setOfficeOverlayHtml(node, triggerHtml);
+        setOfficeMapHoverHtml(node, anchor.hoverHtml || "", "agent");
+        if (officeMapHoverTarget === node) {
+          scheduleOfficeMapHoverPosition();
+        }
       }
 
       function syncWorkstationOverlayNode(node, anchor, scale) {
@@ -9452,6 +9602,7 @@ const stableAgentTileReservations = new Map();
         });
         reusableHotNodes.forEach((node, key) => {
           if (!activeHotKeys.has(key)) {
+            hideOfficeMapHover(node);
             node.remove();
           }
         });
@@ -9467,6 +9618,7 @@ const stableAgentTileReservations = new Map();
         });
         reusableAgentNodes.forEach((node, key) => {
           if (!activeAgentKeys.has(key)) {
+            hideOfficeMapHover(node);
             node.remove();
           }
         });

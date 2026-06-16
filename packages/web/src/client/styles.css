@@ -789,13 +789,33 @@
 }
 
       .office-map-thread-layer {
-  position: absolute;
-  top: 0;
-  pointer-events: none;
-  overflow: clip;
-  overflow-clip-margin: 360px;
-  z-index: 315;
-}
+        position: absolute;
+        top: 0;
+        pointer-events: none;
+        overflow: clip;
+        overflow-clip-margin: 360px;
+        z-index: 315;
+      }
+
+      .office-map-hover-layer {
+        position: fixed;
+        inset: 0;
+        z-index: 460;
+        pointer-events: none;
+        overflow: visible;
+      }
+
+      .office-map-hover-layer .agent-hover {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: auto;
+        opacity: 1;
+        pointer-events: none;
+        transform: none;
+        transition: none;
+        z-index: 461;
+      }
 
       .office-map-anchor {
         position: absolute;
@@ -860,11 +880,12 @@
         z-index: 320;
       }
 
-      .office-map-wall-hot-hit .office-wall-hot-hover {
+      .office-map-wall-hot-hit .office-wall-hot-hover,
+      .office-map-hover-layer[data-hover-kind="hot"] .office-wall-hot-hover {
         left: 0;
         bottom: calc(100% + 26px);
         width: min(460px, calc(100vw - 24px));
-        min-width: 320px;
+        min-width: min(320px, calc(100vw - 24px));
         max-width: 460px;
         padding: 12px 14px;
         font-size: calc(16px * var(--ui-text-scale));
@@ -874,17 +895,26 @@
         transform: translate(0, 4px);
       }
 
-      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-title {
+      .office-map-hover-layer[data-hover-kind="hot"] .office-wall-hot-hover {
+        bottom: auto;
+        transform: none;
+        z-index: 461;
+      }
+
+      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-title,
+      .office-map-hover-layer[data-hover-kind="hot"] .office-wall-hot-hover .agent-hover-title {
         font-size: calc(18px * var(--ui-text-scale));
         margin-bottom: 6px;
       }
 
-      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-title strong {
+      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-title strong,
+      .office-map-hover-layer[data-hover-kind="hot"] .office-wall-hot-hover .agent-hover-title strong {
         font-size: calc(20px * var(--ui-text-scale));
         line-height: 1.1;
       }
 
-      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-meta {
+      .office-map-wall-hot-hit .office-wall-hot-hover .agent-hover-meta,
+      .office-map-hover-layer[data-hover-kind="hot"] .office-wall-hot-hover .agent-hover-meta {
         font-size: calc(14px * var(--ui-text-scale));
       }
 
@@ -936,11 +966,12 @@
         white-space: nowrap;
       }
 
-      .office-map-agent-hit .agent-hover {
+      .office-map-agent-hit .agent-hover,
+      .office-map-hover-layer[data-hover-kind="agent"] .agent-hover {
         left: 50%;
         bottom: calc(100% + 2px);
         width: min(340px, calc(100vw - 24px));
-        min-width: 260px;
+        min-width: min(260px, calc(100vw - 24px));
         max-width: 340px;
         padding: 8px 10px;
         font-size: calc(15px * var(--ui-text-scale));
@@ -948,22 +979,31 @@
         z-index: 300;
       }
 
-      .office-map-agent-hit .agent-hover-title {
+      .office-map-hover-layer[data-hover-kind="agent"] .agent-hover {
+        bottom: auto;
+        z-index: 461;
+      }
+
+      .office-map-agent-hit .agent-hover-title,
+      .office-map-hover-layer[data-hover-kind="agent"] .agent-hover-title {
         font-size: calc(16px * var(--ui-text-scale));
         margin-bottom: 4px;
       }
 
-      .office-map-agent-hit .agent-hover-title strong {
+      .office-map-agent-hit .agent-hover-title strong,
+      .office-map-hover-layer[data-hover-kind="agent"] .agent-hover-title strong {
         font-size: calc(17px * var(--ui-text-scale));
         line-height: 1.1;
       }
 
-      .office-map-agent-hit .agent-hover-summary {
+      .office-map-agent-hit .agent-hover-summary,
+      .office-map-hover-layer[data-hover-kind="agent"] .agent-hover-summary {
         font-size: calc(13px * var(--ui-text-scale));
         line-height: 1.35;
       }
 
-      .office-map-agent-hit .agent-hover-meta {
+      .office-map-agent-hit .agent-hover-meta,
+      .office-map-hover-layer[data-hover-kind="agent"] .agent-hover-meta {
         margin-top: 5px;
         font-size: calc(12px * var(--ui-text-scale));
       }

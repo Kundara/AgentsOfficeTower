@@ -299,7 +299,7 @@ test("web CLI team scope falls back to local data without shared cache data", ()
 
 test("shared fleet guard only accepts snapshots with multiplayer data", () => {
   assert.equal(hasSharedFleetData({ generatedAt: "", projects: [snapshot({ agents: [agent()] })] }), false);
-  assert.equal(hasSharedFleetData({ generatedAt: "", projects: [snapshot({ extra: { sharedRemoteOnly: true } })] }), true);
+  assert.equal(hasSharedFleetData({ generatedAt: "", projects: [snapshot({ extra: { sharedRemoteOnly: true } })] }), false);
   assert.equal(
     hasSharedFleetData({
       generatedAt: "",

@@ -1228,6 +1228,9 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         }
         renderer.destroyed = true;
         try {
+          if (renderer.host && officeMapHoverTarget instanceof HTMLElement && renderer.host.contains(officeMapHoverTarget)) {
+            hideOfficeMapHover(officeMapHoverTarget);
+          }
           if (renderer.resizeObserver) {
             renderer.resizeObserver.disconnect();
             renderer.resizeObserver = null;

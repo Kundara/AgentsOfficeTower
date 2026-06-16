@@ -503,7 +503,7 @@ export function buildWebCliQueryResponse(
 
 export function hasSharedFleetData(fleet: FleetResponse): boolean {
   return fleet.projects.some((snapshot) => {
-    if (isSharedRemoteOnly(snapshot) || sharedParticipants(snapshot).length > 0) {
+    if (sharedParticipants(snapshot).length > 0) {
       return true;
     }
     return snapshot.agents.some((agent) => agent.network !== null);

@@ -1077,7 +1077,7 @@ How it works:
 - `/api/web-cli/team-fleet` accepts a bounded same-origin browser POST of the already-rendered shared-room fleet so local CLI queries can read the same coordinated data without connecting directly to PartyKit
 - `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
 - browser-side rendering starts from `client/index.ts`, executes the generated `app-runtime.ts` module, and then delegates behavior across the focused runtime section files
-- optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, a server-backed multiplayer device identity for self-peer suppression across local viewers, per-project share preferences, remote-only floor cooldown handling, and the debounced team-fleet cache post for `web query scope=team` live in `multiplayer-source.ts`
+- optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, a server-backed multiplayer device identity for self-peer suppression across local viewers, explicit per-project share preferences, active-agent-only remote merges, and the debounced team-fleet cache post for `web query scope=team` live in `multiplayer-source.ts`
 - `web query <repo> gist` is the light CLI coordination read. It projects the same workspace `activity.hotChanges` used by the in-scene hot-stuff board plus active agents with last message and last file-change hints, so agents can do a short state sync before requesting broader `recent` or `last` data.
 
 - server-sent events from `/api/events`

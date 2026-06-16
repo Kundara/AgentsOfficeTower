@@ -145,10 +145,10 @@ Sources:
   - live SSE updates for browser clients
   - all discovered workspaces stay live-monitored at once
   - reserved multiplayer status surface for a future secured sync transport
-  - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; those shared-room credentials now restore from machine-local Agents Office user data on launch, each local floor exposes a persisted `Shared` toggle that controls whether that project is broadcast into the room without forcing a floor-shell rebuild, and same-machine browser plus VS Code viewers now share one stored multiplayer device identity so self-peers can be ignored cleanly
+  - browser settings can also attach the page to a shared PartyKit room using `host`, `room`, and an optional short `nickname`; those shared-room credentials now restore from machine-local Agents Office user data on launch, each local floor exposes a persisted default-off `Shared` toggle that controls whether active agents from that project are broadcast into the room without forcing a floor-shell rebuild, and same-machine browser plus VS Code viewers now share one stored multiplayer device identity so self-peers can be ignored cleanly
   - read-only `web query` CLI access to the running local web server for a lightweight `gist` state sync plus bounded `recent` and `last` lookups by repo name, with `local` scope reading the live server fleet and `team` scope reading the latest coordinated shared-room browser cache when available
   - that same Settings popup now includes an image-only left/right hat picker whose selection applies immediately to all local agents and is preserved in machine-local app settings
-  - remote shared-room activity now merges client-side onto matching local workspaces when possible, and otherwise stays visible as remote-only floors with a 1-hour cooldown before disappearing after updates stop
+  - remote shared-room activity now merges client-side only onto matching local workspaces whose local `Shared` toggle is on; inactive remote snapshots and unmatched remote projects stay hidden instead of creating remote-only floors
   - shared-room payloads now also carry the broadcaster's selected `hatId`, so remote peers stay visually distinct without inventing peer-specific palette logic
 - map and terminal-style views through `?view=map|terminal`
 - live agents only on desks, plus the 4 most recent top-level lead sessions resting in the rec area
@@ -180,6 +180,7 @@ Sources:
 - projectless Hermes orchestrators render in that sky as fixed screen-space avatars on the left edge, so they stay outside the building and ignore vertical tower scroll until they regain a workspace desk
 - Hermes identity handoff is screen-space when it crosses floor ownership: the fixed layer animates desk-to-sky, sky-to-desk, and known-floor-to-known-floor transfer ghosts from measured DOM hit rects while the Pixi room scenes keep owning settled desk avatars
 - hover/session detail surfaces for longer text instead of large scene overlays, while local Codex agents can now open a compact right-edge floor chat panel for recent typed history without routing through the session panel first
+- scene hover cards for agents and hot-stuff cells render through a fixed body-level HTML overlay anchored to the Pixi hit target, so they stay above the horizontally scrollable scene host and are clamped to the viewport instead of being clipped by the floor panel
 - when a scene-native thread card is open, map hover tooltips are suppressed until the card closes so the reply/history surface does not fight for the same space; resting agents stage slightly left/down while their chat is open, and successful sends create a short desk-work intent until official live state catches up
 - the scene chat panel is reconciled by stable thread/message keys instead of being recreated on every fleet refresh, so live text updates do not replay the panel slide-in; only newly appended message bubbles get the short bottom-stack animation, and a bottom-scrolled history stays pinned to the newest content
 - browser map layout now derives from a tile-grid settings model instead of renderer-local pixel literals
@@ -251,7 +252,7 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
   - `navigation-source.ts`: navigation grid, avatar routing, per-avatar Pixi node creation including hats, scene hit-target focus, terminal/fleet summaries, and the durable "Needs You" queue.
   - `ui-source.ts`: browser render loop, DOM patching, fleet ingestion, and session-card rendering.
 - `packages/web/src/client/multiplayer-source.ts`
-  Holds the browser-side PartyKit room sync overlay, shared-room draft/input behavior, per-project share preferences, remote-only floor cooldown memory, remote fleet merge helpers, and the debounced same-origin post of the already-coordinated shared-room fleet back to the local server for `scope=team` CLI reads.
+  Holds the browser-side PartyKit room sync overlay, shared-room draft/input behavior, explicit per-project share preferences, active-agent remote fleet merge helpers, and the debounced same-origin post of the already-coordinated shared-room fleet back to the local server for `scope=team` CLI reads.
 - `packages/party`
   Holds the deployable PartyKit room relay that validates and rebroadcasts the browser `fleet-sync` payloads over shared room sockets.
 - `packages/web/src/client/toast-source.ts`
@@ -403,7 +404,7 @@ The active office view currently favors an open station language over enclosed c
 - the floor is restored to the blue office-strip language from the reference art, including an upper wall-side walkway for rec facilities
 - layout constants are now expressed as internal tile-grid settings instead of only pixel literals, so boss-office footprints, desk columns, rec-strip depth, and inter-cubicle spacing all derive from a single floor grid
 - global viewer settings are separate from internal scene settings; the first user-facing control is text scale, clamped from `0.75x` to `2.00x`, while prefab sizing and spacing stay internal
-- the current browser renderer is Pixi-first for the office map, with HTML retained only for overlays, controls, and fallback terminal output
+- the current browser renderer is Pixi-first for the office map, with HTML retained only for overlays, controls, anchored hover cards, and fallback terminal output
 - browser placement rules are intentionally a little stickier than raw workload freshness, because a live local thread should not visually bounce desk -> rec -> desk during short polling gaps
 - Codex-local desk seating now also treats app-server `status.type = "active"` as the decisive occupancy signal, so an active session does not drop into the rec strip just because its summarized state temporarily reads waiting or recently done
 - once `isOngoing` is present on a local thread, the browser keeps that thread classified as busy across both workstation and session-list logic until the ongoing signal actually clears, instead of letting it cool off in one surface while still reading as active in another

@@ -1,0 +1,2 @@
+packages/web/src/client/** text eol=lf
+packages/web/test/*.test.js text eol=lf

@@ -187,7 +187,7 @@ Current browser settings surfaces are:
 - a machine-local image-only hat selector with left/right cycling, a first `no hat` option, and immediate application across the local player's visible agents
 - machine-local Cursor API key save/clear controls
 - shared-room sync toggle plus `host`, `room`, and short `nickname` fields, with explicit save/clear controls
-- a per-floor persisted `Shared` toggle for local projects while shared-room sync is enabled, defaulting to on and controlling whether that local project is broadcast into the room
+- a per-floor persisted `Shared` toggle for local projects while shared-room sync is enabled, defaulting to off and controlling whether that local project can participate in the room
 
 ### Workload placement
 
@@ -213,6 +213,7 @@ Current browser settings surfaces are:
 - Finished subagents should keep a visibly readable post-finish desk cooldown before exiting, and that cooldown should be longer than the top-level lead cooldown so child completion is easier to observe in-scene.
 - Finished subagents should then walk out through the room door instead of blinking away.
 - Visible subagent avatars should render at 75% of their parent depth's size while keeping normal workstation, hover, and depth behavior; nested multi-agent v2 descendants should keep shrinking by `0.75 ** depth`.
+- Agent hover cards and hot-stuff board hover cards should render through a top-level browser overlay anchored to scene hit targets, not as descendants of the scrollable scene host, so they remain visible above the floor panel and clamp inside the viewport on narrow screens.
 - Empty rooms should read as quiet space, not as errors.
 
 ### Scene layout and tiles
@@ -330,15 +331,15 @@ Worktree identity rules:
 - Shared-room host, room, nickname, and enabled state should be loaded from machine-local Agents Office user data when the page opens and should survive browser reloads.
 - Shared-room form fields should behave like ordinary inputs while the user is typing; runtime refreshes must not rewrite the draft value under the cursor.
 - Shared-room settings should persist only on explicit save/clear actions or other explicit sharing controls, not on passive input repaint.
-- Local project share preferences should be persisted client-side per project root and default to sharing until the user turns a floor off.
+- Local project share preferences should be persisted client-side per project root and default to not shared until the user turns a floor on.
 - Toggling a floor's `Shared` state should update the button immediately in place and must not rebuild or blank the office floor shell.
-- The browser should broadcast only the local project roots whose `Shared` floor toggle is still on.
-- Remote workspace activity should merge into locally matching workspaces when names match, but remote-only room workspaces should also remain visible as standalone floors when they do not exist locally.
-- Remote-only floors should grey the project-title treatment slightly so “not my workspace” reads as a distinct state without hiding the floor.
-- Each floor header should list the active participant nicknames currently visible in that workspace; when a remote-only floor is cooling down and has no active agents left, it may fall back to the most recent participant labels.
+- The browser should broadcast only local project roots whose `Shared` floor toggle is on and whose snapshot has active agents.
+- Remote workspace activity should merge only into locally matching workspaces whose local `Shared` floor toggle is also on; shared-room data must not create standalone remote-only floors.
+- Remote snapshots without active agents should stay hidden instead of creating or preserving a room/floor.
+- Each floor header should list the active participant nicknames currently visible in that workspace.
 - Remote shared-room agents should preserve peer labeling and shared-room context so they remain visibly distinct from local sessions.
 - Shared-room broadcasts should also preserve each participant's selected `hatId`, and remote merged agents should keep rendering with that hat even when the local viewer has chosen a different one.
-- Remote-only shared projects should cool down for 1 hour before disappearing after room updates stop.
+- Turning a project from shared to not shared should remove it from subsequent room payloads and hide it on other connected clients without a remote-only cooldown.
 - Screenshot mode should disable shared-room sync.
 - `/api/multiplayer` should expose the current server multiplayer transport status even when the transport is currently disabled.
 - The CLI should be able to read the running local web server's shared model with `web query <repo> <gist|recent|last>`, scoped to `local` or `team`, without gaining any write, reply, file-read, or arbitrary-command capability.
