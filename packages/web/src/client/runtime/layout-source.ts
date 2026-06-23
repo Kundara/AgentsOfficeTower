@@ -1487,13 +1487,17 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           .trim();
       }
 
+      function replaceGoalCommandLabel(value) {
+        return String(value || "").replace(/(^|[\\s(\\x5B\\x7B<"'])\\/goal(?=$|[\\s)\\]\\x7D,.!?:;"'>])/g, "$1🎯");
+      }
+
       function normalizeDisplayText(projectRoot, value) {
         const normalized = String(value || "").trim();
         if (!normalized) {
           return "";
         }
-        const plainText = stripDisplayMarkdown(normalized);
-        if (!plainText) {
+        const displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));
+        if (!displayText) {
           return "";
         }
         const isPathBoundary = (character) => {
@@ -1512,25 +1516,25 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         };
         let output = "";
         let index = 0;
-        while (index < plainText.length) {
-          const next = plainText.indexOf("/mnt/", index);
+        while (index < displayText.length) {
+          const next = displayText.indexOf("/mnt/", index);
           if (next === -1) {
-            output += plainText.slice(index);
+            output += displayText.slice(index);
             break;
           }
-          const previousChar = next > 0 ? plainText[next - 1] : "";
+          const previousChar = next > 0 ? displayText[next - 1] : "";
           if (!isPathBoundary(previousChar)) {
-            output += plainText.slice(index, next + 5);
+            output += displayText.slice(index, next + 5);
             index = next + 5;
             continue;
           }
           let end = next + 5;
-          while (end < plainText.length && !isPathBoundary(plainText[end])) {
+          while (end < displayText.length && !isPathBoundary(displayText[end])) {
             end += 1;
           }
-          const candidate = plainText.slice(next, end);
+          const candidate = displayText.slice(next, end);
           const cleaned = cleanReportedPath(projectRoot, candidate);
-          output += plainText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));
+          output += displayText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));
           index = end;
         }
         return output;

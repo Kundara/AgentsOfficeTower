@@ -1032,9 +1032,14 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const actionHtml = action
           ? \`<div class="agent-hover-action">\${escapeHtml(action)}</div>\`
           : "";
+        const goalText = agent && agent.goal && typeof agent.goal.objective === "string"
+          ? activityWallShortText(normalizeDisplayText(snapshot.projectRoot, agent.goal.objective), 42)
+          : "";
+        const goalSource = agent && agent.goal && agent.goal.confidence === "typed" ? "typed" : "inferred";
         const metaParts = [
           \`<span>\${escapeHtml(titleCaseWords(agentKindLabel(snapshot, agent)))}</span>\`,
           \`<span>\${escapeHtml(agentHoverSourceLabel(agent, summary.source))}</span>\`,
+          goalText ? \`<span>\${escapeHtml("🎯 " + goalText + " (" + goalSource + ")")}</span>\` : "",
           agent.network
             ? \`<span class="agent-hover-peer">\${escapeHtml(agent.network.peerLabel + (agent.network.peerRoom ? " @ " + agent.network.peerRoom : ""))}</span>\`
             : "",

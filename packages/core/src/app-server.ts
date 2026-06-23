@@ -40,6 +40,21 @@ interface DynamicToolCallResponse {
   success: boolean;
 }
 
+export interface AppServerThreadGoal {
+  threadId: string;
+  objective: string;
+  status: string;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ThreadGoalGetResponse {
+  goal: AppServerThreadGoal | null;
+}
+
 export function appServerCwdParam(cwd: string | null | undefined): string | null {
   if (!cwd) {
     return null;
@@ -208,7 +223,8 @@ export class CodexAppServerClient {
           version: "0.1.0"
         },
         capabilities: {
-          experimentalApi: true
+          experimentalApi: true,
+          requestAttestation: false
         }
       }), APP_SERVER_INITIALIZE_TIMEOUT_MS, "app-server initialize");
     } catch (error) {
@@ -230,7 +246,8 @@ export class CodexAppServerClient {
           version: "0.1.0"
         },
         capabilities: {
-          experimentalApi: true
+          experimentalApi: true,
+          requestAttestation: false
         }
       }), APP_SERVER_INITIALIZE_TIMEOUT_MS, "app-server initialize");
     } catch (error) {
@@ -396,6 +413,11 @@ export class CodexAppServerClient {
       includeTurns: true
     });
     return result.thread;
+  }
+
+  async getThreadGoal(threadId: string): Promise<AppServerThreadGoal | null> {
+    const result = await this.request<ThreadGoalGetResponse>("thread/goal/get", { threadId });
+    return result.goal ?? null;
   }
 
   async resumeThread(threadId: string): Promise<CodexThread> {

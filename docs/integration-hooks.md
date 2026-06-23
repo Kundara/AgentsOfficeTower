@@ -29,6 +29,8 @@ The important normalized agent fields are:
   file or directory paths used for room mapping
 - `activityEvent`
   optional event object used for visual notifications
+- `goal`
+  optional normalized goal metadata with provider-specific kind, objective, status, timestamps, and confidence
 - `provenance`
   whether the visible state comes from typed Codex data, typed OpenClaw gateway data, typed Cursor API data, inferred Claude or Hermes data, cloud tasks, or synthetic presence
 - `confidence`
@@ -59,6 +61,7 @@ Current use:
 - keeps streamed `item/agentMessage/delta` notifications enabled so Codex reply toasts can update immediately from the typed live feed
 - requests `thread/list`
 - requests `thread/read`
+- requests `thread/goal/get`
 - resumes active/recent threads with `thread/resume`
 - unsubscribes stale observer-owned subscriptions with `thread/unsubscribe`
 - parses app-server notifications
@@ -66,6 +69,7 @@ Current use:
 - summarizes `turn/plan/updated` from the documented `{ explanation?, plan }` payload and `turn/diff/updated` from the documented `{ diff }` payload
 - normalizes newer activity/diagnostic notifications including file patch updates, MCP progress, terminal interaction, Codex hook runs, guardian auto-review, model reroute/verification notices, warnings, MCP startup/login failures, rate-limit notices, and Windows sandbox/setup warnings
 - provides an explicit unsuccessful response to `item/tool/call` dynamic-tool requests because Agents Office does not execute arbitrary dynamic tools for observed Codex turns
+- answers `currentTime/read` server requests with Unix seconds without treating that request as workload, and opts out of `attestation/generate` requests because Agents Office cannot mint client attestation tokens
 - exposes `npm run check:codex-protocol` as a local drift check against the installed `codex app-server generate-ts --experimental` method set
 
 Important note:
@@ -81,23 +85,27 @@ This means app-server is now both the main truth source and the first-class loca
 Signals intentionally classified as low-workload or no-op today:
 
 - `thread/tokenUsage/updated`
+- `thread/deleted`
 - `skills/changed`
 - `thread/name/updated`
-- `thread/goal/updated`
-- `thread/goal/cleared`
+- `thread/settings/updated`
 - `account/updated`
 - `app/list/updated`
 - `remoteControl/status/changed`
+- `externalAgentConfig/import/progress`
 - `externalAgentConfig/import/completed`
 - `fs/changed`
 - `fuzzyFileSearch/sessionUpdated`
 - `fuzzyFileSearch/sessionCompleted`
 - `thread/realtime/*`
+- `turn/moderationMetadata`
+- `model/safetyBuffering/updated`
 - `account/login/completed`
 
 Current stance:
 
 - these notifications are documented and valid, but they do not currently affect workload state or office occupancy; when useful, they are kept as status events or human-readable notes rather than live desk activity
+- `thread/goal/updated` and `thread/goal/cleared` are the exception: they still do not move a desk by themselves, but they hydrate or clear `DashboardAgent.goal`
 
 Resolution details:
 
@@ -188,6 +196,30 @@ How we use it:
 - only synthesize those fallback assistant-message events when the latest assistant message belongs to the latest turn, so an older missed final answer is not replayed as fresh activity after a newer user prompt starts the next turn
 - treat those synthesized `thread/read/agentMessage` events as recovery-only signal; streamed `item/completed` final answers remain the authoritative visible reply when both exist for the same thread, so a late reread cannot overwrite a newer live final answer in the UI
 - keep synthesized `thread/read/agentMessage` commentary as `updated`; only a latest assistant message with `phase = final_answer` is treated as completed
+
+### `thread/goal/get` and `thread/goal/*`
+
+Used in:
+
+- `packages/core/src/app-server.ts`
+- `packages/core/src/live-monitor.ts`
+- `packages/core/src/goal.ts`
+- `packages/core/src/adapters/codex-local.ts`
+
+What we read:
+
+- typed Codex `ThreadGoal` metadata: objective, status, token budget, tokens used, time used, created time, and updated time
+- live `thread/goal/updated` and `thread/goal/cleared` notifications
+
+How we use it:
+
+- normalize Codex goals into `DashboardAgent.goal` with `kind = codex` and `confidence = typed`
+- backfill goal state during thread refresh with `thread/goal/get`
+- keep goal state keyed by `threadId` in the live monitor, then attach it at the Codex adapter boundary
+- clear stale goal state immediately when Codex sends `thread/goal/cleared`
+- expose the same normalized object through browser hover metadata, `web query` JSON, shared-room payloads, and terminal snapshots
+
+Goal state is metadata, not workload by itself. A paused or complete goal can be useful context, but occupancy still comes from thread state, turn items, app-server notifications, and current-workload policy.
 
 ### `thread/resume` / `thread/unsubscribe`
 
@@ -686,6 +718,7 @@ How this project uses that surface:
 - subagent-scoped hook records with `agent_id` become child `DashboardAgent` rows under the lead Claude session, override matching inferred workflow/subagent rows, and attach their events to the child row instead of the parent when possible
 - Claude Agent Teams config files can upgrade teammates into child agents with teammate name, role, active/idle state, parent `leadSessionId`, and cowork project/worktree floor discovery
 - Claude Desktop Co-work session records can add read-only Claude agents and workspace floors, but they do not provide hook-backed browser replies or typed subagent control
+- Claude lead sessions, Agent Teams rows, workflow subagents, Co-work sessions, and Agent View background jobs attach `DashboardAgent.goal` from the strongest local objective-like text available, usually the session title, initial prompt, teammate prompt/name, background job prompt/name, or workflow child description
 - when they do not exist, Claude falls back to transcript inference with `confidence = inferred`
 
 ### Claude transcript inference rules
@@ -764,6 +797,7 @@ What Claude still does not provide here:
 
 - Codex-style resume/open command
 - Codex app-server style live push stream into this process without a user-configured hook bridge
+- a typed goal API comparable to Codex `ThreadGoal`; Claude goals in Agents Office are inferred normalized metadata, even when the source record itself is typed
 - a complete Codex-grade hierarchy for every child; local workflow/subagent files provide inferred child rows, while hook `agent_id`, teammate `sessionId`, and team `leadSessionId` provide typed hierarchy where available
 - a stable documented local API for `/workflows` phase/agent progress; Agent View jobs and workflow-managed child rows are visible, but the full phase tree still needs a future protocol path such as OpenTelemetry
 - a general thread-steer/reply API comparable to Codex app-server, so Claude session cards are still read-only even though hook-backed approval/input waits are now actionable
@@ -1049,6 +1083,7 @@ How normalized fields become visuals:
 | `isCurrent` | default current-workload filtering |
 | `parentThreadId` and `role` | grouping into lead clusters and role pods |
 | `detail` | hover summary and session-card text |
+| `goal` | hover/session context plus CLI and web-query API metadata |
 | `resumeCommand` and `url` | session actions when available |
 | `provenance` and `confidence` | hover/session indication of typed Codex truth vs inferred Claude activity |
 
@@ -1203,6 +1238,7 @@ Today the project already rides:
 - Codex status flags
 - Codex turn-item summaries
 - Codex raw app-server notifications
+- Codex typed thread goals through `thread/goal/get` and `thread/goal/*` notifications
 - Codex turn lifecycle events
 - Codex approval and input request events
 - Codex cloud task listing
@@ -1211,6 +1247,7 @@ Today the project already rides:
 - Claude tool-use and message inference
 - local Claude workflow/subagent transcript and journal discovery
 - Claude provenance/confidence signaling
+- Claude inferred goal metadata for lead sessions, Agent Teams rows, workflow subagents, Co-work rows, and Agent View background jobs
 - hook-backed Claude approval and elicitation responses from the browser queue
 - hook-backed Claude subagent child rows from `agent_id`
 - Claude Agent Teams teammate rows and cowork/worktree floor discovery

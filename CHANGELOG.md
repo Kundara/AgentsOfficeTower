@@ -23,6 +23,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added Claude Agent View background job discovery from `~/.claude/jobs/*/state.json`, rendering matching jobs as read-only `claude:background` agents and workspace floors without requiring project hooks.
 - Added Claude workflow-subagent discovery from local session `subagents` transcripts, matching `*.meta.json`, and workflow `journal.jsonl` records, rendering inferred child rows under the lead session without requiring hooks.
 - Added Claude Desktop Co-work discovery from `local-agent-mode-sessions`, using saved space folders and session-selected folders as workspace floors with read-only Claude agents and detected-file activity.
+- Added normalized adapter-level goal metadata so Codex typed thread goals and Claude inferred session, subagent, Co-work, and background goals surface through `DashboardAgent.goal`, web-query APIs, shared-room payloads, terminal snapshots, and hover details.
 - Added scene-click thread cards for local Codex agents, exposing recent typed thread history directly from the office map with reply controls only when the thread is owned by the same app-server connection.
 - Added read-only Hermes Agent visibility by reading Hermes `state.db`/profile stores and live Hermes process cwd/env hints, mapping matching project sessions into Agents Office without project-name hard matching.
 - Added `codex-agents-office agents link hermes`, which installs a small Hermes plugin hook bridge into `~/.hermes/plugins/codex-agents-office` so Hermes session activity can stream into Agents Office as typed sidecars without launching Hermes.
@@ -34,6 +35,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed Codex goal command display so `/goal` labels render as `🎯` in snapshot labels, session titles, hover cards, and other shared display surfaces.
 - Changed workstation column spacing from four tiles to three tiles so dense desk layouts waste less horizontal space.
 - Changed macOS Codex command resolution so the bundled Codex app binary is tried before a stale `codex` on `PATH`, while still honoring `CODEX_CLI_PATH` first.
 - Changed local Codex ongoing detection so fresh `notLoaded` threads with non-final work signals and no final answer stay workstation-live even when the latest turn is reported as `interrupted`.
@@ -50,6 +52,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed hot-stuff file heat entries to carry branch and multiplayer user attribution through snapshots, web CLI gist output, shared-room merges, and hover tooltips.
 - Changed Codex app-server reply payloads to match the current generated schema, including `text_elements: []` on text turn inputs, `{ decision }` approval responses, MCP elicitation responses, and permission-profile approval responses.
 - Changed Codex app-server event handling so newer patch-update, MCP-progress, terminal-interaction, hook-run, guardian auto-review, model, warning, rate-limit, MCP startup/login, and Windows sandbox notifications now become typed events or diagnostic notes instead of disappearing silently.
+- Changed Codex app-server protocol compatibility so the reviewed method allowlist includes current metadata/safety notifications, `currentTime/read` requests are answered without marking workload live, and client attestation requests remain explicitly opted out.
 - Changed Codex dynamic-tool server request handling so unsupported `item/tool/call` requests receive an explicit unsuccessful response from Agents Office rather than leaving the Codex turn pending.
 - Changed Claude Agent SDK integration to `@anthropic-ai/claude-agent-sdk` `^0.2.118` and added typed coverage for newer hook events including `PostToolBatch`, `UserPromptExpansion`, `PermissionDenied`, and `TaskCreated`.
 - Changed Claude delegation hooks and Agent/Task tool calls to normalize onto the shared `collabAgentToolCall` activity type used for delegated-agent work.

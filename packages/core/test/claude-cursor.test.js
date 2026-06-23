@@ -701,7 +701,7 @@ test("Claude team files create teammate child agents and project floors", async 
             name: "security",
             agentType: "security-reviewer",
             model: "claude-sonnet-4-5",
-            prompt: null,
+            prompt: "Review auth edge cases",
             color: "#4477aa",
             joinedAt: now,
             tmuxPaneId: "%1",
@@ -730,6 +730,9 @@ test("Claude team files create teammate child agents and project floors", async 
     assert.equal(agents[0].isSubagent, true);
     assert.equal(agents[0].nickname, "security");
     assert.equal(agents[0].role, "security-reviewer");
+    assert.equal(agents[0].goal?.kind, "claudeSubagent");
+    assert.equal(agents[0].goal?.objective, "Review auth edge cases");
+    assert.equal(agents[0].goal?.confidence, "inferred");
     assert.equal(agents[0].cwd, "/workspaces/CodexAgentsOffice-review");
     assert.ok(floors.some((floor) => floor.root === "/workspaces/CodexAgentsOffice-review"));
   });
@@ -894,6 +897,9 @@ test("Claude Co-work local agent sessions create workspace floors and read-only 
     assert.equal(agents[0].threadId, "local_93d9682b-41c3-4903-a969-9531b87dc7e4");
     assert.equal(agents[0].state, "thinking");
     assert.equal(agents[0].activityEvent?.type, "fileChange");
+    assert.equal(agents[0].goal?.kind, "claudeCowork");
+    assert.equal(agents[0].goal?.objective, "Write squirrel story with conflict");
+    assert.equal(agents[0].goal?.confidence, "inferred");
     const coworkFloor = floors.find((floor) => floor.root === "/mnt/f/AI/Projects/ClaudeTest/Test Proj");
     assert.ok(coworkFloor);
     assert.equal(coworkFloor.sourceKind, "claude:cowork");
@@ -946,6 +952,9 @@ test("Claude background job state creates workspace floors and read-only agents"
     assert.equal(agents[0].latestMessage, null);
     assert.equal(agents[0].liveSubscription, "readOnly");
     assert.equal(agents[0].confidence, "typed");
+    assert.equal(agents[0].goal?.kind, "claudeBackground");
+    assert.equal(agents[0].goal?.objective, "Fix the platformer collision regression");
+    assert.equal(agents[0].goal?.confidence, "inferred");
     const backgroundFloor = floors.find((floor) => floor.root === "/workspaces/CodexAgentsOffice");
     assert.ok(backgroundFloor);
     assert.equal(backgroundFloor.sourceKind, "claude:background");
@@ -1027,6 +1036,10 @@ test("Claude transcript ai-title wins over model fallback labels", () => {
   );
 
   assert.equal(summary.label, "Track live Claude workers");
+  assert.equal(summary.goal?.kind, "claudeSession");
+  assert.equal(summary.goal?.objective, "Track live Claude workers");
+  assert.equal(summary.goal?.confidence, "inferred");
+  assert.equal(summary.goal?.status, "active");
   assert.notEqual(summary.label, "Claude opus 4 8");
 });
 
@@ -1057,6 +1070,10 @@ test("Claude SDK session title wins over transcript model fallback labels", () =
   );
 
   assert.equal(summary.label, "Claude roster audit");
+  assert.equal(summary.goal?.kind, "claudeSession");
+  assert.equal(summary.goal?.objective, "Claude roster audit");
+  assert.equal(summary.goal?.confidence, "inferred");
+  assert.equal(summary.goal?.status, "active");
   assert.notEqual(summary.label, "Claude opus 4 8");
 });
 

@@ -176,6 +176,34 @@ export interface AgentActivityEvent {
 export type AgentProvenanceSource = "codex" | "claude" | "cloud" | "cursor" | "presence" | "openclaw" | "hermes";
 export type AgentConfidence = "typed" | "inferred";
 
+export type AgentGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usageLimited"
+  | "budgetLimited"
+  | "complete"
+  | "unknown";
+
+export type AgentGoalKind =
+  | "codex"
+  | "claudeSession"
+  | "claudeCowork"
+  | "claudeBackground"
+  | "claudeSubagent";
+
+export interface AgentGoalState {
+  kind: AgentGoalKind;
+  objective: string;
+  status: AgentGoalStatus;
+  confidence: AgentConfidence;
+  createdAt: string | null;
+  updatedAt: string | null;
+  tokenBudget?: number | null;
+  tokensUsed?: number | null;
+  timeUsedSeconds?: number | null;
+}
+
 export interface NeedsUserQuestionOption {
   label: string;
   description: string;
@@ -293,6 +321,7 @@ export interface DashboardAgent {
   paths: string[];
   activityEvent: AgentActivityEvent | null;
   activitySummary?: AgentActivitySummary;
+  goal?: AgentGoalState | null;
   latestMessage: string | null;
   threadId: string | null;
   taskId: string | null;

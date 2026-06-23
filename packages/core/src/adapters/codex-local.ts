@@ -16,7 +16,7 @@ import {
 import type { ProjectAdapter } from "./types";
 import { emptyAdapterSnapshot } from "./helpers";
 import { StaticProjectSource } from "./static-source";
-import type { CloudTask, CodexThread, DashboardEvent, NeedsUserState } from "../types";
+import type { AgentGoalState, CloudTask, CodexThread, DashboardEvent, NeedsUserState } from "../types";
 
 export { selectProjectThreadsWithParents } from "../local-thread-selection";
 
@@ -106,6 +106,7 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
   events?: DashboardEvent[];
   notes?: string[];
   needsUserByThreadId?: Map<string, NeedsUserState>;
+  goalsByThreadId?: Map<string, AgentGoalState>;
   subscribedThreadIds?: Set<string>;
   stoppedAtByThreadId?: Map<string, number>;
   ongoingThreadIds?: Set<string>;
@@ -179,6 +180,7 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
           stoppedAt: stoppedAtMs ? new Date(stoppedAtMs).toISOString() : null,
           paths: syncedMessageSummary.summary.paths,
           activityEvent: syncedMessageSummary.summary.activityEvent,
+          goal: input.goalsByThreadId?.get(thread.id) ?? null,
           latestMessage: syncedMessageSummary.latestMessage,
           threadId: thread.id,
           taskId: null,

@@ -12,6 +12,7 @@ import {
   readCodexThreadWithTimeout
 } from "./codex-thread-query";
 import { listCloudTasks } from "./cloud";
+import { codexGoalToAgentGoal } from "./goal";
 import { canonicalizeProjectPath } from "./project-paths";
 import { getRoomsFilePath, resolveReadableRoomsFilePath } from "./room-config";
 import {
@@ -28,6 +29,7 @@ import type {
   CodexThread,
   DashboardEvent,
   DashboardSnapshot,
+  AgentGoalState,
   NeedsUserState
 } from "./types";
 import {
@@ -281,6 +283,7 @@ export class ProjectLiveMonitor extends EventEmitter {
   private readonly ongoingThreadIds = new Set<string>();
   private readonly stoppedAtByThreadId = new Map<string, number>();
   private readonly hydratedThreadIds = new Set<string>();
+  private readonly threadGoals = new Map<string, AgentGoalState>();
   private readonly threadRemovalTimers = new Map<string, NodeJS.Timeout>();
   private readonly pendingNotLoadedStopTimers = new Map<string, NodeJS.Timeout>();
   private roomWatcher: FSWatcher | null = null;
@@ -676,6 +679,7 @@ export class ProjectLiveMonitor extends EventEmitter {
             this.markThreadStopped(listedThread.id);
           }
           this.threads.set(listedThread.id, mergedThread);
+          await this.refreshThreadGoal(listedThread.id);
           this.ensureThreadWatcher(listedThread.id, listedThread.path ?? known.path);
         })
       );
@@ -885,6 +889,7 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.ongoingThreadIds.delete(threadId);
     this.stoppedAtByThreadId.delete(threadId);
     this.hydratedThreadIds.delete(threadId);
+    this.threadGoals.delete(threadId);
     this.subscribedThreadIds.delete(threadId);
   }
 
@@ -954,6 +959,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         knownThread = upsertThreadTurn(knownThread, turn);
         this.threads.set(threadId, knownThread);
       }
+      this.applyGoalNotification(threadId, notification);
       if (knownThread && notification.method === "thread/status/changed" && statusType) {
         const nextStatus =
           statusType === "active"
@@ -1045,6 +1051,13 @@ export class ProjectLiveMonitor extends EventEmitter {
       return;
     }
 
+    if (request.method === "currentTime/read") {
+      this.client?.respondToServerRequest(request.id, {
+        currentTimeAt: Math.floor(Date.now() / 1000)
+      });
+      return;
+    }
+
     const needsUser = buildNeedsUserStateFromServerRequest(request);
     if (needsUser) {
       this.pendingUserRequests.set(needsUser.requestId, needsUser);
@@ -1079,6 +1092,39 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.scheduleSnapshot();
   }
 
+  private applyGoalNotification(threadId: string, notification: AppServerNotification): void {
+    if (notification.method === "thread/goal/cleared") {
+      this.threadGoals.delete(threadId);
+      return;
+    }
+
+    if (notification.method !== "thread/goal/updated") {
+      return;
+    }
+
+    const goal = codexGoalToAgentGoal(asRecord(notification.params)?.goal);
+    if (goal) {
+      this.threadGoals.set(threadId, goal);
+    }
+  }
+
+  private async refreshThreadGoal(threadId: string): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    try {
+      const goal = codexGoalToAgentGoal(await this.client.getThreadGoal(threadId));
+      if (goal) {
+        this.threadGoals.set(threadId, goal);
+      } else {
+        this.threadGoals.delete(threadId);
+      }
+    } catch {
+      // Goal metadata is best-effort and should not disturb thread visibility.
+    }
+  }
+
   private async refreshThread(threadId: string, listedThread: CodexThread | null = null): Promise<void> {
     if (!this.client) {
       return;
@@ -1110,6 +1156,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         : readThread;
       this.clearMatchingNote(`Thread refresh failed (${threadId.slice(0, 8)}):`);
       this.threads.set(threadId, thread);
+      await this.refreshThreadGoal(threadId);
       const settledDormantSubagent = isSettledDormantSubagentThread(thread);
       const awaitingFinalAnswer = !settledDormantSubagent && threadStillAwaitsFinalAnswer(thread);
       const shouldPromoteAwaitingFinalAnswer =
@@ -1189,6 +1236,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       }
 
       this.threads.set(threadId, thread);
+      await this.refreshThreadGoal(threadId);
       if (isOngoingThread(thread)) {
         this.markThreadLive(threadId);
       }
@@ -1261,6 +1309,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       events: this.recentEvents,
       notes: Array.from(this.notes),
       needsUserByThreadId,
+      goalsByThreadId: this.threadGoals,
       subscribedThreadIds: this.subscribedThreadIds,
       stoppedAtByThreadId: this.stoppedAtByThreadId,
       ongoingThreadIds: this.ongoingThreadIds

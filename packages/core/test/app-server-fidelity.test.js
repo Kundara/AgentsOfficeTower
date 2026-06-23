@@ -434,6 +434,34 @@ test("unsupported dynamic tool requests get an explicit failed response", () => 
   ]);
 });
 
+test("monitor answers currentTime/read server requests without marking workload live", () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const responses = [];
+
+  monitor.client = {
+    respondToServerRequest(requestId, response) {
+      responses.push({ requestId, response });
+    }
+  };
+  monitor.threads.set("thr_123", sampleThread());
+
+  monitor.handleAppServerServerRequest({
+    id: 73,
+    method: "currentTime/read",
+    params: {
+      threadId: "thr_123"
+    }
+  });
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].requestId, 73);
+  assert.equal(typeof responses[0].response.currentTimeAt, "number");
+  assert.equal(monitor.ongoingThreadIds.has("thr_123"), false);
+});
+
 test("monitor routes command approval decisions through the app-server approval helper", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
@@ -2126,6 +2154,43 @@ test("codex local adapter keeps message detail aligned with the newest thread re
   assert.equal(agent.activityEvent?.title, "something");
 });
 
+test("codex local adapter exposes typed thread goals on agents", async () => {
+  const snapshot = await buildCodexLocalAdapterSnapshotFromState({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    threads: [sampleThread()],
+    goalsByThreadId: new Map([
+      [
+        "thr_123",
+        {
+          kind: "codex",
+          objective: "Ship the office goal display",
+          status: "active",
+          confidence: "typed",
+          createdAt: "2026-06-23T10:00:00.000Z",
+          updatedAt: "2026-06-23T10:05:00.000Z",
+          tokenBudget: 1000,
+          tokensUsed: 25,
+          timeUsedSeconds: 60
+        }
+      ]
+    ])
+  });
+
+  const agent = snapshot.agents.find((entry) => entry.threadId === "thr_123");
+  assert.ok(agent);
+  assert.deepEqual(agent.goal, {
+    kind: "codex",
+    objective: "Ship the office goal display",
+    status: "active",
+    confidence: "typed",
+    createdAt: "2026-06-23T10:00:00.000Z",
+    updatedAt: "2026-06-23T10:05:00.000Z",
+    tokenBudget: 1000,
+    tokensUsed: 25,
+    timeUsedSeconds: 60
+  });
+});
+
 test("stale historical message events do not override dormant thread summaries", async () => {
   const threeDaysAgoMs = Date.now() - (3 * 24 * 60 * 60 * 1000);
   const dormantThread = {
@@ -2426,6 +2491,17 @@ test("subagent source metadata accepts current nickname and role fields", () => 
   });
   assert.equal(pickThreadLabel(thread), "Ada");
   assert.equal(inferThreadAgentRole(thread, "subAgent"), "worker");
+});
+
+test("Codex goal slash command labels render with the goal glyph", () => {
+  const thread = {
+    ...sampleThread(),
+    name: "/goal Ship tooltip cleanup"
+  };
+
+  assert.equal(pickThreadLabel(thread), "🎯 Ship tooltip cleanup");
+  assert.equal(pickThreadLabel({ ...thread, name: "Run /goal before demo" }), "Run 🎯 before demo");
+  assert.equal(pickThreadLabel({ ...thread, name: "/goals list" }), "/goals list");
 });
 
 test("subagent source metadata accepts v2 agent path and role alias fields", () => {

@@ -1109,9 +1109,11 @@ test("runtime source strips markdown formatting markers from display text", () =
   assert.ok(layoutSource.includes("function stripDisplayMarkdown(value) {"));
   assert.ok(layoutSource.includes('.replace(/\\\\[([^\\\\]]+)\\\\]\\\\(([^)]+)\\\\)/g, "$1")'));
   assert.ok(layoutSource.includes('.split(String.fromCharCode(96)).join("")'));
-  assert.ok(layoutSource.includes("const plainText = stripDisplayMarkdown(normalized);"));
-  assert.ok(layoutSource.includes('const next = plainText.indexOf("/mnt/", index);'));
-  assert.ok(layoutSource.includes("output += plainText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));"));
+  assert.ok(layoutSource.includes("function replaceGoalCommandLabel(value) {"));
+  assert.ok(layoutSource.includes('replace(/(^|[\\\\s(\\\\x5B\\\\x7B<"\'])\\\\/goal(?=$|[\\\\s)\\\\]\\\\x7D,.!?:;"\'>])/g, "$1🎯")'));
+  assert.ok(layoutSource.includes("const displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));"));
+  assert.ok(layoutSource.includes('const next = displayText.indexOf("/mnt/", index);'));
+  assert.ok(layoutSource.includes("output += displayText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));"));
 });
 
 test("runtime source sanitizes path-heavy labels and latest messages with the project root", () => {
@@ -1126,6 +1128,8 @@ test("runtime source sanitizes path-heavy labels and latest messages with the pr
   assert.ok(renderSource.includes("function latestAgentMessage(projectRoot, agent) {"));
   assert.ok(renderSource.includes("const message = latestAgentMessage(snapshot.projectRoot, agent);"));
   assert.ok(renderSource.includes("const hoverTitle = displayAgentLabel(snapshot, agent);"));
+  assert.ok(renderSource.includes("agent.goal.objective"));
+  assert.ok(renderSource.includes("const goalSource = agent && agent.goal && agent.goal.confidence === \"typed\" ? \"typed\" : \"inferred\";"));
   assert.ok(uiSource.includes("latestAgentMessage(snapshot.projectRoot, agent)"));
   assert.match(stylesSource, /\.agent-hover-summary \{\n\s+display: -webkit-box;\n[\s\S]*?-webkit-line-clamp: 10;\n[\s\S]*?-webkit-box-orient: vertical;\n[\s\S]*?overflow: hidden;/);
   assert.match(servedStyles, /\.agent-hover-summary \{\n\s+display: -webkit-box;\n[\s\S]*?-webkit-line-clamp: 10;\n[\s\S]*?-webkit-box-orient: vertical;\n[\s\S]*?overflow: hidden;/);

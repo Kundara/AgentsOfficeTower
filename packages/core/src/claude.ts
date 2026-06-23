@@ -4,8 +4,9 @@ import { homedir } from "node:os";
 
 import { ensureAgentAppearance } from "./appearance";
 import { getClaudeSdkSessionRecords, listClaudeSdkSessions, resolveReadableClaudeHooksFilePath } from "./claude-agent-sdk";
+import { inferredGoalFromText } from "./goal";
 import { sameProjectPath, type DiscoveredProject } from "./project-paths";
-import type { AgentActivityEvent, ActivityState, AgentConfidence, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
+import type { AgentActivityEvent, ActivityState, AgentConfidence, AgentGoalKind, AgentGoalState, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
 
 const DEFAULT_CLAUDE_CONFIG_DIR = join(homedir(), ".claude");
 const CLAUDE_TEAMS_DIR = join(DEFAULT_CLAUDE_CONFIG_DIR, "teams");
@@ -186,6 +187,23 @@ interface ClaudeActivitySummary {
   needsUser: NeedsUserState | null;
   latestMessage: string | null;
   isOngoing: boolean;
+  goal?: AgentGoalState | null;
+}
+
+function withInferredClaudeGoal(
+  summary: ClaudeActivitySummary,
+  kind: AgentGoalKind,
+  objective: string | null
+): ClaudeActivitySummary {
+  return {
+    ...summary,
+    goal: inferredGoalFromText({
+      kind,
+      objective,
+      state: summary.state,
+      updatedAt: summary.updatedAt
+    })
+  };
 }
 
 function isTransientClaudeState(state: ActivityState): boolean {
@@ -2823,6 +2841,7 @@ function claudeAgentFromLoadedSession(
     stoppedAt: !isOngoing && parentThreadId ? updatedAt : null,
     paths,
     activityEvent: session.summary.activityEvent,
+    goal: session.summary.goal ?? null,
     latestMessage: session.summary.latestMessage,
     threadId: session.sessionId,
     taskId: null,
@@ -2865,6 +2884,7 @@ function mergeClaudeDashboardAgents(existing: DashboardAgent, incoming: Dashboar
     paths: mergePathLists(primary.paths, secondary.paths),
     stoppedAt: primary.isOngoing || secondary.isOngoing ? null : primary.stoppedAt ?? secondary.stoppedAt,
     threadId: primary.threadId ?? secondary.threadId,
+    goal: primary.goal ?? secondary.goal ?? null,
     confidence: primary.confidence === "typed" || secondary.confidence === "typed" ? "typed" : primary.confidence
   };
 }
@@ -2927,21 +2947,30 @@ function claudeTeamMemberSummary(input: {
     context: input.context,
     latestHook
   });
+  const baseState: ActivityState = memberIsFreshActive ? "running" : "idle";
+  const baseUpdatedAtIso = new Date(baseUpdatedAt || Date.now()).toISOString();
   const base: ClaudeActivitySummary = {
     label: input.context.member.name,
     sourceKind: `claude:team:${input.context.team.name}`,
-    state: memberIsFreshActive ? "running" : "idle",
+    state: baseState,
     detail: memberIsFreshActive
       ? `${input.context.member.name} active in ${input.context.team.name}`
       : `${input.context.member.name} idle in ${input.context.team.name}`,
-    updatedAt: new Date(baseUpdatedAt || Date.now()).toISOString(),
+    updatedAt: baseUpdatedAtIso,
     paths: mergePathLists([primaryCwd], [input.context.member.cwd]),
     activityEvent: null,
     gitBranch: null,
     confidence: "typed",
     needsUser: null,
     latestMessage: null,
-    isOngoing: memberIsFreshActive
+    isOngoing: memberIsFreshActive,
+    goal: inferredGoalFromText({
+      kind: "claudeSubagent",
+      objective: input.context.member.prompt ?? input.context.member.name,
+      state: baseState,
+      updatedAt: baseUpdatedAtIso,
+      createdAt: input.context.member.joinedAt ? new Date(input.context.member.joinedAt).toISOString() : null
+    })
   };
   if (!latestHook) {
     return base;
@@ -3000,6 +3029,7 @@ async function claudeAgentFromTeamMemberContext(input: {
     stoppedAt: summary.isOngoing ? null : summary.updatedAt,
     paths: summary.paths,
     activityEvent: summary.activityEvent,
+    goal: summary.goal ?? null,
     latestMessage: summary.latestMessage,
     threadId,
     taskId: null,
@@ -3552,6 +3582,12 @@ async function buildClaudeSubagentAgents(input: {
         stoppedAt: seed.summary.isOngoing ? null : seed.summary.updatedAt,
         paths: seed.summary.paths.length > 0 ? seed.summary.paths : [seed.cwd],
         activityEvent: seed.summary.activityEvent,
+        goal: seed.summary.goal ?? inferredGoalFromText({
+          kind: "claudeSubagent",
+          objective: seed.description ?? seed.name,
+          state: seed.summary.state,
+          updatedAt: seed.summary.updatedAt
+        }),
         latestMessage: seed.summary.latestMessage,
         threadId,
         taskId: null,
@@ -3638,6 +3674,7 @@ async function claudeAgentFromCoworkSession(input: {
   const state = claudeCoworkState(input.session);
   const isOngoing = state === "thinking";
   const paths = mergePathLists(input.session.roots, input.session.filePaths);
+  const updatedAt = new Date(input.session.updatedAt).toISOString();
 
   return {
     id,
@@ -3657,10 +3694,17 @@ async function claudeAgentFromCoworkSession(input: {
     cwd: input.projectRoot,
     roomId: null,
     appearance,
-    updatedAt: new Date(input.session.updatedAt).toISOString(),
-    stoppedAt: isOngoing ? null : new Date(input.session.updatedAt).toISOString(),
+    updatedAt,
+    stoppedAt: isOngoing ? null : updatedAt,
     paths: paths.length > 0 ? paths : [input.projectRoot],
     activityEvent: claudeCoworkActivityEvent(input.session, input.projectRoot),
+    goal: inferredGoalFromText({
+      kind: "claudeCowork",
+      objective: input.session.title ?? input.session.initialMessage,
+      state,
+      updatedAt,
+      createdAt: new Date(input.session.createdAt).toISOString()
+    }),
     latestMessage: null,
     threadId: input.session.sessionId,
     taskId: null,
@@ -3734,6 +3778,13 @@ async function claudeAgentFromBackgroundJob(input: {
       title: input.job.detail,
       isImage: false
     },
+    goal: inferredGoalFromText({
+      kind: "claudeBackground",
+      objective: input.job.prompt ?? input.job.name,
+      state: input.job.state,
+      updatedAt,
+      createdAt: input.job.createdAt ? new Date(input.job.createdAt).toISOString() : null
+    }),
     latestMessage: null,
     threadId: input.job.sessionId ?? input.job.jobId,
     taskId: input.job.jobId,
@@ -3874,7 +3925,8 @@ export function summariseClaudeSession(
 
   const latestMessage = latestAssistant ? messageObject(latestAssistant) : null;
   const model = latestMessage && typeof latestMessage.model === "string" ? latestMessage.model : null;
-  const displayLabel = labelFromSessionTitle(sessionTitle ?? extractClaudeSessionTitle(records), model, sessionId);
+  const sessionGoalObjective = normalizeClaudeSessionTitle(sessionTitle ?? extractClaudeSessionTitle(records));
+  const displayLabel = labelFromSessionTitle(sessionGoalObjective, model, sessionId);
   const updatedAtMs = latestRecord ? recordTimestampMs(latestRecord, fallbackUpdatedAt) : fallbackUpdatedAt;
   const updatedAt = new Date(updatedAtMs).toISOString();
   const gitBranch = latestRecord && typeof latestRecord.gitBranch === "string" ? latestRecord.gitBranch : null;
@@ -3895,15 +3947,19 @@ export function summariseClaudeSession(
     .find((summary): summary is ClaudeActivitySummary => Boolean(summary));
 
   if (latestHookSummary) {
-    return mergeClaudeAssistantTextSummary({
-      base: {
-        ...ageClaudeSummary(latestHookSummary),
-        label: displayLabel
-      },
-      latestAssistantTextRecord,
-      fallbackUpdatedAt,
-      fallbackCwd
-    });
+    return withInferredClaudeGoal(
+      mergeClaudeAssistantTextSummary({
+        base: {
+          ...ageClaudeSummary(latestHookSummary),
+          label: displayLabel
+        },
+        latestAssistantTextRecord,
+        fallbackUpdatedAt,
+        fallbackCwd
+      }),
+      "claudeSession",
+      sessionGoalObjective
+    );
   }
 
   if (latestAssistantTextRecord && latestAssistantTextUpdatedAt >= Math.max(latestToolUpdatedAt, latestUserTextUpdatedAt)) {
@@ -3914,29 +3970,33 @@ export function summariseClaudeSession(
       ageMs <= 2 * 60 * 1000 ? "thinking"
       : ageMs <= RECENT_DONE_WINDOW_MS ? "done"
       : "idle";
-    return {
-      label: displayLabel,
-      sourceKind: sourceKindFromModel(model),
-      state,
-      detail: shorten(text, 88),
-      updatedAt,
-      paths: textPaths.length > 0 ? textPaths : [fallbackCwd],
-      activityEvent:
-        ageMs <= RECENT_MESSAGE_WINDOW_MS
-          ? {
-              type: "agentMessage",
-              action: "said",
-              path: textPaths[0] ?? fallbackCwd,
-              title: shorten(text, 88),
-              isImage: false
-            }
-          : null,
-      gitBranch,
-      confidence: "inferred",
-      needsUser: null,
-      latestMessage: text,
-      isOngoing: state === "thinking"
-    };
+    return withInferredClaudeGoal(
+      {
+        label: displayLabel,
+        sourceKind: sourceKindFromModel(model),
+        state,
+        detail: shorten(text, 88),
+        updatedAt,
+        paths: textPaths.length > 0 ? textPaths : [fallbackCwd],
+        activityEvent:
+          ageMs <= RECENT_MESSAGE_WINDOW_MS
+            ? {
+                type: "agentMessage",
+                action: "said",
+                path: textPaths[0] ?? fallbackCwd,
+                title: shorten(text, 88),
+                isImage: false
+              }
+            : null,
+        gitBranch,
+        confidence: "inferred",
+        needsUser: null,
+        latestMessage: text,
+        isOngoing: state === "thinking"
+      },
+      "claudeSession",
+      sessionGoalObjective
+    );
   }
 
   if (latestToolRecord && latestToolUpdatedAt >= latestUserTextUpdatedAt) {
@@ -3953,11 +4013,15 @@ export function summariseClaudeSession(
         failed: false
       });
       if (toolSummary) {
-        return {
-          ...ageClaudeSummary(toolSummary),
-          label: displayLabel,
-          confidence: "inferred"
-        };
+        return withInferredClaudeGoal(
+          {
+            ...ageClaudeSummary(toolSummary),
+            label: displayLabel,
+            confidence: "inferred"
+          },
+          "claudeSession",
+          sessionGoalObjective
+        );
       }
     }
   }
@@ -3965,36 +4029,44 @@ export function summariseClaudeSession(
   if (latestUserTextRecord) {
     const text = extractUserText(latestUserTextRecord) ?? "Assigned work";
     const paths = extractPathsFromText(text);
-    return ageClaudeSummary({
+    return withInferredClaudeGoal(
+      ageClaudeSummary({
+        label: displayLabel,
+        sourceKind: sourceKindFromModel(model),
+        state: "planning",
+        detail: shorten(text, 88),
+        updatedAt: new Date(latestUserTextUpdatedAt).toISOString(),
+        paths: paths.length > 0 ? paths : [fallbackCwd],
+        activityEvent: null,
+        gitBranch,
+        confidence: "inferred",
+        needsUser: null,
+        latestMessage: null,
+        isOngoing: true
+      }),
+      "claudeSession",
+      sessionGoalObjective
+    );
+  }
+
+  return withInferredClaudeGoal(
+    {
       label: displayLabel,
       sourceKind: sourceKindFromModel(model),
-      state: "planning",
-      detail: shorten(text, 88),
-      updatedAt: new Date(latestUserTextUpdatedAt).toISOString(),
-      paths: paths.length > 0 ? paths : [fallbackCwd],
+      state: "idle",
+      detail: "Idle",
+      updatedAt,
+      paths: [fallbackCwd],
       activityEvent: null,
       gitBranch,
       confidence: "inferred",
       needsUser: null,
       latestMessage: null,
-      isOngoing: true
-    });
-  }
-
-  return {
-    label: displayLabel,
-    sourceKind: sourceKindFromModel(model),
-    state: "idle",
-    detail: "Idle",
-    updatedAt,
-    paths: [fallbackCwd],
-    activityEvent: null,
-    gitBranch,
-    confidence: "inferred",
-    needsUser: null,
-    latestMessage: null,
-    isOngoing: false
-  };
+      isOngoing: false
+    },
+    "claudeSession",
+    sessionGoalObjective
+  );
 }
 
 export async function discoverClaudeProjects(limit = 50): Promise<DiscoveredProject[]> {

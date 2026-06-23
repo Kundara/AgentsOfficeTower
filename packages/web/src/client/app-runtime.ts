@@ -2478,6 +2478,7 @@ export function startClientApp(): void {
           state: staleOngoing ? "idle" : agent.state,
           statusText: staleOngoing ? idleStatusTextForStaleSharedAgent(agent) : agent.statusText,
           stoppedAt: staleOngoing ? (agent.stoppedAt || agent.updatedAt || new Date().toISOString()) : agent.stoppedAt,
+          goal: agent.goal || null,
           activityEvent: !staleOngoing && agent.activityEvent
             ? {
               ...agent.activityEvent,
@@ -4379,13 +4380,17 @@ export function startClientApp(): void {
           .trim();
       }
 
+      function replaceGoalCommandLabel(value) {
+        return String(value || "").replace(/(^|[\s(\x5B\x7B<"'])\/goal(?=$|[\s)\]\x7D,.!?:;"'>])/g, "$1🎯");
+      }
+
       function normalizeDisplayText(projectRoot, value) {
         const normalized = String(value || "").trim();
         if (!normalized) {
           return "";
         }
-        const plainText = stripDisplayMarkdown(normalized);
-        if (!plainText) {
+        const displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));
+        if (!displayText) {
           return "";
         }
         const isPathBoundary = (character) => {
@@ -4404,25 +4409,25 @@ export function startClientApp(): void {
         };
         let output = "";
         let index = 0;
-        while (index < plainText.length) {
-          const next = plainText.indexOf("/mnt/", index);
+        while (index < displayText.length) {
+          const next = displayText.indexOf("/mnt/", index);
           if (next === -1) {
-            output += plainText.slice(index);
+            output += displayText.slice(index);
             break;
           }
-          const previousChar = next > 0 ? plainText[next - 1] : "";
+          const previousChar = next > 0 ? displayText[next - 1] : "";
           if (!isPathBoundary(previousChar)) {
-            output += plainText.slice(index, next + 5);
+            output += displayText.slice(index, next + 5);
             index = next + 5;
             continue;
           }
           let end = next + 5;
-          while (end < plainText.length && !isPathBoundary(plainText[end])) {
+          while (end < displayText.length && !isPathBoundary(displayText[end])) {
             end += 1;
           }
-          const candidate = plainText.slice(next, end);
+          const candidate = displayText.slice(next, end);
           const cleaned = cleanReportedPath(projectRoot, candidate);
-          output += plainText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));
+          output += displayText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));
           index = end;
         }
         return output;
@@ -5637,9 +5642,14 @@ export function startClientApp(): void {
         const actionHtml = action
           ? `<div class="agent-hover-action">${escapeHtml(action)}</div>`
           : "";
+        const goalText = agent && agent.goal && typeof agent.goal.objective === "string"
+          ? activityWallShortText(normalizeDisplayText(snapshot.projectRoot, agent.goal.objective), 42)
+          : "";
+        const goalSource = agent && agent.goal && agent.goal.confidence === "typed" ? "typed" : "inferred";
         const metaParts = [
           `<span>${escapeHtml(titleCaseWords(agentKindLabel(snapshot, agent)))}</span>`,
           `<span>${escapeHtml(agentHoverSourceLabel(agent, summary.source))}</span>`,
+          goalText ? `<span>${escapeHtml("🎯 " + goalText + " (" + goalSource + ")")}</span>` : "",
           agent.network
             ? `<span class="agent-hover-peer">${escapeHtml(agent.network.peerLabel + (agent.network.peerRoom ? " @ " + agent.network.peerRoom : ""))}</span>`
             : "",

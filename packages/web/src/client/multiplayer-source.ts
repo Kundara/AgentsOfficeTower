@@ -507,6 +507,7 @@ export const MULTIPLAYER_SCRIPT = `
           state: staleOngoing ? "idle" : agent.state,
           statusText: staleOngoing ? idleStatusTextForStaleSharedAgent(agent) : agent.statusText,
           stoppedAt: staleOngoing ? (agent.stoppedAt || agent.updatedAt || new Date().toISOString()) : agent.stoppedAt,
+          goal: agent.goal || null,
           activityEvent: !staleOngoing && agent.activityEvent
             ? {
               ...agent.activityEvent,

@@ -58,8 +58,9 @@ function renderAgents(agents: DashboardAgent[]): string {
     .map((agent) => {
       const location = agent.cwd ? ` @ ${agent.cwd}` : "";
       const followUp = agent.resumeCommand ? ` | ${agent.resumeCommand}` : "";
+      const goal = agent.goal?.objective ? ` | 🎯 ${agent.goal.objective}` : "";
       const role = agent.role ?? (agent.source === "local" ? "default" : "cloud");
-      return `  - [${agent.state}] ${agent.label} <${role}/${agent.appearance.id}> ${agent.detail}${location}${followUp}`;
+      return `  - [${agent.state}] ${agent.label} <${role}/${agent.appearance.id}> ${agent.detail}${goal}${location}${followUp}`;
     })
     .join("\n");
 }

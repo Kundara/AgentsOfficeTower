@@ -1,4 +1,4 @@
-import type { DashboardAgent, DashboardEvent, DashboardSnapshot, HotChangeSummary } from "@codex-agents-office/core";
+import type { AgentGoalState, DashboardAgent, DashboardEvent, DashboardSnapshot, HotChangeSummary } from "@codex-agents-office/core";
 
 import type { FleetResponse } from "./server-types";
 
@@ -45,6 +45,7 @@ export interface WebCliQueryItem {
   path?: string | null;
   roomId?: string | null;
   threadId?: string | null;
+  goal?: AgentGoalState | null;
   peerLabel?: string | null;
   peerRoom?: string | null;
   eventKind?: string;
@@ -77,6 +78,7 @@ export interface WebCliGistAgent {
   updatedAt: string;
   roomId: string | null;
   threadId: string | null;
+  goal: AgentGoalState | null;
   peerLabel: string | null;
   lastMessage: string;
   lastFileChange: {
@@ -303,6 +305,7 @@ function agentToItem(snapshot: DashboardSnapshot, agent: DashboardAgent): WebCli
     detail: agentDetail(agent),
     roomId: agent.roomId,
     threadId: agent.threadId,
+    goal: agent.goal ?? null,
     peerLabel: agentPeerLabel(agent),
     peerRoom: agentPeerRoom(agent)
   };
@@ -387,6 +390,7 @@ function agentToGist(agent: DashboardAgent): WebCliGistAgent {
     updatedAt: agent.updatedAt,
     roomId: agent.roomId,
     threadId: agent.threadId,
+    goal: agent.goal ?? null,
     peerLabel: agentPeerLabel(agent),
     lastMessage: agentDetail(agent),
     lastFileChange: agentLastFileChange(agent),

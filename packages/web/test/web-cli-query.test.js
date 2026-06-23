@@ -38,6 +38,7 @@ function agent(overrides = {}) {
     latestMessage: overrides.latestMessage ?? null,
     activitySummary: overrides.activitySummary,
     activityEvent: overrides.activityEvent ?? null,
+    goal: overrides.goal ?? null,
     roomId: overrides.roomId ?? "main",
     threadId: overrides.threadId ?? "thread-1",
     provenance: overrides.provenance ?? "codex",
@@ -89,7 +90,23 @@ test("web CLI query returns bounded recent local project data by repo name", () 
       snapshot({
         agents: [
           agent({ id: "agent-old", label: "Mira", updatedAt: "2026-05-13T09:58:00.000Z", state: "waiting" }),
-          agent({ id: "agent-new", label: "Nova", updatedAt: "2026-05-13T10:02:00.000Z", state: "running" })
+          agent({
+            id: "agent-new",
+            label: "Nova",
+            updatedAt: "2026-05-13T10:02:00.000Z",
+            state: "running",
+            goal: {
+              kind: "codex",
+              objective: "Keep the office query API synced",
+              status: "active",
+              confidence: "typed",
+              createdAt: "2026-05-13T09:55:00.000Z",
+              updatedAt: "2026-05-13T10:01:00.000Z",
+              tokenBudget: null,
+              tokensUsed: 12,
+              timeUsedSeconds: 30
+            }
+          })
         ],
         events: [
           event({ id: "event-new", createdAt: "2026-05-13T10:03:00.000Z", title: "npm run typecheck" })
@@ -114,6 +131,7 @@ test("web CLI query returns bounded recent local project data by repo name", () 
   assert.equal(result.response.dataSource, "local");
   assert.equal(result.response.items.length, 2);
   assert.deepEqual(result.response.items.map((item) => item.id), ["event-new", "agent-new"]);
+  assert.equal(result.response.items[1].goal.objective, "Keep the office query API synced");
 });
 
 test("web CLI last command returns one filtered event", () => {
@@ -165,6 +183,14 @@ test("web CLI gist returns hot changes and active agent state sync", () => {
             state: "editing",
             isCurrent: true,
             latestMessage: "Updating CLI state sync",
+            goal: {
+              kind: "claudeSession",
+              objective: "Update CLI state sync",
+              status: "active",
+              confidence: "inferred",
+              createdAt: null,
+              updatedAt: "2026-05-13T10:02:00.000Z"
+            },
             activitySummary: {
               hotFiles: [
                 {
@@ -209,6 +235,7 @@ test("web CLI gist returns hot changes and active agent state sync", () => {
   assert.deepEqual(result.response.gist.hotChanges[0].branches, ["feature/hot-board"]);
   assert.deepEqual(result.response.gist.hotChanges[0].users, ["Teammate"]);
   assert.equal(result.response.gist.activeAgents[0].label, "Nova");
+  assert.equal(result.response.gist.activeAgents[0].goal.objective, "Update CLI state sync");
   assert.equal(result.response.gist.activeAgents[0].lastMessage, "Updating CLI state sync");
   assert.equal(result.response.gist.activeAgents[0].lastFileChange.label, "web-query.ts");
 });

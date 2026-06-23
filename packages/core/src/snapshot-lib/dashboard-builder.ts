@@ -8,6 +8,7 @@ import {
 import { assembleProjectSnapshot } from "../services/snapshot-assembler";
 import type { AdapterSnapshot, ProjectSource } from "../adapters";
 import type {
+  AgentGoalState,
   CloudTask,
   DashboardSnapshot,
   NeedsUserState,
@@ -78,6 +79,7 @@ export async function buildDashboardSnapshotFromState(input: {
   events?: DashboardEvent[];
   notes?: string[];
   needsUserByThreadId?: Map<string, NeedsUserState>;
+  goalsByThreadId?: Map<string, AgentGoalState>;
   subscribedThreadIds?: Set<string>;
   stoppedAtByThreadId?: Map<string, number>;
   ongoingThreadIds?: Set<string>;
@@ -109,6 +111,7 @@ export async function buildDashboardSnapshotFromState(input: {
     events: input.events,
     notes: input.notes,
     needsUserByThreadId: input.needsUserByThreadId,
+    goalsByThreadId: input.goalsByThreadId,
     subscribedThreadIds: input.subscribedThreadIds,
     stoppedAtByThreadId: input.stoppedAtByThreadId,
     ongoingThreadIds: input.ongoingThreadIds

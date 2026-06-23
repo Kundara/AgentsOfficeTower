@@ -159,16 +159,21 @@ function sourceAgentPath(thread: CodexThread): string | null {
   return sourceStringValue(threadSpawn, "agent_path") ?? sourceStringValue(threadSpawn, "agentPath");
 }
 
+export function formatGoalCommandLabel(value: string): string {
+  return value.replace(/(^|[\s(\x5B\x7B<"'])\/goal(?=$|[\s)\]\x7D,.!?:;"'>])/g, "$1🎯");
+}
+
 export function pickThreadLabel(thread: CodexThread): string {
   const agentNickname = thread.agentNickname ?? sourceAgentNickname(thread);
   const agentPath = sourceAgentPath(thread);
   const agentPathName = agentPath?.split("/").filter(Boolean).at(-1) ?? null;
-  return (
+  const label = (
     agentNickname ??
     agentPathName ??
     thread.name ??
     shortenText(thread.preview || thread.id, 42)
   );
+  return formatGoalCommandLabel(label);
 }
 
 function extractStringArray(value: unknown, key: string): string[] {
