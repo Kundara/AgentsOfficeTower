@@ -10,6 +10,7 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Added
 
 - Added a workspace `activity` snapshot summary and browser Ops Wall that surfaces decayed hottest file changes plus long-running command/process activity, including high-confidence progress only when command output exposes explicit percent or count patterns.
+- Added a snapshot diagnostic note when a hot file-change board row has no agent attribution even though a fresh local Codex thread matches the changed path but is not seated as current workload.
 - Added a read-only `codex-agents-office web query <repo> <recent|last>` CLI path backed by loopback-only web APIs, with bounded agent/event filters and `local` or coordinated `team` scope.
 - Added a lightweight `codex-agents-office web query <repo> gist` CLI state-sync path that returns hot changes plus active-agent last message and last file-change context before deeper reads.
 - Added a browser-to-server coordinated team-fleet cache so CLI `scope=team` reads the same shared-room data already merged for the browser, without giving the CLI PartyKit credentials or write/reply capabilities.
@@ -34,6 +35,8 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Changed
 
 - Changed workstation column spacing from four tiles to three tiles so dense desk layouts waste less horizontal space.
+- Changed macOS Codex command resolution so the bundled Codex app binary is tried before a stale `codex` on `PATH`, while still honoring `CODEX_CLI_PATH` first.
+- Changed local Codex ongoing detection so fresh `notLoaded` threads with non-final work signals and no final answer stay workstation-live even when the latest turn is reported as `interrupted`.
 - Changed agent hover summaries to clamp long latest-message text to 10 visual rows so office tooltips stay compact.
 - Changed the Hermes plugin bridge to register Hermes' current lifecycle, LLM/API, tool-transform, approval, and `subagent_stop` hooks with bounded string payloads, and map transform/tool/subagent sidecars into typed activity.
 - Changed the Hermes plugin bridge to write a non-session load/error status marker in the hook output directory, making gateway plugin registration verifiable without creating fake workload agents.

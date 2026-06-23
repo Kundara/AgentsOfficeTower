@@ -32,6 +32,12 @@ const {
 const {
   buildWorkspaceActivitySnapshot
 } = require("../dist/domain/workspace-activity.js");
+const {
+  emptyAdapterSnapshot
+} = require("../dist/adapters/helpers.js");
+const {
+  assembleProjectSnapshot
+} = require("../dist/services/snapshot-assembler.js");
 
 function sampleThread() {
   return {
@@ -270,6 +276,86 @@ test("workspace activity includes branch and multiplayer user attribution on hot
   assert.equal(activity.hotChanges[0].branch, "feature/shared-hot-file");
   assert.deepEqual(activity.hotChanges[0].branches, ["feature/shared-hot-file"]);
   assert.deepEqual(activity.hotChanges[0].users, ["Teammate"]);
+});
+
+test("snapshot notes diagnose hot changes with matching unseated local threads", async () => {
+  const now = Date.now();
+  const changedPath = "/tmp/Idle-Luck/Assets/Scripts/StealDrawerView.cs";
+  const snapshot = await assembleProjectSnapshot({
+    projectRoot: "/tmp/Idle-Luck",
+    generatedAt: new Date(now).toISOString(),
+    currentnessNow: now,
+    adapterSnapshots: [
+      emptyAdapterSnapshot({
+        adapterId: "codex-local",
+        source: "local",
+        generatedAt: new Date(now).toISOString(),
+        agents: [
+          {
+            id: "019ef383-c250-73f2-bbeb-fd5ca5eb92eb",
+            label: "Idle-Luck",
+            source: "local",
+            sourceKind: "vscode",
+            parentThreadId: null,
+            depth: 0,
+            isCurrent: false,
+            isOngoing: false,
+            statusText: "notLoaded",
+            role: null,
+            nickname: null,
+            isSubagent: false,
+            state: "done",
+            detail: "Edited StealDrawerView.cs",
+            cwd: "/tmp/Idle-Luck",
+            roomId: null,
+            appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+            updatedAt: new Date(now - 10 * 1000).toISOString(),
+            stoppedAt: null,
+            paths: [changedPath],
+            activityEvent: null,
+            latestMessage: null,
+            threadId: "019ef383-c250-73f2-bbeb-fd5ca5eb92eb",
+            taskId: null,
+            resumeCommand: "codex resume 019ef383-c250-73f2-bbeb-fd5ca5eb92eb",
+            url: null,
+            git: null,
+            provenance: "codex",
+            confidence: "typed",
+            needsUser: null,
+            liveSubscription: "readOnly",
+            network: null
+          }
+        ],
+        events: [
+          {
+            id: "file-without-agent",
+            source: "codex",
+            confidence: "typed",
+            threadId: null,
+            createdAt: new Date(now - 1000).toISOString(),
+            method: "item/fileChange/patchUpdated",
+            itemId: "file_item",
+            itemType: "fileChange",
+            kind: "fileChange",
+            phase: "updated",
+            title: "Patch updated",
+            detail: changedPath,
+            path: changedPath,
+            action: "edited",
+            linesAdded: 12,
+            linesRemoved: 3
+          }
+        ]
+      })
+    ]
+  });
+
+  assert.equal(snapshot.activity.hotChanges[0].label, "StealDrawerView.cs");
+  assert.deepEqual(snapshot.activity.hotChanges[0].agents, []);
+  assert.ok(snapshot.notes.some((note) =>
+    note.includes("Hot change StealDrawerView.cs has no agent attribution")
+    && note.includes("019ef383-c250-73f2-bbeb-fd5ca5eb92eb")
+  ));
 });
 
 test("thread/list requests current workload ordering explicitly", async () => {
@@ -3055,6 +3141,76 @@ test("active loaded subagent with final answer does not stay ongoing", () => {
   };
 
   assert.equal(isOngoingThread(thread), false);
+});
+
+test("fresh notLoaded interrupted non-final work stays ongoing", () => {
+  const now = Date.now();
+  const thread = {
+    ...sampleThread(),
+    id: "thr_interrupted_non_final_work",
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor(now / 1000),
+    turns: [
+      {
+        id: "turn_interrupted",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            id: "msg_commentary",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Still checking the table visibility."
+          },
+          {
+            id: "file_change",
+            type: "fileChange",
+            status: "completed",
+            path: "/tmp/CodexAgentsOffice/packages/core/src/snapshot-lib/thread-summary.ts",
+            action: "edited"
+          }
+        ]
+      }
+    ]
+  };
+
+  assert.equal(isOngoingThread(thread), true);
+  assert.equal(summariseThread(thread).state, "editing");
+});
+
+test("stale notLoaded interrupted non-final work does not stay ongoing", () => {
+  const now = Date.now();
+  const thread = {
+    ...sampleThread(),
+    id: "thr_stale_interrupted_non_final_work",
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor((now - 4 * 60 * 1000) / 1000),
+    turns: [
+      {
+        id: "turn_interrupted",
+        status: "interrupted",
+        error: null,
+        items: [
+          {
+            id: "msg_commentary",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Earlier commentary."
+          },
+          {
+            id: "file_change",
+            type: "fileChange",
+            status: "completed",
+            path: "/tmp/CodexAgentsOffice/packages/core/src/snapshot-lib/thread-summary.ts",
+            action: "edited"
+          }
+        ]
+      }
+    ]
+  };
+
+  assert.equal(isOngoingThread(thread), false);
+  assert.equal(summariseThread(thread).state, "done");
 });
 
 test("done active-status local subagent only stays current for the exit grace", () => {

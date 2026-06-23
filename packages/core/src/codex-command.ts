@@ -51,6 +51,11 @@ export function buildCodexCommandCandidates(input: {
   if (input.platform === "win32") {
     pushCandidate(input.windowsAppPath, "Codex Windows app bundle");
   }
+  if (input.platform === "darwin") {
+    for (const bundlePath of input.macAppBundlePaths ?? []) {
+      pushCandidate(bundlePath, "Codex app bundle");
+    }
+  }
   if (input.platform === "win32") {
     pushCandidate("codex.cmd", "Codex CLI cmd shim on PATH");
     pushCandidate("codex.exe", "Codex CLI executable on PATH");
@@ -69,12 +74,6 @@ export function buildCodexCommandCandidates(input: {
       "Codex CLI via WSL",
       windowsWslCommand
     );
-  }
-
-  if (input.platform === "darwin") {
-    for (const bundlePath of input.macAppBundlePaths ?? []) {
-      pushCandidate(bundlePath, "Codex app bundle");
-    }
   }
 
   return candidates;

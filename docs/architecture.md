@@ -66,7 +66,7 @@ The live browser path now uses a hybrid approach:
 
 - `thread/list` and `thread/read` stay authoritative for stable thread state
 - when desktop-backed `thread/read` returns a stale transcript timestamp but `thread/list` has already advanced, the monitor preserves the fresher `thread/list` timestamp for current-workload classification
-- ongoing occupancy also follows `thread/read` turn state so a `notLoaded` thread with an in-progress turn, or a fresh interrupted turn without a final answer, still stays live on the floor
+- ongoing occupancy also follows `thread/read` turn state so a `notLoaded` thread with an in-progress turn, or a fresh non-final work turn without a final answer, still stays live on the floor even if the app-server reports the latest turn as interrupted
 - recent non-final desktop work events extend the local workload clock even when a restarted observer is still read-only or the app-server reports the top-level thread as idle, preventing active work from cooling into rec-room visibility between reply chunks
 - recent file-change events also feed a derived workspace `activity` block on each `DashboardSnapshot`; that block powers the in-scene Ops Wall with decayed hot script/doc/media file scores while tool and command activity stay out of the hot-stuff board
 - fresh unhydrated `notLoaded` desktop threads with no readable turns are treated as short-lived planning state for about 8 seconds after a user prompt; the completed read-only fallback is capped to the 3-second finished cooldown so a completed thread does not look active several minutes later

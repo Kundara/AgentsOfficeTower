@@ -102,9 +102,9 @@ Current stance:
 Resolution details:
 
 - prefer `CODEX_CLI_PATH` when explicitly set
-- otherwise prefer `codex` on `PATH`
+- on macOS, prefer the bundled Codex app binary in `/Applications/Codex.app/Contents/Resources/codex` or `~/Applications/Codex.app/Contents/Resources/codex` when present before trying `codex` on `PATH`
+- on Linux, otherwise prefer `codex` on `PATH`
 - on native Windows, if `codex.cmd` is unavailable but `codex` exists inside WSL, fall back to `wsl.exe --exec codex`
-- on macOS, fall back to the bundled Codex app binary in `/Applications/Codex.app/Contents/Resources/codex` or `~/Applications/Codex.app/Contents/Resources/codex` when present
 - on Windows and Windows+WSL, fall back to the Microsoft Store Codex app by copying its packaged `app/resources` bundle into `%LOCALAPPDATA%\\CodexAgentsOffice\\cache\\windows-store\\<version>` and spawning the cached `codex.exe`
 - when both a native Windows CLI and a WSL-side Codex CLI exist, `codex` on `PATH` still wins unless `CODEX_CLI_PATH` overrides it
 - when both a WSL-side Codex CLI and the Windows app exist, the WSL CLI now wins before the app fallback unless `CODEX_CLI_PATH` overrides it

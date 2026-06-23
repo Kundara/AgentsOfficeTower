@@ -565,6 +565,32 @@ function turnHasFinalAnswer(turn: CodexTurn): boolean {
   return turn.items.some((item) => item.type === "agentMessage" && item.phase === "final_answer");
 }
 
+const NON_FINAL_WORK_ITEM_TYPES = new Set([
+  "agentMessage",
+  "plan",
+  "reasoning",
+  "commandExecution",
+  "fileChange",
+  "mcpToolCall",
+  "dynamicToolCall",
+  "collabToolCall",
+  "collabAgentToolCall",
+  "webSearch",
+  "imageView",
+  "enteredReviewMode",
+  "exitedReviewMode",
+  "contextCompaction"
+]);
+
+function turnHasNonFinalWorkSignal(turn: CodexTurn): boolean {
+  return turn.items.some((item) => {
+    if (!NON_FINAL_WORK_ITEM_TYPES.has(item.type)) {
+      return false;
+    }
+    return item.type !== "agentMessage" || item.phase !== "final_answer";
+  });
+}
+
 const FRESH_SPAWNED_THREAD_WINDOW_MS = 2 * 60 * 1000;
 // Just-sent desktop prompts can appear as notLoaded/no-turn rows before hydration catches up.
 const FRESH_NOT_LOADED_THREAD_UPDATE_WINDOW_MS = 8 * 1000;
@@ -601,6 +627,27 @@ function isFreshNotLoadedUnhydratedThread(thread: CodexThread): boolean {
   return Date.now() - updatedAtMs <= FRESH_NOT_LOADED_THREAD_UPDATE_WINDOW_MS;
 }
 
+function isFreshNotLoadedNonFinalWorkThread(
+  thread: CodexThread,
+  lastTurn: CodexTurn | null | undefined = threadTurns(thread).at(-1),
+  nowMs = Date.now()
+): boolean {
+  if (thread.status.type !== "notLoaded" || !lastTurn) {
+    return false;
+  }
+  if (parentThreadIdForThread(thread)) {
+    return false;
+  }
+  if (lastTurn.status === "failed" || turnHasFinalAnswer(lastTurn)) {
+    return false;
+  }
+  const updatedAtMs = thread.updatedAt * 1000;
+  if (!Number.isFinite(updatedAtMs) || nowMs - updatedAtMs > QUIET_LIVE_THREAD_WINDOW_MS) {
+    return false;
+  }
+  return lastTurn.status === "inProgress" || turnHasNonFinalWorkSignal(lastTurn);
+}
+
 export function isOngoingThread(thread: CodexThread): boolean {
   if (thread.status.type === "active") {
     const lastTurn = threadTurns(thread).at(-1);
@@ -614,7 +661,13 @@ export function isOngoingThread(thread: CodexThread): boolean {
   }
   const turns = threadTurns(thread);
   const lastTurn = turns.at(-1);
-  return Boolean(lastTurn && lastTurn.status === "inProgress");
+  return Boolean(
+    lastTurn
+    && (
+      lastTurn.status === "inProgress"
+      || isFreshNotLoadedNonFinalWorkThread(thread, lastTurn)
+    )
+  );
 }
 
 function selectRelevantItem(items: ThreadItem[]): ThreadItem | null {
@@ -707,13 +760,15 @@ export function summariseThread(thread: CodexThread): {
 
   const interruptedWithoutFinalAnswer =
     lastTurn.status === "interrupted" && !turnHasFinalAnswer(lastTurn);
+  const freshNotLoadedNonFinalWork = isFreshNotLoadedNonFinalWorkThread(thread, lastTurn);
+  const activeTopLevelWithoutFinalAnswer =
+    thread.status.type === "active"
+    && !parentThreadIdForThread(thread)
+    && !turnHasFinalAnswer(lastTurn);
   const treatAsInProgress =
     lastTurn.status === "inProgress"
-    || (
-      interruptedWithoutFinalAnswer
-      && thread.status.type === "notLoaded"
-      && ageMs <= QUIET_LIVE_THREAD_WINDOW_MS
-    );
+    || freshNotLoadedNonFinalWork
+    || activeTopLevelWithoutFinalAnswer;
 
   if (lastTurn.status === "failed") {
     return {

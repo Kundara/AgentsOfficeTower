@@ -19,18 +19,18 @@ test("candidate list prefers explicit override before PATH", () => {
   );
 });
 
-test("macOS candidates include the app bundle after PATH", () => {
+test("macOS candidates prefer the app bundle before PATH", () => {
   assert.deepEqual(
     buildCodexCommandCandidates({
       platform: "darwin",
       macAppBundlePaths: ["/Applications/Codex.app/Contents/Resources/codex"]
     }),
     [
-      { command: "codex", label: "Codex CLI on PATH" },
       {
         command: "/Applications/Codex.app/Contents/Resources/codex",
         label: "Codex app bundle"
-      }
+      },
+      { command: "codex", label: "Codex CLI on PATH" }
     ]
   );
 });

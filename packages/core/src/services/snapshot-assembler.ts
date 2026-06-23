@@ -67,6 +67,82 @@ async function changedProjectPaths(projectRoot: string): Promise<string[]> {
   }
 }
 
+const HOT_CHANGE_AGENT_DIAGNOSTIC_WINDOW_MS = 3 * 60 * 1000;
+
+function normalizePathForMatch(value: string | null | undefined): string {
+  return typeof value === "string" ? value.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/g, "") : "";
+}
+
+function pathRelativeToProject(path: string, projectRoot: string): string {
+  const normalizedPath = normalizePathForMatch(path);
+  const normalizedRoot = normalizePathForMatch(projectRoot);
+  if (!normalizedPath || !normalizedRoot) {
+    return normalizedPath;
+  }
+  const lowerPath = normalizedPath.toLowerCase();
+  const lowerRoot = normalizedRoot.toLowerCase();
+  if (lowerPath === lowerRoot) {
+    return "";
+  }
+  if (lowerPath.startsWith(`${lowerRoot}/`)) {
+    return normalizedPath.slice(normalizedRoot.length + 1);
+  }
+  return normalizedPath;
+}
+
+function pathsReferToSameFile(left: string, right: string, projectRoot: string): boolean {
+  const leftRelative = pathRelativeToProject(left, projectRoot);
+  const rightRelative = pathRelativeToProject(right, projectRoot);
+  if (!leftRelative || !rightRelative) {
+    return false;
+  }
+  const leftLower = leftRelative.toLowerCase();
+  const rightLower = rightRelative.toLowerCase();
+  return leftLower === rightLower
+    || leftLower.endsWith(`/${rightLower}`)
+    || rightLower.endsWith(`/${leftLower}`);
+}
+
+function freshUnseatedHotChangeAgentDiagnostics(snapshot: DashboardSnapshot, now: number): string[] {
+  const notes: string[] = [];
+  const hotChanges = snapshot.activity.hotChanges.filter((entry) => entry.agents.length === 0);
+  if (hotChanges.length === 0) {
+    return notes;
+  }
+
+  for (const hotChange of hotChanges) {
+    const matchingAgent = snapshot.agents.find((agent) => {
+      if (
+        agent.source !== "local"
+        || agent.isCurrent
+        || agent.isOngoing
+        || agent.statusText === "active"
+        || agent.threadId === null
+      ) {
+        return false;
+      }
+      const updatedAtMs = Date.parse(agent.updatedAt);
+      if (!Number.isFinite(updatedAtMs) || now - updatedAtMs > HOT_CHANGE_AGENT_DIAGNOSTIC_WINDOW_MS) {
+        return false;
+      }
+      return agent.paths.some((path) => pathsReferToSameFile(path, hotChange.path, snapshot.projectRoot));
+    });
+
+    if (!matchingAgent) {
+      continue;
+    }
+
+    notes.push(
+      `Hot change ${hotChange.label} has no agent attribution, but fresh local Codex thread ${matchingAgent.threadId} matches the path and is not current (status=${matchingAgent.statusText ?? "unknown"}, state=${matchingAgent.state}, ongoing=${matchingAgent.isOngoing}).`
+    );
+    if (notes.length >= 3) {
+      break;
+    }
+  }
+
+  return notes;
+}
+
 export async function assembleProjectSnapshot(input: {
   projectRoot: string;
   adapterSnapshots: AdapterSnapshot[];
@@ -106,7 +182,7 @@ export async function assembleProjectSnapshot(input: {
     projectBranch: projectIdentity?.branch ?? null
   });
 
-  return applyCurrentWorkloadState({
+  const snapshot = applyCurrentWorkloadState({
     projectRoot,
     projectLabel,
     projectIdentity,
@@ -118,4 +194,8 @@ export async function assembleProjectSnapshot(input: {
     activity,
     notes: aggregateNotes(input.adapterSnapshots)
   }, now);
+  const diagnostics = freshUnseatedHotChangeAgentDiagnostics(snapshot, now);
+  return diagnostics.length > 0
+    ? { ...snapshot, notes: [...snapshot.notes, ...diagnostics] }
+    : snapshot;
 }
