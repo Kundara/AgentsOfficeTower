@@ -9,7 +9,7 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 ## Highlights
 
 - **Live office map**: active agents sit at desks, blocked or waiting work is visible, and recent finished leads rest in the rec area.
-- **Fleet mode by default**: discovered Codex workspaces appear together, with optional focus on one project or worktree.
+- **Fleet mode by default**: discovered Codex workspaces appear together, with projectless Codex desktop chats grouped on one `Chat` floor and optional focus on one project or worktree.
 - **Codex-first visibility**: local Codex app-server data, Codex CLI activity, typed goals, cloud tasks, subagents, approvals, input waits, and typed events share one model.
 - **Hermes and OpenClaw support**: Hermes sessions come from durable state, live process hints, and optional hook sidecars, while OpenClaw sessions come from its Gateway; projectless Hermes and unmatched OpenClaw orchestrators hover in the left-side sky outside the tower instead of creating fake floors.
 - **CLI built in**: inspect snapshots, watch terminal views, launch the web server, or query the running tower from scripts.

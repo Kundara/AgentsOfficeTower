@@ -138,6 +138,7 @@ What we read:
 How we use it:
 
 - discover Codex project roots from `thread.cwd`
+- normalize Codex desktop's projectless chat cwd folders under `Documents/Codex/<date>/<chat>` to one `Chat` project root before project discovery and per-project thread filtering
 - find threads for a specific project
 - detect newly active or changed local sessions
 - decide which threads need a full `thread/read`

@@ -129,6 +129,47 @@ test("Codex project thread query keeps scoped results when they match", async ()
   assert.equal(calls.length, 1);
 });
 
+test("Codex project thread query groups projectless desktop chats on the Chat floor", async () => {
+  const calls = [];
+  const client = {
+    async listThreads(params) {
+      calls.push(params);
+      if (params.cwd) {
+        return [];
+      }
+      return [
+        thread({
+          id: "chat_one",
+          cwd: "C:\\Users\\kunda\\Documents\\Codex\\2026-06-29\\see",
+          updatedAt: 300
+        }),
+        thread({
+          id: "chat_two",
+          cwd: "C:\\Users\\kunda\\Documents\\Codex\\2026-07-06\\you-know-my-projects",
+          updatedAt: 250
+        }),
+        thread({
+          id: "workspace",
+          cwd: "F:\\AI\\CodexAgentsOffice",
+          updatedAt: 400
+        })
+      ];
+    }
+  };
+
+  const result = await listCodexProjectThreadCandidates({
+    client,
+    projectRoot: "/mnt/c/Users/kunda/Documents/Codex",
+    localLimit: 10,
+    includeSessionThreads: false
+  });
+
+  assert.equal(result.usedUnscopedFallback, true);
+  assert.deepEqual(result.trackedThreads.map((entry) => entry.id), ["chat_one", "chat_two"]);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].cwd, "/mnt/c/Users/kunda/Documents/Codex");
+});
+
 test("Codex session parser reads multiagents v2 subagent JSONL", () => {
   const jsonl = [
     {

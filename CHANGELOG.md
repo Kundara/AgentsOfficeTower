@@ -35,6 +35,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed Codex desktop projectless chat discovery so dated `Documents/Codex/<date>/<chat>` cwd values group onto one `Chat` floor while each chat session still renders as its own local Codex agent.
 - Changed Codex goal command display so `/goal` labels render as `🎯` in snapshot labels, session titles, hover cards, and other shared display surfaces.
 - Changed workstation column spacing from four tiles to three tiles so dense desk layouts waste less horizontal space.
 - Changed macOS Codex command resolution so the bundled Codex app binary is tried before a stale `codex` on `PATH`, while still honoring `CODEX_CLI_PATH` first.

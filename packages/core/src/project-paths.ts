@@ -21,6 +21,8 @@ const MAX_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 400;
 const CODEX_PROJECT_DISCOVERY_THREAD_MULTIPLIER = 20;
 const PROJECT_DISCOVERY_SOURCE_TIMEOUT_MS = 5000;
 const TRANSIENT_PROJECT_ROOTS = new Set(["/tmp", "/var/tmp", "/dev/shm"]);
+const CODEX_CHAT_DATE_SEGMENT = /^\d{4}-\d{2}-\d{2}$/;
+const CODEX_CHAT_PROJECT_LABEL = "Chat";
 
 async function projectDiscoveryUpdatedAt(root: string, fallbackUpdatedAt: number): Promise<number> {
   const filesystemRoot = filesystemPathForProjectRoot(root);
@@ -49,7 +51,39 @@ function trimTrailingSlash(value: string): string {
 }
 
 function normalizeProjectPath(value: string): string {
-  return trimTrailingSlash(normalize(value).replace(/\\/g, "/"));
+  return collapseCodexChatProjectPath(trimTrailingSlash(normalize(value).replace(/\\/g, "/")));
+}
+
+function codexChatProjectRootForCanonicalPath(value: string): string | null {
+  const segments = value.split("/");
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (
+      segments[index]?.toLowerCase() !== "documents"
+      || segments[index + 1]?.toLowerCase() !== "codex"
+    ) {
+      continue;
+    }
+
+    const codexIndex = index + 1;
+    const trailingSegments = segments.slice(codexIndex + 1);
+    const root = segments.slice(0, codexIndex + 1).join("/") || "/";
+    if (trailingSegments.length === 0) {
+      return root;
+    }
+    if (trailingSegments.length >= 2 && CODEX_CHAT_DATE_SEGMENT.test(trailingSegments[0] ?? "")) {
+      return root;
+    }
+  }
+  return null;
+}
+
+function collapseCodexChatProjectPath(value: string): string {
+  return codexChatProjectRootForCanonicalPath(value) ?? value;
+}
+
+export function isCodexChatProjectRoot(input: string | null | undefined): boolean {
+  const canonical = canonicalizeProjectPath(input);
+  return Boolean(canonical && codexChatProjectRootForCanonicalPath(canonical) === canonical);
 }
 
 function isWindowsBackedWslPath(value: string): boolean {
@@ -120,7 +154,7 @@ export function canonicalizeProjectPath(input: string | null | undefined): strin
     return normalizeProjectPath(rawWithoutExtendedPrefix.replace(/\\/g, "/"));
   }
 
-  return trimTrailingSlash(rawWithoutExtendedPrefix.replace(/\\/g, "/"));
+  return collapseCodexChatProjectPath(trimTrailingSlash(rawWithoutExtendedPrefix.replace(/\\/g, "/")));
 }
 
 function isTransientProjectRoot(root: string): boolean {
@@ -139,6 +173,9 @@ export function projectPathIdentityKey(input: string | null | undefined): string
 }
 
 export function projectLabelFromRoot(projectRoot: string): string {
+  if (isCodexChatProjectRoot(projectRoot)) {
+    return CODEX_CHAT_PROJECT_LABEL;
+  }
   return humanizeProjectLabel(basename(projectRoot) || projectRoot);
 }
 

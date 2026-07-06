@@ -10,6 +10,7 @@ const {
   discoverCodexConfiguredProjects,
   extractCodexConfiguredProjectRoots,
   humanizeProjectLabel,
+  isCodexChatProjectRoot,
   projectLabelFromRoot,
   sameProjectPath
 } = require("../dist/project-paths.js");
@@ -29,6 +30,26 @@ test("humanizeProjectLabel adds spaces across camel and acronym boundaries", () 
 test("projectLabelFromRoot humanizes the basename", () => {
   assert.equal(projectLabelFromRoot("/workspaces/CodexAgentsOffice"), "Codex Agents Office");
   assert.equal(projectLabelFromRoot("/workspaces/ProjectAtlas"), "Project Atlas");
+});
+
+test("Codex dated chat folders collapse to one Chat project", () => {
+  assert.equal(
+    canonicalizeProjectPath("C:\\Users\\kunda\\Documents\\Codex\\2026-06-29\\see"),
+    "/mnt/c/Users/kunda/Documents/Codex"
+  );
+  assert.equal(
+    canonicalizeProjectPath("/mnt/c/Users/kunda/Documents/Codex/2026-07-06/you-know-my-projects"),
+    "/mnt/c/Users/kunda/Documents/Codex"
+  );
+  assert.equal(isCodexChatProjectRoot("/mnt/c/Users/kunda/Documents/Codex"), true);
+  assert.equal(projectLabelFromRoot("/mnt/c/Users/kunda/Documents/Codex"), "Chat");
+  assert.equal(
+    sameProjectPath(
+      "/mnt/c/Users/kunda/Documents/Codex/2026-06-29/see",
+      "/mnt/c/Users/kunda/Documents/Codex/2026-07-06/you-know-my-projects"
+    ),
+    true
+  );
 });
 
 test("extractCodexConfiguredProjectRoots reads configured Codex project entries", () => {
