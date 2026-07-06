@@ -111,6 +111,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed roaming Hermes cron rows so they keep the resolved source project's tick label, appearance scope, event paths, and git metadata instead of inheriting the current anchor floor label while project discovery catches up.
 - Fixed office scene agent and hot-stuff hover cards so they render through a fixed body-level overlay layer instead of being clipped by the scrollable scene viewport.
 - Fixed shared-room peer merges so matching Git repositories still merge when the two machines use different display labels such as `Party Game` and `Oops Game`, preserved `deviceId` through the PartyKit relay for same-device filtering, and made connected-but-filtered peers explicit in the shared-room status text.
 - Fixed wide office workspaces so workstation layouts that exceed the visible panel render to a horizontally scrollable scene with continuous wall/floor art, without squeezing the room scale or adding a tall blank floor card, with mouse-wheel scrolling while hovering the map and a wide-office audit route for fake-avatar scroll validation.

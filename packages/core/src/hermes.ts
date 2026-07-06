@@ -2507,7 +2507,17 @@ export async function loadRoamingHermesSnapshotData(input: {
   const limit = input.limit ?? 4;
   const hookSessions = await loadHermesHookSessions(hermesScanLimit(limit));
   const now = Date.now();
-  const git = await gitInfoForProject(anchorRoot);
+  const gitByRoot = new Map<string, GitInfo>();
+  const gitForRoot = async (root: string): Promise<GitInfo> => {
+    const key = projectPathIdentityKey(root) ?? root;
+    const existing = gitByRoot.get(key);
+    if (existing) {
+      return existing;
+    }
+    const git = await gitInfoForProject(root);
+    gitByRoot.set(key, git);
+    return git;
+  };
   const agents: DashboardAgent[] = [];
   const events: DashboardEvent[] = [];
 
@@ -2524,10 +2534,11 @@ export async function loadRoamingHermesSnapshotData(input: {
     if (isInsideKnownWorkspace) {
       continue;
     }
+    const sourceRoot = currentRoot ?? anchorRoot;
 
     const summary = summarizeHermesHookSession({
       records,
-      projectRoot: anchorRoot,
+      projectRoot: sourceRoot,
       paths: candidatePaths,
       now
     });
@@ -2536,13 +2547,13 @@ export async function loadRoamingHermesSnapshotData(input: {
     }
 
     const latest = records[records.length - 1];
-    const appearance = await ensureAgentAppearance(anchorRoot, `hermes:${sessionId}`);
+    const appearance = await ensureAgentAppearance(sourceRoot, `hermes:${sessionId}`);
     const statusText = isHermesCronSessionId(sessionId)
       ? hermesHookStatusText(sessionId, summary.isOngoing)
       : summary.isOngoing ? "roaming" : summary.state;
     agents.push({
       id: `hermes:${sessionId}`,
-      label: hermesHookSessionLabel(records, anchorRoot, summary.latestMessage),
+      label: hermesHookSessionLabel(records, sourceRoot, summary.latestMessage),
       source: "hermes",
       sourceKind: "hermes:roaming",
       parentThreadId: null,
@@ -2556,6 +2567,7 @@ export async function loadRoamingHermesSnapshotData(input: {
       state: summary.state,
       detail: summary.detail,
       cwd: latest.cwd ?? latest.processCwd ?? null,
+      sourceProjectRoot: sourceRoot,
       roomId: null,
       appearance,
       updatedAt: new Date(summary.updatedAtMs).toISOString(),
@@ -2567,14 +2579,14 @@ export async function loadRoamingHermesSnapshotData(input: {
       taskId: null,
       resumeCommand: null,
       url: null,
-      git,
+      git: await gitForRoot(sourceRoot),
       provenance: "hermes",
       confidence: "typed",
       needsUser: null,
       liveSubscription: "readOnly",
       network: null
     });
-    events.push(...buildHermesHookEvents({ records, projectRoot: anchorRoot }));
+    events.push(...buildHermesHookEvents({ records, projectRoot: sourceRoot }));
   }
 
   return {

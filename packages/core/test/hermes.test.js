@@ -322,6 +322,59 @@ test("Hermes roaming hook sessions exclude existing workspace floors", async () 
   }
 });
 
+test("Hermes roaming cron sessions keep the resolved project tick label", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-roaming-label-"));
+  const previousCodexHome = process.env.CODEX_HOME;
+  const previousHookDir = process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR;
+  const codexHome = join(tempRoot, "codex-home");
+  const anchorRoot = join(tempRoot, "OopsGame");
+  const ikaRoot = join(tempRoot, "IkaBot");
+  const hooksDir = join(codexHome, "codex-agents-office", "hermes-hooks");
+  mkdirSync(join(anchorRoot, ".git"), { recursive: true });
+  mkdirSync(join(ikaRoot, ".git"), { recursive: true });
+  mkdirSync(hooksDir, { recursive: true });
+
+  process.env.CODEX_HOME = codexHome;
+  process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR = hooksDir;
+  try {
+    writeFileSync(
+      join(hooksDir, "cron_abc_20260706_211506.jsonl"),
+      JSON.stringify({
+        session_id: "cron_abc_20260706_211506",
+        hook_event_name: "pre_tool_call",
+        timestamp: new Date().toISOString(),
+        cwd: ikaRoot,
+        payload: {
+          tool_name: "read_file",
+          args: { path: join(ikaRoot, "tmp_skiron_cron_loot_now.py") }
+        }
+      }) + "\n"
+    );
+
+    const roaming = await loadRoamingHermesSnapshotData({
+      anchorProjectRoot: anchorRoot,
+      knownProjectRoots: [anchorRoot],
+      limit: 4
+    });
+
+    assert.equal(roaming.agents.length, 1);
+    assert.equal(roaming.agents[0].label, "IkaBot tick");
+    assert.equal(roaming.agents[0].sourceKind, "hermes:roaming");
+    assert.ok(sameProjectPath(roaming.agents[0].sourceProjectRoot, ikaRoot));
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+    if (previousHookDir === undefined) {
+      delete process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR;
+    } else {
+      process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR = previousHookDir;
+    }
+  }
+});
+
 test("Hermes hook project relation expires after more than 20 rootless actions", async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-projectless-"));
   const previousCodexHome = process.env.CODEX_HOME;

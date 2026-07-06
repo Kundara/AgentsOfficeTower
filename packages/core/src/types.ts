@@ -313,6 +313,7 @@ export interface DashboardAgent {
   state: ActivityState;
   detail: string;
   cwd: string | null;
+  sourceProjectRoot?: string | null;
   roomId: string | null;
   appearance: AppearanceProfile;
   hatId?: string | null;
