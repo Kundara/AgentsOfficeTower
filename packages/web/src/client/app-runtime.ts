@@ -2134,6 +2134,36 @@ export function startClientApp(): void {
         return String(value || "").trim().toLowerCase();
       }
 
+      function normalizeSharedRepoIdentity(value) {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) {
+          return "";
+        }
+        const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+        const normalized = sshMatch
+          ? "https://" + sshMatch[1] + "/" + sshMatch[2]
+          : trimmed;
+        return normalized
+          .replace(/\.git$/i, "")
+          .replace(/[\\/]+$/g, "")
+          .toLowerCase();
+      }
+
+      function sharedRepoIdentityForSnapshot(snapshot) {
+        const explicitRepoUrl = normalizeSharedRepoIdentity(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.repoUrl || "");
+        if (explicitRepoUrl) {
+          return explicitRepoUrl;
+        }
+        const agents = Array.isArray(snapshot && snapshot.agents) ? snapshot.agents : [];
+        for (const agent of agents) {
+          const repoUrl = normalizeSharedRepoIdentity(agent && agent.git && agent.git.originUrl || "");
+          if (repoUrl) {
+            return repoUrl;
+          }
+        }
+        return "";
+      }
+
       function snapshotWorkspaceName(snapshot) {
         if (snapshot && typeof snapshot.projectLabel === "string" && snapshot.projectLabel.trim().length > 0) {
           return snapshot.projectLabel.trim();
@@ -2143,8 +2173,39 @@ export function startClientApp(): void {
         return segments[segments.length - 1] || projectRoot || "workspace";
       }
 
-      function snapshotWorkspaceKey(snapshot) {
-        return normalizeWorkspaceName(snapshotWorkspaceName(snapshot));
+      function snapshotWorkspaceKeys(snapshot) {
+        const keys = [];
+        const repoIdentity = sharedRepoIdentityForSnapshot(snapshot);
+        if (repoIdentity) {
+          keys.push("git-repo:" + repoIdentity);
+        }
+        const workspaceName = normalizeWorkspaceName(snapshotWorkspaceName(snapshot));
+        if (workspaceName) {
+          keys.push("workspace:" + workspaceName);
+        }
+        return keys;
+      }
+
+      function indexSharedSnapshotsByWorkspaceKey(snapshots) {
+        const snapshotsByKey = new Map();
+        for (const snapshot of Array.isArray(snapshots) ? snapshots : []) {
+          for (const key of snapshotWorkspaceKeys(snapshot)) {
+            if (!snapshotsByKey.has(key)) {
+              snapshotsByKey.set(key, snapshot);
+            }
+          }
+        }
+        return snapshotsByKey;
+      }
+
+      function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {
+        for (const key of snapshotWorkspaceKeys(remoteSnapshot)) {
+          const localSnapshot = localProjectsByKey.get(key);
+          if (localSnapshot) {
+            return localSnapshot;
+          }
+        }
+        return null;
       }
 
       function normalizeSharedPathCandidate(value) {
@@ -2400,6 +2461,14 @@ export function startClientApp(): void {
         syncMultiplayerSettingsUi();
       }
 
+      function multiplayerLiveStatusDetail(room, host, peerCount) {
+        const peerText = peerCount + " peer" + (peerCount === 1 ? "" : "s");
+        const hiddenPeerText = peerCount > 0 && !fleetHasSharedData(state.fleet)
+          ? " - no shared active matching projects"
+          : "";
+        return "Connected to " + room + " on " + host + " - " + peerText + hiddenPeerText;
+      }
+
       function syncStoredMultiplayerSettings(settings) {
         const normalized = normalizeMultiplayerSettings(settings);
         state.multiplayerSettings = normalized;
@@ -2586,7 +2655,7 @@ export function startClientApp(): void {
           return null;
         }
         const mergedFleet = cloneValue(localFleet);
-        const localProjectsByKey = new Map(mergedFleet.projects.map((snapshot) => [snapshotWorkspaceKey(snapshot), snapshot]));
+        const localProjectsByKey = indexSharedSnapshotsByWorkspaceKey(mergedFleet.projects);
         let sharedPeerCount = 0;
 
         for (const peer of multiplayerPeers.values()) {
@@ -2595,8 +2664,7 @@ export function startClientApp(): void {
           }
           sharedPeerCount += 1;
           for (const remoteSnapshot of peer.projects) {
-            const projectKey = snapshotWorkspaceKey(remoteSnapshot);
-            const localSnapshot = localProjectsByKey.get(projectKey);
+            const localSnapshot = matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot);
             if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {
               continue;
             }
@@ -2697,7 +2765,7 @@ export function startClientApp(): void {
         }
         if (multiplayerSocket && multiplayerSocket.readyState === 1) {
           const peerCount = activeSharedPeerCount();
-          setMultiplayerStatus("live", "Connected to " + state.multiplayerSettings.room + " on " + state.multiplayerSettings.host + " · " + peerCount + " peer" + (peerCount === 1 ? "" : "s"));
+          setMultiplayerStatus("live", multiplayerLiveStatusDetail(state.multiplayerSettings.room, state.multiplayerSettings.host, peerCount));
         }
       }
 
@@ -2838,7 +2906,7 @@ export function startClientApp(): void {
               return;
             }
             const peerCount = activeSharedPeerCount();
-            setMultiplayerStatus("live", "Connected to " + room + " on " + host + " · " + peerCount + " peer" + (peerCount === 1 ? "" : "s"));
+            setMultiplayerStatus("live", multiplayerLiveStatusDetail(room, host, peerCount));
             broadcastLocalFleetNow();
           });
           socket.addEventListener("message", (event) => {

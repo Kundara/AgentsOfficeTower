@@ -1,12 +1,12 @@
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import { cwd, env } from "node:process";
 
-import { humanizeProjectLabel, projectPathIdentityKey } from "@codex-agents-office/core";
+import { projectLabelFromRoot, projectPathIdentityKey } from "@codex-agents-office/core";
 
 import type { ProjectDescriptor, ServerOptions } from "./server-types";
 
 export function buildProjectDescriptors(projectRoots: string[]): ProjectDescriptor[] {
-  const baseLabels = projectRoots.map((projectRoot) => humanizeProjectLabel(basename(projectRoot) || projectRoot));
+  const baseLabels = projectRoots.map((projectRoot) => projectLabelFromRoot(projectRoot));
   const counts = new Map<string, number>();
   const used = new Map<string, number>();
 

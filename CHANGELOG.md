@@ -112,6 +112,7 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Fixed
 
 - Fixed office scene agent and hot-stuff hover cards so they render through a fixed body-level overlay layer instead of being clipped by the scrollable scene viewport.
+- Fixed shared-room peer merges so matching Git repositories still merge when the two machines use different display labels such as `Party Game` and `Oops Game`, preserved `deviceId` through the PartyKit relay for same-device filtering, and made connected-but-filtered peers explicit in the shared-room status text.
 - Fixed wide office workspaces so workstation layouts that exceed the visible panel render to a horizontally scrollable scene with continuous wall/floor art, without squeezing the room scale or adding a tall blank floor card, with mouse-wheel scrolling while hovering the map and a wide-office audit route for fake-avatar scroll validation.
 - Fixed Claude workflow/subagent duplication by keeping child `agent_id` hook activity out of lead-session summaries while still routing typed events and child rows to the child thread, and by preserving separate same-named workflow children from distinct workflow ids.
 - Fixed local Codex discovery polling so an already-known thread without a final answer keeps its workstation seat through idle/read-only list refreshes instead of bouncing to the rec room between messages.

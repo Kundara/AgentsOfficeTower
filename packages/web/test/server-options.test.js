@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { resolve } = require("node:path");
 
 const { buildProjectDescriptors, parseArgs } = require("../dist/server-options.js");
 
@@ -17,7 +18,7 @@ test("web server becomes pinned only when explicit project roots are passed", ()
   assert.equal(options.explicitProjects, true);
   assert.deepEqual(
     options.projects.map((project) => project.root),
-    ["/tmp/project-a", "/tmp/project-b"]
+    [resolve("/tmp/project-a"), resolve("/tmp/project-b")]
   );
 });
 
@@ -33,6 +34,14 @@ test("project descriptors humanize camel-case workspace names", () => {
   );
 });
 
+test("project descriptors label Codex projectless chat roots as Chat", () => {
+  const descriptors = buildProjectDescriptors([
+    "/mnt/c/Users/kunda/Documents/Codex"
+  ]);
+
+  assert.equal(descriptors[0].label, "Chat");
+});
+
 test("server args dedupe Windows-backed WSL project roots by identity", () => {
   const options = parseArgs([
     "--seed-project", "/mnt/f/AI/CodexAgentsOffice",
@@ -40,5 +49,5 @@ test("server args dedupe Windows-backed WSL project roots by identity", () => {
   ]);
 
   assert.equal(options.projects.length, 1);
-  assert.equal(options.projects[0].root, "/mnt/f/AI/CodexAgentsOffice");
+  assert.equal(options.projects[0].root, resolve("/mnt/f/AI/CodexAgentsOffice"));
 });

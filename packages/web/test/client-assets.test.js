@@ -868,8 +868,15 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("function setProjectRootsSharedWithRoom(projectRoots, shared) {"));
   assert.ok(multiplayerSource.includes("nextShares[projectRoot] = true;"));
   assert.ok(multiplayerSource.includes("function isSnapshotSharedWithRoom(snapshot) {"));
+  assert.ok(multiplayerSource.includes("function sharedRepoIdentityForSnapshot(snapshot) {"));
+  assert.ok(multiplayerSource.includes("function indexSharedSnapshotsByWorkspaceKey(snapshots) {"));
+  assert.ok(multiplayerSource.includes("if (!snapshotsByKey.has(key)) {"));
+  assert.ok(multiplayerSource.includes("function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {"));
   assert.ok(multiplayerSource.includes("function snapshotActiveSharedAgents(snapshot) {"));
   assert.ok(multiplayerSource.includes("if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {"));
+  assert.ok(multiplayerSource.includes("const localSnapshot = matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot);"));
+  assert.ok(multiplayerSource.includes("function multiplayerLiveStatusDetail(room, host, peerCount) {"));
+  assert.ok(multiplayerSource.includes('" - no shared active matching projects"'));
   assert.ok(multiplayerSource.includes("const remoteAgents = snapshotActiveSharedAgents(remoteSnapshot);"));
   assert.ok(multiplayerSource.includes(".filter((snapshot) => isSnapshotSharedWithRoom(snapshot) && snapshotHasActiveSharedAgents(snapshot))"));
   assert.ok(multiplayerSource.includes("cloned.agents = snapshotActiveSharedAgents(cloned).map((agent) => ({"));
@@ -889,6 +896,10 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(uiSource.includes('multiplayerSaveButton.addEventListener("click", () => {'));
   assert.ok(multiplayerSource.includes("const previousConfigured = Boolean("));
   assert.ok(multiplayerSource.includes("const fallbackEnabled = previousConfigured"));
+
+  const partyServerSource = readFileSync(join(__dirname, "../../party/src/server.ts"), "utf8");
+  assert.ok(partyServerSource.includes("deviceId?: string;"));
+  assert.ok(partyServerSource.includes("deviceId: normalizedText(candidate.deviceId, 128) ?? undefined"));
 });
 
 test("workspace floors show multiplayer participants and expose a shared toggle", () => {

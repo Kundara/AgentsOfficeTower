@@ -7,6 +7,7 @@ const MAX_PROJECTS_PER_MESSAGE = 64;
 type FleetSyncPayload = {
   type: "fleet-sync";
   peerId: string;
+  deviceId?: string;
   peerLabel?: string;
   nickname?: string;
   sentAt?: string;
@@ -53,6 +54,7 @@ function parseFleetSyncPayload(message: string): FleetSyncPayload | null {
   return {
     type: "fleet-sync",
     peerId,
+    deviceId: normalizedText(candidate.deviceId, 128) ?? undefined,
     peerLabel: normalizedText(candidate.peerLabel, MAX_PEER_LABEL_LENGTH) ?? undefined,
     nickname: normalizedText(candidate.nickname, 12) ?? undefined,
     sentAt: normalizedText(candidate.sentAt, 64) ?? undefined,
