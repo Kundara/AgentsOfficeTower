@@ -45,6 +45,7 @@ provides_hooks:
   - pre_gateway_dispatch
   - pre_llm_call
   - post_llm_call
+  - pre_verify
   - transform_llm_output
   - pre_tool_call
   - post_tool_call
@@ -57,6 +58,7 @@ provides_hooks:
   - on_session_end
   - on_session_finalize
   - on_session_reset
+  - subagent_start
   - subagent_stop
 `;
 }
@@ -74,6 +76,7 @@ _HOOKS = [
     "pre_gateway_dispatch",
     "pre_llm_call",
     "post_llm_call",
+    "pre_verify",
     "transform_llm_output",
     "pre_tool_call",
     "post_tool_call",
@@ -86,6 +89,7 @@ _HOOKS = [
     "on_session_end",
     "on_session_finalize",
     "on_session_reset",
+    "subagent_start",
     "subagent_stop",
 ]
 
@@ -162,7 +166,15 @@ def _jsonable(value, depth=0):
 
 
 def _session_id_from(event_name, payload):
-    for key in ("session_id", "session_key", "task_id", "tool_call_id"):
+    for key in (
+        "session_id",
+        "session_key",
+        "parent_session_id",
+        "child_session_id",
+        "conversation_id",
+        "task_id",
+        "tool_call_id",
+    ):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -232,20 +244,74 @@ function pluginConfigSource(hookDir: string): string {
   return `${JSON.stringify({ hook_dir: hookDir }, null, 2)}\n`;
 }
 
-function enablePluginInConfig(raw: string): string {
-  if (new RegExp(`(^|\\n)\\s*-\\s*${HERMES_PLUGIN_NAME}\\s*(\\n|$)`).test(raw)) {
-    return raw.endsWith("\n") ? raw : `${raw}\n`;
+function pluginsBlockEndIndex(lines: string[], pluginsIndex: number): number {
+  for (let index = pluginsIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim().length === 0 || line.trimStart().startsWith("#")) {
+      continue;
+    }
+    if (/^\S/.test(line)) {
+      return index;
+    }
   }
+  return lines.length;
+}
 
+function pluginListIndex(lines: string[], pluginsIndex: number, name: "enabled" | "disabled"): number {
+  const endIndex = pluginsBlockEndIndex(lines, pluginsIndex);
+  return lines.findIndex((line, index) =>
+    index > pluginsIndex
+    && index < endIndex
+    && new RegExp(`^\\s{2}${name}:\\s*$`).test(line)
+  );
+}
+
+function pluginListContains(lines: string[], listIndex: number): boolean {
+  if (listIndex < 0) {
+    return false;
+  }
+  for (let index = listIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s{2}\S/.test(line) || /^\S/.test(line)) {
+      return false;
+    }
+    if (new RegExp(`^\\s*-\\s*${HERMES_PLUGIN_NAME}\\s*$`).test(line)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function removePluginFromList(lines: string[], listIndex: number): void {
+  if (listIndex < 0) {
+    return;
+  }
+  for (let index = listIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s{2}\S/.test(line) || /^\S/.test(line)) {
+      return;
+    }
+    if (new RegExp(`^\\s*-\\s*${HERMES_PLUGIN_NAME}\\s*$`).test(line)) {
+      lines.splice(index, 1);
+      index -= 1;
+    }
+  }
+}
+
+function enablePluginInConfig(raw: string): string {
   const lines = raw.split(/\r?\n/);
   const pluginsIndex = lines.findIndex((line) => /^plugins:\s*$/.test(line));
   if (pluginsIndex < 0) {
     return `${raw.replace(/\s*$/, "")}\n\nplugins:\n  enabled:\n    - ${HERMES_PLUGIN_NAME}\n`;
   }
 
-  const enabledIndex = lines.findIndex((line, index) =>
-    index > pluginsIndex && /^  enabled:\s*$/.test(line)
-  );
+  removePluginFromList(lines, pluginListIndex(lines, pluginsIndex, "disabled"));
+
+  const enabledIndex = pluginListIndex(lines, pluginsIndex, "enabled");
+  if (pluginListContains(lines, enabledIndex)) {
+    return `${lines.join("\n").replace(/\s*$/, "")}\n`;
+  }
+
   if (enabledIndex >= 0) {
     lines.splice(enabledIndex + 1, 0, `    - ${HERMES_PLUGIN_NAME}`);
     return `${lines.join("\n").replace(/\s*$/, "")}\n`;

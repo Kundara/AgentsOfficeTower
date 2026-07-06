@@ -64,7 +64,7 @@
 ## Hermes
 
 - [Hermes Agent repository](https://github.com/nousresearch/hermes-agent)
-  Primary upstream implementation for Hermes CLI/TUI behavior, plugin hooks, cron-run sessions, local `~/.hermes/state.db` persistence, profile homes, and working-directory context handling.
+  Primary upstream implementation for Hermes CLI/TUI behavior, plugin hooks, cron-run sessions, local `~/.hermes/state.db` persistence, profile homes, working-directory context handling, plugin opt-in configuration, verification hooks, subagent lifecycle hooks, and hook correlation fields.
 
 ## Cursor
 

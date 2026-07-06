@@ -887,7 +887,7 @@ What we read:
 How we use it:
 
 - read session rows, bounded session-level text fields, and a bounded recent-message window from Hermes SQLite `sessions` and `messages`; if SQLite is unavailable, Hermes visibility reports a diagnostic instead of falling back to stale legacy session files
-- install optional global Hermes plugin hooks with `codex-agents-office agents link hermes`; this writes `~/.hermes/plugins/codex-agents-office` and enables it in `~/.hermes/config.yaml` without launching Hermes
+- install optional global Hermes plugin hooks with `codex-agents-office agents link hermes`; this writes `~/.hermes/plugins/codex-agents-office`, enables it in `~/.hermes/config.yaml`, removes a stale `plugins.disabled` entry for the bridge if present, and does not launch Hermes
 - write `codex-agents-office.status.json` in the hook output directory when the plugin registers or hits a record/register error, so gateway load state can be verified without waiting for a Hermes tool call
 - treat `hermes:<session-id>` as the stable agent identity across project floors
 - keep Hermes SQLite session ids as the only normal workstation agents; hook-only ids such as `default`, `process-<pid>`, and UUID task/tool streams are folded into the nearest durable Hermes session by direct session id, payload session id, platform, cwd, and time window instead of creating separate avatars
@@ -896,8 +896,10 @@ How we use it:
 - treat Hermes compression-continuation children as the lead session, matching Hermes' own latest-descendant/session-list behavior, instead of rendering them as subagents under the compressed parent
 - keep Hermes `latestMessage` tied to the latest useful assistant/subagent conversation text; terminal commands, process-management calls, file changes, MCP calls, dynamic tool calls, and user prompts update `detail`, labels, typed events, and toasts/history instead of becoming the visible agent-speech message
 - do not copy Hermes hook `user_message` text into `latestMessage`; prompts can shape labels and history, but `latestMessage` is rendered as Hermes speech in hover cards and the room scene
+- map Hermes `pre_verify` hooks to `validating` status activity, using bounded `changed_paths` for path context and keeping the attempted `final_response` out of `latestMessage` because Hermes has not delivered it to the user yet
 - map Hermes `process(...)` hooks such as background `wait`, `poll`, and `log` to the command/process-management family, while model API request hooks map to reasoning/thinking activity rather than generic dynamic-tool activity
 - decode Hermes tool hooks through Hermes' own registry/display semantics: `todo` is planning, `read_file`/`search_files`/`skill_view` are scanning tool activity, and only `write_file`/`patch` are file-edit activity
+- map Hermes `subagent_start` and `subagent_stop` hooks to the shared delegated-agent activity family, using parent/child session and subagent ids as correlation metadata when Hermes provides them
 - ignore generic Hermes maintenance prompts, including skill-library review prompts, when choosing display message text so they do not replace the prior real conversation message
 - prefer the latest project-bearing hook payload paths over Hermes process cwd when deciding which floor the session currently belongs on
 - keep that project relation through 20 rootless hook actions; after more than 20 actions with no known project root, the Hermes session becomes projectless/roaming until a new project-bearing hook path or cwd appears
@@ -910,16 +912,18 @@ How we use it:
 - attach hook sessions whose latest activity is outside known workspace floors to the tower as `sourceKind = hermes:roaming` agents rather than creating new floors; the browser renders those agents in the fixed left-side sky outside the building, with deterministic screen-space scatter and measured-rect handoff motion back to desks when the project relation returns
 - when the same durable Hermes session moves from one known workspace root to another, keep the server representation as one current-floor agent and let the browser show a short fixed-layer transfer ghost from the old desk hit rect to the new desk hit rect
 - map Hermes parent session ids into `parentThreadId` when present
+- copy Hermes hook correlation fields such as `turn_id`, `parent_turn_id`, `tool_call_id`, `child_subagent_id`, and opaque `api_request_id` into dashboard event metadata without parsing provider request ids
 - keep browser actions read-only because Hermes does not expose an Agents Office-owned steering or approval channel here
 
 Installed plugin hooks:
 
 - session and gateway lifecycle: `on_session_start`, `pre_gateway_dispatch`, `on_session_end`, `on_session_finalize`, `on_session_reset`
 - LLM/API lifecycle: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `pre_api_request`, `post_api_request`
-- tools and delegation: `pre_tool_call`, `post_tool_call`, `transform_tool_result`, `transform_terminal_output`, `subagent_stop`
+- verification: `pre_verify`
+- tools and delegation: `pre_tool_call`, `post_tool_call`, `transform_tool_result`, `transform_terminal_output`, `subagent_start`, `subagent_stop`
 - approval lifecycle: `pre_approval_request`, `post_approval_response`
 
-The plugin writes observation sidecars and returns `None`; transform hooks are registered only for visibility, not to rewrite Hermes data. String payloads are truncated before writing so terminal/tool/LLM output cannot make the sidecar stream unbounded. The reader also caps hook files to recent tails, skips oversized single JSONL lines, and limits hook scan/session scan counts during fleet refresh. The retained hook tail is intentionally large enough to keep the most recent useful conversation text even after many tool calls, because command/tool-only windows should not force the hover card to show a shell command as speech. The plugin maintains a non-session status marker named `codex-agents-office.status.json`; Agents Office ignores that file as workload input and uses only `*.jsonl` sidecars for session activity.
+The plugin writes observation sidecars and returns `None`; transform and verification hooks are registered only for visibility, not to rewrite Hermes data or continue turns. Hook callbacks accept arbitrary keyword arguments so newer Hermes telemetry fields can be recorded without breaking the bridge. String payloads are truncated before writing so terminal/tool/LLM output cannot make the sidecar stream unbounded. The reader also caps hook files to recent tails, skips oversized single JSONL lines, and limits hook scan/session scan counts during fleet refresh. The retained hook tail is intentionally large enough to keep the most recent useful conversation text even after many tool calls, because command/tool-only windows should not force the hover card to show a shell command as speech. The plugin maintains a non-session status marker named `codex-agents-office.status.json`; Agents Office ignores that file as workload input and uses only `*.jsonl` sidecars for session activity.
 
 Operational validation:
 
@@ -928,6 +932,7 @@ Operational validation:
 - `GET /api/fleet` should show durable ids like `hermes:20260515_...` or `hermes:cron_...`; it should not show hook-only ids such as `hermes:default`, `hermes:process-<pid>`, or `hermes:<uuid>`, including in roaming agents
 - `GET /api/fleet` should show Hermes cron runs as temporary `sourceKind = hermes:cron` agents while they are active or recently done; their `detail` / `activityEvent` should not expose the scheduler wrapper prompt
 - active Hermes command/process/planning/tool sessions should expose the command, process action, planning update, or tool in `detail` / `activityEvent`, while `latestMessage` remains either prior Hermes assistant/subagent text or `null`; a command string such as `sleep 75` should not appear as the agent's last message
+- active Hermes verification hooks should expose `state = validating`, `method = hermes/preVerify`, bounded changed-file path context, and no `latestMessage` from the attempted final answer
 - the hook output directory should contain `codex-agents-office.status.json` with `status_event_name = registered` and the current gateway pid after Hermes reloads the plugin
 - if a Hermes validation run starts producing many unexpected workspace floors, stop the web listener immediately and inspect project discovery before restarting it; do not reintroduce DB-history or all-path hook sweeps as discovery inputs
 
@@ -938,9 +943,11 @@ Operational validation:
 | latest user message in a fresh open session | `planning` | inferred active Hermes prompt |
 | Hermes cron run id `cron_<job>_<timestamp>` or SQLite `source = cron` | `planning`, `thinking`, `done`, or `idle` by latest activity | temporary Hermes agent with a compact project tick label; scheduler wrapper prompt is stripped from display text |
 | plugin `pre_llm_call` / `pre_gateway_dispatch` | `planning` | typed prompt/session activity |
+| plugin `pre_verify` | `validating` | typed verification gate activity with bounded changed-path context; attempted final response is not shown as Hermes speech |
 | plugin `pre_tool_call` / `post_tool_call` / `transform_tool_result` / `transform_terminal_output` | `running`, `editing`, `scanning`, `delegating`, or `blocked` | typed tool activity by tool name, args, output, and result |
 | command, file, MCP, or dynamic tool hook while earlier assistant/subagent text exists | current tool-derived state | current action in `detail` / `activityEvent`; prior useful Hermes assistant/subagent text remains `latestMessage` |
 | hook-only `default`, `process-<pid>`, or UUID task/tool streams | parent session state update | folded into the matching durable Hermes session; never a standalone desk agent |
+| plugin `subagent_start` | `delegating` | typed child-agent start activity with parent/child correlation ids when present |
 | plugin `subagent_stop` | `delegating` or `blocked` | typed child-agent completion activity |
 | plugin `post_llm_call` / `transform_llm_output` | `done` with recent speech | typed reply activity from Hermes |
 | plugin `pre_api_request` / `post_api_request` | `thinking` | typed provider/model request activity |

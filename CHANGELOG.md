@@ -41,7 +41,9 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed macOS Codex command resolution so the bundled Codex app binary is tried before a stale `codex` on `PATH`, while still honoring `CODEX_CLI_PATH` first.
 - Changed local Codex ongoing detection so fresh `notLoaded` threads with non-final work signals and no final answer stay workstation-live even when the latest turn is reported as `interrupted`.
 - Changed agent hover summaries to clamp long latest-message text to 10 visual rows so office tooltips stay compact.
-- Changed the Hermes plugin bridge to register Hermes' current lifecycle, LLM/API, tool-transform, approval, and `subagent_stop` hooks with bounded string payloads, and map transform/tool/subagent sidecars into typed activity.
+- Changed the Hermes plugin bridge to register Hermes' current lifecycle, LLM/API, `pre_verify`, tool-transform, approval, and `subagent_start` / `subagent_stop` hooks with bounded string payloads, and map transform/tool/verification/subagent sidecars into typed activity.
+- Changed Hermes hook event reads to preserve Hermes turn, tool-call, subagent, and opaque API request correlation fields in dashboard event metadata.
+- Changed `codex-agents-office agents link hermes` so relinking removes a stale `plugins.disabled` entry for the Agents Office bridge before adding it to `plugins.enabled`.
 - Changed the Hermes plugin bridge to write a non-session load/error status marker in the hook output directory, making gateway plugin registration verifiable without creating fake workload agents.
 - Changed Hermes cron runs such as `cron_<job>_<timestamp>` sessions to render as temporary Hermes agents with compact project tick labels instead of raw scheduler prompts or raw cron ids.
 - Changed the in-scene hot-stuff board to show only file-change heat, grouped into a title-free 3x3 script/doc/media grid with compact Shared/Focus-style item text, no per-row progress bars, faster decay, and animated leaderboard row movement.

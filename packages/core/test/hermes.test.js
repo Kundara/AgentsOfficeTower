@@ -75,6 +75,7 @@ test("Hermes plugin install writes a load-status marker bridge", async () => {
     "pre_gateway_dispatch",
     "pre_llm_call",
     "post_llm_call",
+    "pre_verify",
     "transform_llm_output",
     "pre_tool_call",
     "post_tool_call",
@@ -87,6 +88,7 @@ test("Hermes plugin install writes a load-status marker bridge", async () => {
     "on_session_end",
     "on_session_finalize",
     "on_session_reset",
+    "subagent_start",
     "subagent_stop"
   ];
 
@@ -98,6 +100,29 @@ test("Hermes plugin install writes a load-status marker bridge", async () => {
     assert.match(source, new RegExp(`"${hook}"`));
     assert.match(manifest, new RegExp(`- ${hook}`));
   }
+});
+
+test("Hermes plugin install re-enables the bridge when config disabled it", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-enable-"));
+  const hermesHome = join(tempRoot, "hermes-home");
+  const hookDir = join(tempRoot, "hooks");
+  mkdirSync(hermesHome, { recursive: true });
+  writeFileSync(join(hermesHome, "config.yaml"), [
+    "plugins:",
+    "  enabled:",
+    "    - existing-plugin",
+    "  disabled:",
+    "    - codex-agents-office",
+    "    - noisy-plugin",
+    ""
+  ].join("\n"));
+
+  const result = await installHermesAgentsOfficePlugin({ hermesHome, hookDir });
+  const config = readFileSync(result.configPath, "utf8");
+
+  assert.match(config, /enabled:\n\s+- codex-agents-office\n\s+- existing-plugin/);
+  assert.match(config, /disabled:\n\s+- noisy-plugin/);
+  assert.doesNotMatch(config, /disabled:[\s\S]*-\s+codex-agents-office/);
 });
 
 test("Hermes user prompt remains active planning while recent", () => {
@@ -773,6 +798,66 @@ test("durable Hermes hook tool events expose command, file, and MCP toast shapes
   }
 });
 
+test("durable Hermes pre_verify hook events keep correlation metadata", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-verify-event-"));
+  const previousCodexHome = process.env.CODEX_HOME;
+  const previousHookDir = process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR;
+  const codexHome = join(tempRoot, "codex-home");
+  const projectRoot = join(tempRoot, "project");
+  const hooksDir = join(codexHome, "codex-agents-office", "hermes-hooks");
+  mkdirSync(join(projectRoot, ".git"), { recursive: true });
+  mkdirSync(join(projectRoot, "src"), { recursive: true });
+  mkdirSync(hooksDir, { recursive: true });
+
+  process.env.CODEX_HOME = codexHome;
+  process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR = hooksDir;
+  try {
+    writeFileSync(
+      join(hooksDir, "20260515_200002_abcdef.jsonl"),
+      JSON.stringify({
+        session_id: "20260515_200002_abcdef",
+        hook_event_name: "pre_verify",
+        timestamp: new Date().toISOString(),
+        cwd: projectRoot,
+        payload: {
+          session_id: "20260515_200002_abcdef",
+          turn_id: "turn-verify-1",
+          api_request_id: "req_opaque_123",
+          attempt: 0,
+          final_response: "The user has not received this answer yet.",
+          changed_paths: [join(projectRoot, "src", "app.ts")]
+        }
+      }) + "\n"
+    );
+
+    const snapshot = await loadHermesProjectSnapshotData(projectRoot, 4);
+    const agent = snapshot.agents.find((entry) => entry.threadId === "20260515_200002_abcdef");
+    const event = snapshot.events.find((entry) => entry.method === "hermes/preVerify");
+
+    assert.ok(agent);
+    assert.equal(agent.state, "validating");
+    assert.equal(agent.latestMessage, null);
+
+    assert.ok(event);
+    assert.equal(event.kind, "status");
+    assert.equal(event.phase, "started");
+    assert.equal(event.turnId, "turn-verify-1");
+    assert.equal(event.requestId, "req_opaque_123");
+    assert.match(event.path, /src[\\/]app\.ts$/);
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+    if (previousHookDir === undefined) {
+      delete process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR;
+    } else {
+      process.env.CODEX_AGENTS_OFFICE_HERMES_HOOK_DIR = previousHookDir;
+    }
+  }
+});
+
 test("Hermes project discovery ignores non-git live cwd roots", async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-nongit-"));
   const previousCodexHome = process.env.CODEX_HOME;
@@ -971,6 +1056,60 @@ test("Hermes subagent hook maps to delegation activity", () => {
   assert.equal(summary.state, "delegating");
   assert.equal(summary.detail, "Found the answer");
   assert.equal(summary.activityEvent.type, "collabAgentToolCall");
+});
+
+test("Hermes subagent start hook maps to active delegation", () => {
+  const now = Date.now();
+  const summary = summarizeHermesHookSessionForTest({
+    projectRoot: "/tmp/project",
+    paths: ["/tmp/project"],
+    now,
+    records: [{
+      eventName: "subagent_start",
+      timestampMs: now,
+      payload: {
+        parent_session_id: "parent-1",
+        parent_turn_id: "turn-1",
+        child_session_id: "child-session-1",
+        child_subagent_id: "child-1",
+        child_role: "researcher",
+        child_goal: "Read the Hermes docs and summarize hook changes"
+      }
+    }]
+  });
+
+  assert.equal(summary.state, "delegating");
+  assert.equal(summary.detail, "Read the Hermes docs and summarize hook changes");
+  assert.equal(summary.latestMessage, null);
+  assert.equal(summary.activityEvent.type, "collabAgentToolCall");
+});
+
+test("Hermes pre_verify hook maps to validating without agent speech", () => {
+  const now = Date.now();
+  const summary = summarizeHermesHookSessionForTest({
+    projectRoot: "/tmp/project",
+    paths: ["/tmp/project"],
+    now,
+    records: [{
+      eventName: "pre_verify",
+      timestampMs: now,
+      cwd: "/tmp/project",
+      payload: {
+        session_id: "session-1",
+        turn_id: "turn-1",
+        api_request_id: "opaque-request",
+        attempt: 0,
+        final_response: "Done, but this answer has not been delivered yet.",
+        changed_paths: ["/tmp/project/src/app.ts"]
+      }
+    }]
+  });
+
+  assert.equal(summary.state, "validating");
+  assert.equal(summary.detail, "Verifying app.ts");
+  assert.equal(summary.latestMessage, null);
+  assert.equal(summary.activityEvent.type, "other");
+  assert.match(summary.activityEvent.path, /src[\\/]app\.ts$/);
 });
 
 test("Hermes transform hook output maps to terminal activity", () => {

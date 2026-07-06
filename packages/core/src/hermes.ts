@@ -864,6 +864,39 @@ function toolPath(projectRoot: string, cwd: string | null, args: Record<string, 
   return null;
 }
 
+function hermesHookChangedPaths(record: HermesHookRecord, projectRoot: string): string[] {
+  const value = record.payload.changed_paths;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      continue;
+    }
+    const normalized = normalizeCandidatePath(entry, record.cwd ?? record.processCwd ?? projectRoot);
+    if (normalized && !paths.includes(normalized)) {
+      paths.push(normalized);
+    }
+    if (paths.length >= HERMES_HOOK_PATH_LIMIT) {
+      break;
+    }
+  }
+  return paths;
+}
+
+function hermesHookPreVerifyDetail(record: HermesHookRecord, projectRoot: string): string {
+  const paths = hermesHookChangedPaths(record, projectRoot);
+  const changedCount = paths.length;
+  const pathDetail = changedCount === 1
+    ? `Verifying ${basename(paths[0])}`
+    : changedCount > 1
+      ? `Verifying ${changedCount} changed files`
+      : "Hermes verification gate";
+  const attempt = hermesHookPayloadNumber(record, "attempt");
+  return attempt && attempt > 0 ? `${pathDetail} (attempt ${attempt + 1})` : pathDetail;
+}
+
 function toolActivityEvent(
   projectRoot: string,
   cwd: string | null,
@@ -1139,6 +1172,23 @@ function hermesHookPayloadString(record: HermesHookRecord, key: string): string 
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function hermesHookPayloadNumber(record: HermesHookRecord, key: string): number | null {
+  const value = record.payload[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function hermesHookEventTurnId(record: HermesHookRecord): string | null {
+  return hermesHookPayloadString(record, "turn_id")
+    ?? hermesHookPayloadString(record, "parent_turn_id");
+}
+
+function hermesHookEventItemId(record: HermesHookRecord): string | null {
+  return hermesHookPayloadString(record, "tool_call_id")
+    ?? hermesHookPayloadString(record, "child_subagent_id")
+    ?? hermesHookPayloadString(record, "child_session_id")
+    ?? hermesHookPayloadString(record, "task_id");
+}
+
 function limitHermesHookValue(value: unknown, depth = 0): unknown {
   if (depth > 5) {
     return typeof value === "string" ? shorten(value, HERMES_HOOK_TEXT_LIMIT) : String(value);
@@ -1197,6 +1247,8 @@ function normalizeHermesHookRecord(raw: Record<string, unknown>, fallback: {
   const sessionId =
     hermesHookString(raw, "session_id")
     ?? hermesHookString(payload, "session_id")
+    ?? hermesHookString(payload, "parent_session_id")
+    ?? hermesHookString(payload, "child_session_id")
     ?? fallback.sessionId;
   return {
     sessionId,
@@ -1396,7 +1448,7 @@ function canonicalHermesSessionIdForHookRecords(
     if (sessionById.has(record.sessionId)) {
       return record.sessionId;
     }
-    for (const key of ["session_id", "parent_session_id", "conversation_id"]) {
+    for (const key of ["session_id", "parent_session_id", "child_session_id", "conversation_id"]) {
       const candidate = hermesHookPayloadString(record, key);
       if (candidate && sessionById.has(candidate)) {
         return candidate;
@@ -1550,6 +1602,19 @@ function hermesHookToolActivityEvent(input: {
 function hermesHookSubagentStatus(record: HermesHookRecord): string | null {
   const value = record.payload.child_status;
   return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+function hermesHookSubagentRole(record: HermesHookRecord): string | null {
+  return hermesHookText(record, ["child_role"]);
+}
+
+function hermesHookSubagentGoal(record: HermesHookRecord): string | null {
+  return hermesHookText(record, ["child_goal"]);
+}
+
+function hermesHookSubagentTitle(record: HermesHookRecord): string {
+  const role = hermesHookSubagentRole(record);
+  return role ? `Subagent ${role}` : "Subagent";
 }
 
 function hermesHookToolSummary(record: HermesHookRecord): {
@@ -1708,8 +1773,50 @@ function summarizeHermesHookSession(input: {
     };
   }
 
+  if (latest.eventName === "pre_verify") {
+    const changedPaths = hermesHookChangedPaths(latest, input.projectRoot);
+    const detail = hermesHookPreVerifyDetail(latest, input.projectRoot);
+    return {
+      state: "validating",
+      isOngoing: recentOpen && !isFinalized,
+      detail,
+      paths: [...new Set([...changedPaths, ...input.paths])].slice(0, HERMES_HOOK_PATH_LIMIT),
+      activityEvent: {
+        type: "other",
+        action: "updated",
+        path: changedPaths[0] ?? input.paths[0] ?? input.projectRoot,
+        title: detail,
+        isImage: false
+      },
+      latestMessage: conversationText,
+      updatedAtMs: latest.timestampMs,
+      stoppedAtMs: recentOpen && !isFinalized ? null : latest.timestampMs
+    };
+  }
+
+  if (latest.eventName === "subagent_start") {
+    const title = hermesHookSubagentTitle(latest);
+    const childGoal = hermesHookSubagentGoal(latest);
+    return {
+      state: "delegating",
+      isOngoing: recentOpen && !isFinalized,
+      detail: childGoal ?? `${title} starting`,
+      paths: input.paths,
+      activityEvent: {
+        type: "collabAgentToolCall",
+        action: "updated",
+        path: input.paths[0] ?? input.projectRoot,
+        title: childGoal ?? title,
+        isImage: false
+      },
+      latestMessage: conversationText,
+      updatedAtMs: latest.timestampMs,
+      stoppedAtMs: recentOpen && !isFinalized ? null : latest.timestampMs
+    };
+  }
+
   if (latest.eventName === "subagent_stop") {
-    const childRole = hermesHookText(latest, ["child_role"]);
+    const childRole = hermesHookSubagentRole(latest);
     const childSummary = hermesHookText(latest, ["child_summary"]);
     const status = hermesHookSubagentStatus(latest);
     const failed = status ? /fail|error|interrupt/.test(status) : false;
@@ -1791,27 +1898,53 @@ function buildHermesHookEvents(input: {
     const lifecycleText = record.eventName === "on_session_end" || record.eventName === "on_session_finalize"
       ? latestHermesHookMeaningfulText(input.records.slice(0, startIndex + index + 1))
       : null;
+    const changedPaths = record.eventName === "pre_verify"
+      ? hermesHookChangedPaths(record, input.projectRoot)
+      : [];
+    const preVerifyDetail = record.eventName === "pre_verify"
+      ? hermesHookPreVerifyDetail(record, input.projectRoot)
+      : null;
+    const subagentLifecycle = record.eventName === "subagent_start" || record.eventName === "subagent_stop";
+    const subagentTitle = subagentLifecycle ? hermesHookSubagentTitle(record) : null;
+    const subagentDetail = record.eventName === "subagent_start"
+      ? hermesHookSubagentGoal(record) ?? `${subagentTitle ?? "Subagent"} starting`
+      : record.eventName === "subagent_stop"
+        ? hermesHookText(record, ["child_summary"])
+          ?? (hermesHookSubagentStatus(record)
+            ? `${subagentTitle ?? "Subagent"} ${hermesHookSubagentStatus(record)}`
+            : `${subagentTitle ?? "Subagent"} stopped`)
+        : null;
+    const eventPath = changedPaths[0] ?? toolEventPath;
     const method =
       kind?.eventType === "plan"
         ? "turn/plan/updated"
       : kind?.eventKind === "command"
         ? record.eventName === "pre_tool_call" ? "item/started" : "item/commandExecution/outputDelta"
-        : kind?.eventKind === "fileChange"
-          ? record.eventName === "pre_tool_call" ? "item/started" : "item/fileChange/outputDelta"
-          : kind?.eventKind === "tool"
-            ? toolName.startsWith("mcp_") && record.eventName !== "pre_tool_call" ? "item/mcpToolCall/progress" : "item/tool/call"
-            : record.eventName === "pre_llm_call" || record.eventName === "pre_gateway_dispatch"
-              ? "hermes/userMessage"
-              : record.eventName === "post_llm_call" || record.eventName === "transform_llm_output"
-                ? "hermes/agentMessage"
-                : `hermes/${record.eventName}`;
+      : kind?.eventKind === "fileChange"
+        ? record.eventName === "pre_tool_call" ? "item/started" : "item/fileChange/outputDelta"
+        : kind?.eventKind === "tool"
+          ? toolName.startsWith("mcp_") && record.eventName !== "pre_tool_call" ? "item/mcpToolCall/progress" : "item/tool/call"
+          : record.eventName === "pre_llm_call" || record.eventName === "pre_gateway_dispatch"
+            ? "hermes/userMessage"
+            : record.eventName === "post_llm_call" || record.eventName === "transform_llm_output"
+              ? "hermes/agentMessage"
+              : record.eventName === "pre_verify"
+                ? "hermes/preVerify"
+                : record.eventName === "subagent_start"
+                  ? "hermes/subagentStart"
+                  : record.eventName === "subagent_stop"
+                    ? "hermes/subagentStop"
+                    : `hermes/${record.eventName}`;
     const eventKind: DashboardEvent["kind"] =
       kind?.eventKind
-        ?? (record.eventName === "pre_api_request" || record.eventName === "post_api_request" ? "status" : "message");
+        ?? (subagentLifecycle ? "subagent"
+          : record.eventName === "pre_api_request" || record.eventName === "post_api_request" || record.eventName === "pre_verify" ? "status" : "message");
+    const apiDetail = record.eventName === "pre_api_request" || record.eventName === "post_api_request"
+      ? hermesHookApiDetail(record)
+      : null;
     const detail =
       kind ? toolEventTitle
-      : record.eventName === "pre_api_request" || record.eventName === "post_api_request" ? hermesHookApiDetail(record)
-      : lifecycleText ?? assistantText ?? userText ?? record.eventName;
+      : preVerifyDetail ?? subagentDetail ?? apiDetail ?? lifecycleText ?? assistantText ?? userText ?? record.eventName;
     const action: DashboardEvent["action"] =
       kind?.eventKind === "command" ? "ran"
       : kind?.eventKind === "fileChange" ? "edited"
@@ -1825,9 +1958,13 @@ function buildHermesHookEvents(input: {
       threadId: input.threadId ?? record.sessionId,
       createdAt: new Date(record.timestampMs).toISOString(),
       method,
+      turnId: hermesHookEventTurnId(record) ?? undefined,
+      itemId: hermesHookEventItemId(record) ?? undefined,
+      requestId: hermesHookPayloadString(record, "api_request_id") ?? undefined,
       itemType:
         kind?.eventType === "mcpToolCall" ? "mcpToolCall"
         : kind?.eventType === "dynamicToolCall" ? "dynamicToolCall"
+        : subagentLifecycle ? "collabAgentToolCall"
         : eventKind === "message" && (record.eventName === "pre_llm_call" || record.eventName === "pre_gateway_dispatch") ? "userMessage"
         : eventKind === "message" ? "agentMessage"
         : undefined,
@@ -1836,12 +1973,13 @@ function buildHermesHookEvents(input: {
         ? "updated"
         : hermesHookIsToolCompletion(record.eventName)
         ? hermesHookResultLooksFailed(record) ? "failed" : "completed"
-        : record.eventName === "pre_tool_call" ? "started" : "updated",
-      title: kind ? toolEventTitle : record.eventName,
+        : record.eventName === "pre_tool_call" || record.eventName === "pre_verify" || record.eventName === "subagent_start" ? "started" : "updated",
+      title: kind ? toolEventTitle : preVerifyDetail ?? subagentTitle ?? record.eventName,
       detail,
-      path: toolEventPath,
+      path: eventPath,
       action,
       command,
+      cwd: record.cwd ?? undefined,
       isImage: false
     };
   });

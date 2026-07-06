@@ -481,15 +481,17 @@ This keeps OpenClaw aligned with its real abstraction boundary, which is session
 Hermes support follows the local runtime surfaces exposed by `nousresearch/hermes-agent`:
 
 - the adapter reads `~/.hermes/state.db`, `HERMES_HOME`, and Hermes profile homes for durable session/message metadata
-- Agents Office can install a small global Hermes plugin with `codex-agents-office agents link hermes`; that plugin writes typed lifecycle hook sidecars into machine-local Agents Office storage
+- Agents Office can install a small global Hermes plugin with `codex-agents-office agents link hermes`; that plugin writes typed lifecycle hook sidecars into machine-local Agents Office storage and removes a stale disabled-list entry for the bridge when relinking
 - it uses live process cwd/env hints such as `HERMES_CWD`, `TERMINAL_CWD`, and `HERMES_HOME` when a Hermes CLI or TUI process is still running
 - it treats a Hermes session id as the stable agent and lets that agent move floors based on the latest project-bearing hook or DB activity
 - hook-only streams such as `default`, `process-<pid>`, and UUID tool/task files are activity sidecars, not agents; they are folded into the nearest durable SQLite session by explicit ids, platform/cwd hints, and recent timing
 - Hermes cron run ids such as `cron_<job>_<timestamp>` and SQLite sessions with `source = cron` render as temporary Hermes agents on the relevant project floor, using compact project tick labels and stripping the scheduler wrapper prompt from current-action text
-- Hermes command, process-management, planning, file-change, and MCP/tool hook events update `detail`, `activityEvent`, toasts, and session history; they do not replace `latestMessage`, which stays on the latest useful Hermes assistant/subagent text
+- Hermes command, process-management, verification, planning, file-change, subagent lifecycle, and MCP/tool hook events update `detail`, `activityEvent`, toasts, and session history; they do not replace `latestMessage`, which stays on the latest useful Hermes assistant/subagent text
 - Hermes hook `user_message` values can still seed session labels and user-message history, but they must not populate the agent `latestMessage` field because the map renders that field as agent speech
+- Hermes `pre_verify` hook records render as `validating` activity with bounded changed-path context, but the attempted final response is not treated as delivered speech
 - Hermes tool classification follows Hermes' registered/displayed tool vocabulary: `todo` maps to planning, `process`/`terminal`/`execute_code` map to command activity, `read_file`/`search_files`/`skill_view` map to scanning tool activity, and only Hermes' mutating file tools (`write_file` and `patch`) map to file edits
 - Hermes model/API request hooks map to reasoning/thinking activity rather than generic dynamic-tool activity, so model status does not appear as a fake tool action
+- Hermes hook correlation fields such as turn ids, tool call ids, subagent ids, and opaque API request ids are copied into dashboard event metadata when present
 - generic Hermes maintenance prompts, such as skill-library review prompts, are ignored as display messages so they do not overwrite the last real conversation text
 - it maps work to projects by normalized cwd, system-prompt working directory, tool paths, payload paths, and git-root discovery rather than matching project names
 - it contributes project discovery roots only from a live Hermes process cwd or the latest current root of a fresh hook session, so old `state.db` history and the full set of touched hook paths cannot create floors
