@@ -592,6 +592,111 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           });
       }
 
+      function isCodexChatProject(snapshot) {
+        return isCodexChatProjectRootForStreetCafe(snapshot && snapshot.projectRoot);
+      }
+
+      function isStreetCafeAgent(snapshot, agent) {
+        if (!agent) {
+          return false;
+        }
+        if (isCodexChatProject(snapshot)) {
+          return true;
+        }
+        if (String(agent.sourceKind || "").startsWith("claude:cowork")) {
+          return true;
+        }
+        return agent.interactionMode === "work";
+      }
+
+      function cloneAgentForStreetCafe(sourceSnapshot, agent, movedIds) {
+        const sourceProjectRoot = agent.sourceProjectRoot || sourceSnapshot.projectRoot;
+        const sourceAgentId = agent.sourceAgentId || agent.id;
+        const streetId = mergedAgentId(sourceProjectRoot, sourceAgentId);
+        const sourceParentId = agent.parentThreadId || null;
+        return {
+          ...agent,
+          id: streetId,
+          parentThreadId: sourceParentId && movedIds.has(sourceParentId)
+            ? mergedAgentId(sourceProjectRoot, sourceParentId)
+            : null,
+          roomId: "street-cafe",
+          sourceProjectRoot,
+          sourceAgentId
+        };
+      }
+
+      function partitionStreetCafeProjects(projects) {
+        const sourceEntries = [];
+        const workspaceProjects = [];
+        projects.forEach((snapshot) => {
+          const movedAgents = snapshot.agents.filter((agent) => isStreetCafeAgent(snapshot, agent));
+          const remainingAgents = snapshot.agents.filter((agent) => !isStreetCafeAgent(snapshot, agent));
+          if (movedAgents.length > 0) {
+            sourceEntries.push({ snapshot, agents: movedAgents });
+          }
+          if (remainingAgents.length > 0 || (!isCodexChatProject(snapshot) && !isClaudeCoworkProject(snapshot))) {
+            workspaceProjects.push({ ...snapshot, agents: remainingAgents });
+          }
+        });
+
+        const seenAgents = new Set();
+        const streetAgents = sourceEntries.flatMap(({ snapshot, agents }) => {
+          const movedIds = new Set(agents.map((agent) => agent.id));
+          return agents
+            .map((agent) => cloneAgentForStreetCafe(snapshot, agent, movedIds))
+            .filter((agent) => {
+              const key = [agent.sourceProjectRoot, agent.threadId || agent.sourceAgentId, agent.sourceKind].join("::");
+              if (seenAgents.has(key)) {
+                return false;
+              }
+              seenAgents.add(key);
+              return true;
+            });
+        });
+        const contributingRoots = Array.from(new Set(sourceEntries.flatMap(({ snapshot, agents }) => [
+          snapshot.projectRoot,
+          ...(snapshot.mergedProjectRoots || []),
+          ...agents.map((agent) => agent.sourceProjectRoot).filter(Boolean)
+        ])));
+        const cafeSnapshot = {
+          projectRoot: STREET_CAFE_PROJECT_ROOT,
+          projectLabel: "Chat Café",
+          projectIdentity: null,
+          generatedAt: state.fleet && state.fleet.generatedAt ? state.fleet.generatedAt : new Date().toISOString(),
+          sceneKind: "street-cafe",
+          mergedProjectRoots: contributingRoots,
+          rooms: {
+            version: 1,
+            generated: true,
+            filePath: "",
+            rooms: [{
+              id: "street-cafe",
+              name: "Chat Café",
+              path: ".",
+              x: 0,
+              y: 0,
+              width: 24,
+              height: 16,
+              children: []
+            }]
+          },
+          agents: streetAgents,
+          cloudTasks: [],
+          events: sourceEntries.flatMap(({ snapshot }) => Array.isArray(snapshot.events) ? snapshot.events : []),
+          activity: {
+            generatedAt: state.fleet && state.fleet.generatedAt ? state.fleet.generatedAt : new Date().toISOString(),
+            hotChanges: [],
+            hotTools: [],
+            runningCommands: []
+          },
+          notes: streetAgents.length === 0
+            ? ["ChatGPT and personal Claude Home Recent chats are account history that their supported local APIs do not expose. Opened projectless Codex Chat sessions and locally materialized Claude Home work sessions appear here when available."]
+            : []
+        };
+        return { workspaceProjects, cafeSnapshot };
+      }
+
       function isBusyAgent(agent) {
         return agent.isCurrent === true || agent.isOngoing === true || isRuntimeActiveLocalAgent(agent);
       }
@@ -613,12 +718,6 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           "waiting",
           "blocked"
         ].includes(String(state || "").toLowerCase());
-      }
-
-      function isFinishedLeadForRec(agent) {
-        return isRecentLeadCandidate(agent)
-          && !shouldSeatAtWorkstation(agent)
-          && (agent.state === "waiting" || agent.state === "idle" || agent.state === "done");
       }
 
       function isRecentLeadCandidate(agent) {
@@ -825,19 +924,6 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           return "";
         }
         return fleet.projects.map(projectSemanticToken).join("||");
-      }
-
-      function isLiveSceneAgent(agent) {
-        if (!agent || agent.source === "cloud" || agent.source === "presence") {
-          return false;
-        }
-        if (
-          (agent.source === "hermes" && agent.sourceKind === "hermes:roaming")
-          || (agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming")
-        ) {
-          return false;
-        }
-        return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;
       }
 
       function viewSnapshot(snapshot, recentLeadLimit = SCENE_RECENT_LEAD_LIMIT, allProjects = null) {

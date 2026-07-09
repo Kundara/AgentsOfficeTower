@@ -654,7 +654,7 @@ function buildWslServerLaunchCommand(input: {
 }
 
 function quotePosixShell(value: string): string {
-  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+  return `'${String(value).replace(/'/g, "'\"'\"'")}'`;
 }
 
 function windowsPathToWslPath(input: string): string | null {
@@ -686,14 +686,6 @@ function canonicalizeProjectPath(input: string): string | null {
     return value.replace(/\\/g, "/").replace(/[\\/]+$/, "");
   }
   return value.replace(/\\/g, "/").replace(/[\\/]+$/, "");
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 async function findAvailablePort(): Promise<number> {

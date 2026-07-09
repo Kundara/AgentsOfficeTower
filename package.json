@@ -8,12 +8,13 @@
   "scripts": {
     "build": "npm run build -w packages/core && npm run build -w packages/web && npm run build -w packages/cli && npm run build -w packages/vscode",
     "test": "npm test --workspaces --if-present",
-    "lint": "node scripts/check-import-boundaries.js",
-    "lint:eslint": "eslint packages/core/src/adapters packages/core/src/domain packages/core/src/services packages/core/src/project-paths.ts packages/core/src/snapshot.ts packages/core/src/workload.ts packages/web/src/server packages/web/src/render packages/web/src/client/index.ts packages/web/src/server.ts packages/web/src/fleet-live-service.ts packages/web/src/router.ts packages/web/src/server-metadata.ts packages/web/src/server-options.ts packages/web/src/server-types.ts packages/cli/src packages/vscode/src scripts eslint.config.js",
+    "lint": "npm run lint:eslint && npm run check:boundaries",
+    "lint:eslint": "eslint packages/core/src/adapters packages/core/src/domain packages/core/src/services packages/core/src/project-paths.ts packages/core/src/snapshot.ts packages/core/src/workload.ts packages/web/src/server packages/web/src/render packages/web/src/server.ts packages/web/src/fleet-live-service.ts packages/web/src/router.ts packages/web/src/server-metadata.ts packages/web/src/server-options.ts packages/web/src/server-types.ts packages/cli/src packages/vscode/src scripts eslint.config.js",
     "check:file-size": "node scripts/check-file-sizes.js",
     "check:boundaries": "node scripts/check-import-boundaries.js",
+    "check:agent-workflows": "node --test scripts/check-agent-workflows.test.js && node scripts/check-agent-workflows.js",
     "check:codex-protocol": "node scripts/check-codex-app-server-protocol.js",
-    "check": "npm run lint && npm run check:file-size && npm run check:boundaries && npm run typecheck && npm run test",
+    "check": "npm run lint && npm run check:agent-workflows && npm run check:file-size && npm run typecheck && npm run test",
     "start": "node scripts/bootstrap-web.js",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "web": "node packages/cli/dist/index.js web",
@@ -29,6 +30,7 @@
     "esbuild": "^0.25.2",
     "eslint": "^9.24.0",
     "globals": "^15.15.0",
+    "smol-toml": "^1.7.0",
     "typescript": "^5.8.2"
   }
 }

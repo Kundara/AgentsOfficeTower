@@ -6,7 +6,7 @@ import {
   readCodexThreadWithTimeout
 } from "../codex-thread-query";
 import { assembleProjectSnapshot } from "../services/snapshot-assembler";
-import type { AdapterSnapshot, ProjectSource } from "../adapters";
+import { ProjectSnapshotCoordinator } from "../services/project-snapshot-coordinator";
 import type {
   AgentGoalState,
   CloudTask,
@@ -84,7 +84,26 @@ export async function buildDashboardSnapshotFromState(input: {
   stoppedAtByThreadId?: Map<string, number>;
   ongoingThreadIds?: Set<string>;
 }): Promise<DashboardSnapshot> {
-  const snapshotStartedAt = Date.now();
+  const coordinator = await createProjectSnapshotCoordinator({
+    projectRoot: input.projectRoot,
+    includeManagedCloud: input.cloudTasks === undefined
+  });
+  try {
+    const snapshot = await coordinator.buildSnapshot(input);
+    if (!snapshot) {
+      throw new Error("One-shot snapshot build was superseded unexpectedly.");
+    }
+    return snapshot;
+  } finally {
+    await coordinator.dispose();
+  }
+}
+
+export async function createProjectSnapshotCoordinator(options: {
+  projectRoot: string;
+  localLimit?: number;
+  includeManagedCloud?: boolean;
+}): Promise<ProjectSnapshotCoordinator> {
   const [
     { buildCodexLocalAdapterSnapshotFromState },
     { cloudTasksToAgents, codexCloudAdapter },
@@ -105,65 +124,26 @@ export async function buildDashboardSnapshotFromState(input: {
     import("../adapters/presence")
   ]);
 
-  const localSnapshotPromise = buildCodexLocalAdapterSnapshotFromState({
-    projectRoot: input.projectRoot,
-    threads: input.threads,
-    events: input.events,
-    notes: input.notes,
-    needsUserByThreadId: input.needsUserByThreadId,
-    goalsByThreadId: input.goalsByThreadId,
-    subscribedThreadIds: input.subscribedThreadIds,
-    stoppedAtByThreadId: input.stoppedAtByThreadId,
-    ongoingThreadIds: input.ongoingThreadIds
-  });
-
   const staticSourceContexts = {
-    projectRoot: input.projectRoot,
-    localLimit: DEFAULT_LOCAL_THREAD_LIMIT,
+    projectRoot: options.projectRoot,
+    localLimit: options.localLimit ?? DEFAULT_LOCAL_THREAD_LIMIT,
     readThreads: true
   };
-  const sources: ProjectSource[] = [
-    input.cloudTasks ? null : codexCloudAdapter.createSource(staticSourceContexts),
+  const secondarySources = [
+    options.includeManagedCloud ? codexCloudAdapter.createSource(staticSourceContexts) : null,
     claudeAdapter.createSource(staticSourceContexts),
     cursorLocalAdapter.createSource(staticSourceContexts),
     cursorCloudAdapter.createSource(staticSourceContexts),
     hermesAdapter.createSource(staticSourceContexts),
     openClawAdapter.createSource(staticSourceContexts),
     presenceAdapter.createSource(staticSourceContexts)
-  ].filter((source): source is ProjectSource => source !== null);
+  ].filter((source): source is NonNullable<typeof source> => source !== null);
 
-  const staticSnapshots = await Promise.all(sources.map(async (source) => {
-    await source.warm();
-    const snapshot = source.getCachedSnapshot();
-    await source.dispose();
-    return snapshot;
-  }));
-
-  const adapterSnapshots: AdapterSnapshot[] = [
-    await localSnapshotPromise,
-    ...(input.cloudTasks
-      ? [{
-        adapterId: "codex-cloud",
-        source: "cloud" as const,
-        generatedAt: new Date().toISOString(),
-        agents: await cloudTasksToAgents(input.projectRoot, input.cloudTasks),
-        events: [],
-        notes: [],
-        cloudTasks: input.cloudTasks,
-        health: {
-          status: "ready" as const,
-          detail: null,
-          lastUpdatedAt: new Date().toISOString()
-        }
-      }]
-      : []),
-    ...staticSnapshots
-  ];
-
-  return assembleProjectSnapshot({
-    projectRoot: input.projectRoot,
-    adapterSnapshots,
-    currentnessNow: snapshotStartedAt
+  return new ProjectSnapshotCoordinator(options.projectRoot, {
+    secondarySources,
+    buildLocalSnapshot: buildCodexLocalAdapterSnapshotFromState,
+    cloudTasksToAgents,
+    assemble: assembleProjectSnapshot
   });
 }
 

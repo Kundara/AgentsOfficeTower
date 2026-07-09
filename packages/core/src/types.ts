@@ -129,16 +129,23 @@ export interface CodexTurn {
 
 export interface CodexThread {
   id: string;
+  extra?: Record<string, unknown> | null;
+  sessionId?: string;
+  forkedFromId?: string | null;
+  parentThreadId?: string | null;
   preview: string;
   ephemeral: boolean;
+  historyMode?: string;
   modelProvider: string;
   createdAt: number;
   updatedAt: number;
+  recencyAt?: number | null;
   status: ThreadStatus;
   path: string | null;
   cwd: string;
   cliVersion: string;
   source: string | Record<string, unknown>;
+  threadSource?: string | null;
   agentNickname: string | null;
   agentRole: string | null;
   gitInfo: GitInfo | null;

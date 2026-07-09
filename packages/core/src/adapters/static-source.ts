@@ -5,6 +5,7 @@ type SnapshotLoader = () => Promise<AdapterSnapshot>;
 export class StaticProjectSource implements ProjectSource {
   private cachedSnapshot: AdapterSnapshot;
   private readonly listeners = new Set<() => void>();
+  private refreshGeneration = 0;
 
   constructor(
     private readonly loadSnapshot: SnapshotLoader,
@@ -18,7 +19,12 @@ export class StaticProjectSource implements ProjectSource {
   }
 
   async refresh(_reason: AdapterRefreshReason): Promise<void> {
-    this.cachedSnapshot = await this.loadSnapshot();
+    const generation = ++this.refreshGeneration;
+    const snapshot = await this.loadSnapshot();
+    if (generation !== this.refreshGeneration) {
+      return;
+    }
+    this.cachedSnapshot = snapshot;
     for (const listener of this.listeners) {
       listener();
     }
@@ -39,4 +45,3 @@ export class StaticProjectSource implements ProjectSource {
     this.listeners.clear();
   }
 }
-

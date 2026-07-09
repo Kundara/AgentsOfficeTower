@@ -74,6 +74,96 @@ function sampleThread() {
   };
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("concurrent thread rereads cannot let an older result overwrite a newer result", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const olderGate = deferred();
+  const newerGate = deferred();
+  let readCount = 0;
+  monitor.threads.set("thr_123", sampleThread());
+  monitor.client = {
+    readThread: async () => (++readCount === 1 ? olderGate.promise : newerGate.promise),
+    close() {}
+  };
+  monitor.ensureThreadWatcher = () => {};
+  monitor.scheduleSnapshot = () => {};
+
+  const olderRefresh = monitor.refreshThread("thr_123");
+  await new Promise((resolve) => setImmediate(resolve));
+  const newerRefresh = monitor.refreshThread("thr_123");
+  newerGate.resolve({ ...sampleThread(), preview: "newer", updatedAt: 2_000_000_002 });
+  await newerRefresh;
+  olderGate.resolve({ ...sampleThread(), preview: "older", updatedAt: 2_000_000_001 });
+  await olderRefresh;
+
+  assert.equal(monitor.threads.get("thr_123").preview, "newer");
+  assert.equal(monitor.threads.get("thr_123").updatedAt, 2_000_000_002);
+  await monitor.stop();
+});
+
+test("stop blocks post-refresh snapshots and coordinator resurrection", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const refreshStarted = deferred();
+  const refreshGate = deferred();
+  let disposeCalls = 0;
+  monitor.snapshotCoordinator = {
+    async refreshIfStale() {
+      refreshStarted.resolve();
+      await refreshGate.promise;
+      return true;
+    },
+    async dispose() { disposeCalls += 1; }
+  };
+
+  const refresh = monitor.refreshSecondarySources("manual", 0);
+  await refreshStarted.promise;
+  const stop = monitor.stop();
+  refreshGate.resolve();
+  await Promise.all([refresh, stop]);
+
+  assert.equal(disposeCalls, 1);
+  assert.equal(monitor.snapshotTimer, null);
+  await assert.rejects(monitor.ensureSnapshotCoordinator(), /stopped/);
+});
+
+test("stop drains an in-flight snapshot rebuild without surfacing a stopped coordinator error", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const rebuildStarted = deferred();
+  const rebuildGate = deferred();
+  monitor.snapshotRebuildRequested = 1;
+  monitor.assembleLatestSnapshot = async () => {
+    rebuildStarted.resolve();
+    await rebuildGate.promise;
+    await monitor.ensureSnapshotCoordinator();
+  };
+
+  const pump = monitor.runSnapshotRebuildPump();
+  monitor.snapshotRebuildPromise = pump.finally(() => {
+    monitor.snapshotRebuildPromise = null;
+  });
+  await rebuildStarted.promise;
+  const stop = monitor.stop();
+  rebuildGate.resolve();
+  await Promise.all([pump, stop]);
+
+  assert.equal(monitor.stopped, true);
+  assert.equal(monitor.snapshotRebuildCompleted, monitor.snapshotRebuildRequested);
+});
+
 test("parseAppServerMessage distinguishes response, notification, and server request", () => {
   assert.deepEqual(
     parseAppServerMessage(JSON.stringify({ id: 1, result: { ok: true } })),
@@ -195,6 +285,49 @@ test("workspace activity summarizes decayed hot changes and long-running command
       },
       {
         ...baseEvent,
+        id: "stale-command-start",
+        createdAt: new Date(now - 6 * 60 * 1000).toISOString(),
+        method: "item/started",
+        itemId: "stale_cmd_item",
+        kind: "command",
+        phase: "started",
+        title: "Command started",
+        detail: "npm run stale",
+        path: "/tmp/CodexAgentsOffice",
+        action: "ran",
+        command: "npm run stale",
+        cwd: "/tmp/CodexAgentsOffice"
+      },
+      {
+        ...baseEvent,
+        id: "interrupted-command-start",
+        createdAt: new Date(now - 30 * 1000).toISOString(),
+        method: "item/started",
+        itemId: "interrupted_cmd_item",
+        kind: "command",
+        phase: "started",
+        title: "Command started",
+        detail: "npm run interrupted",
+        path: "/tmp/CodexAgentsOffice",
+        action: "ran",
+        command: "npm run interrupted",
+        cwd: "/tmp/CodexAgentsOffice"
+      },
+      {
+        ...baseEvent,
+        id: "interrupted-command-stop",
+        createdAt: new Date(now - 20 * 1000).toISOString(),
+        method: "turn/interrupted",
+        itemId: "interrupted_cmd_item",
+        kind: "command",
+        phase: "interrupted",
+        title: "Command interrupted",
+        detail: "npm run interrupted",
+        path: "/tmp/CodexAgentsOffice",
+        action: "ran"
+      },
+      {
+        ...baseEvent,
         id: "tool-start",
         createdAt: new Date(now - 20 * 1000).toISOString(),
         method: "item/started",
@@ -236,6 +369,7 @@ test("workspace activity summarizes decayed hot changes and long-running command
   assert.equal(activity.runningCommands[0].status, "running");
   assert.equal(activity.runningCommands[0].progress.percent, 70);
   assert.equal(activity.runningCommands[0].agentLabel, "Builder");
+  assert.equal(activity.runningCommands.length, 1);
 });
 
 test("workspace activity includes branch and multiplayer user attribution on hot changes", () => {
@@ -372,6 +506,34 @@ test("thread/list requests current workload ordering explicitly", async () => {
   assert.equal(requests[0].params.sortKey, "updated_at");
   assert.equal(requests[0].params.sortDirection, "desc");
   assert.equal(requests[0].params.limit, 5);
+  assert.equal(requests[0].params.cursor, null);
+  assert.ok(requests[0].params.sourceKinds.includes("unknown"));
+});
+
+test("thread/list follows cursors until the requested limit is filled", async () => {
+  const requests = [];
+  const client = Object.create(CodexAppServerClient.prototype);
+  client.request = async (method, params) => {
+    requests.push({ method, params });
+    if (!params.cursor) {
+      return {
+        data: Array.from({ length: 100 }, (_, index) => ({ id: `thread-${index}` })),
+        nextCursor: "page-2"
+      };
+    }
+    return {
+      data: Array.from({ length: 50 }, (_, index) => ({ id: `thread-${index + 100}` })),
+      nextCursor: "page-3"
+    };
+  };
+
+  const threads = await client.listThreads({ limit: 150 });
+
+  assert.equal(threads.length, 150);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].params.limit, 100);
+  assert.equal(requests[1].params.cursor, "page-2");
+  assert.equal(requests[1].params.limit, 50);
 });
 
 test("command approval requests become typed approval events", () => {
@@ -678,9 +840,10 @@ test("thread replies start idle app-server-owned threads without waiting for a s
 
   await monitor.sendThreadReply(observedThread.id, "Start this idle thread");
 
-  assert.deepEqual(capturedCalls, [
-    ["startTurnNoWait", observedThread.id, "Start this idle thread", observedThread.cwd]
+  assert.deepEqual(capturedCalls[0], [
+    "startTurnNoWait", observedThread.id, "Start this idle thread", observedThread.cwd
   ]);
+  assert.equal(capturedCalls.some(([method]) => method === "steerTurnNoWait"), false);
 });
 
 test("thread replies reject observed desktop threads instead of creating side turns", async () => {
@@ -755,9 +918,10 @@ test("turn started notifications keep active reply steering attached to the live
 
   await monitor.sendThreadReply(activeThread.id, "Nudge the live turn");
 
-  assert.deepEqual(capturedCalls, [
-    ["steerTurnNoWait", activeThread.id, "turn_live", "Nudge the live turn"]
+  assert.deepEqual(capturedCalls[0], [
+    "steerTurnNoWait", activeThread.id, "turn_live", "Nudge the live turn"
   ]);
+  assert.equal(capturedCalls.some(([method]) => method === "startTurnNoWait"), false);
 });
 
 test("file change completion events keep final file metadata", () => {
@@ -4779,6 +4943,55 @@ test("discoverThreads scopes app-server thread listing to the current project ro
       limit: 40
     }
   ]);
+});
+
+test("discoverThreads coalesces overlapping refresh requests into one queued rerun", async () => {
+  const projectRoot = "/tmp/CodexAgentsOffice-coalesced";
+  const monitor = new ProjectLiveMonitor({
+    projectRoot,
+    includeCloud: false,
+    localLimit: 1
+  });
+  const listedThread = {
+    ...sampleThread(),
+    id: "thr_coalesced",
+    cwd: projectRoot
+  };
+  const firstList = deferred();
+  let listCalls = 0;
+  let activeLists = 0;
+  let maximumActiveLists = 0;
+  monitor.client = {
+    listThreads: async () => {
+      listCalls += 1;
+      activeLists += 1;
+      maximumActiveLists = Math.max(maximumActiveLists, activeLists);
+      try {
+        if (listCalls === 1) {
+          await firstList.promise;
+        }
+        return [listedThread];
+      } finally {
+        activeLists -= 1;
+      }
+    },
+    listLoadedThreads: async () => [],
+    resumeThread: async () => listedThread,
+    unsubscribeThread: async () => {},
+    readThread: async () => listedThread,
+    close: () => {}
+  };
+
+  const first = monitor.discoverThreads();
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = monitor.discoverThreads();
+  const third = monitor.discoverThreads();
+  firstList.resolve();
+  await Promise.all([first, second, third]);
+
+  assert.equal(listCalls, 2);
+  assert.equal(maximumActiveLists, 1);
+  await monitor.stop();
 });
 
 test("discovery does not stop ongoing threads missing from the current list page", async () => {

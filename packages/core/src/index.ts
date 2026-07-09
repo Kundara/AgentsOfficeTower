@@ -17,6 +17,7 @@ export * from "./project-storage";
 export * from "./room-config";
 export * from "./services/project-discovery";
 export * from "./services/project-live-monitor";
+export * from "./services/project-snapshot-coordinator";
 export * from "./services/refresh-scheduler";
 export * from "./services/snapshot-assembler";
 export * from "./services/thread-store";

@@ -51,7 +51,7 @@ export function renderHtml(
       <section class="hero">
         <div class="hero-top">
           <div class="hero-copy">
-            <div class="muted">Codex + Claude + Cursor workspace observer</div>
+            <div class="muted">Live workload observatory</div>
             <div class="hero-title-row">
               <h1>Agents Office Tower</h1>
               <div id="hero-summary" class="hero-summary"></div>
@@ -59,9 +59,9 @@ export function renderHtml(
             <div id="stamp" class="muted">Loading…</div>
           </div>
           <div class="hero-actions">
-            <div class="view-toggle">
-              <button id="map-view-button" data-view="map">Map</button>
-              <button id="terminal-view-button" data-view="terminal">Terminal</button>
+            <div class="view-toggle" role="group" aria-label="Workspace view">
+              <button id="map-view-button" data-view="map" type="button" aria-pressed="true">Map</button>
+              <button id="terminal-view-button" data-view="terminal" type="button" aria-pressed="false">Terminal</button>
             </div>
             <button
               id="split-worktrees-button"
@@ -175,7 +175,7 @@ export function renderHtml(
                 </div>
               </div>
             </div>
-            <div id="connection-pill" class="status-pill state-connecting">Connecting</div>
+            <div id="connection-pill" class="status-pill state-connecting" role="status" aria-live="polite">Connecting</div>
           </div>
         </div>
         <div class="tabs-shell">
@@ -185,7 +185,7 @@ export function renderHtml(
               <span class="muted" id="project-count"></span>
             </div>
           </div>
-          <div id="project-tabs" class="project-tabs"></div>
+          <div id="project-tabs" class="project-tabs" role="navigation" aria-label="Workspaces"></div>
         </div>
       </section>
 
@@ -202,12 +202,14 @@ export function renderHtml(
           </div>
         </main>
 
-        <aside id="session-panel" class="panel">
-          <div class="panel-header">
-            <strong>Sessions</strong>
-            <span id="rooms-path" class="muted"></span>
+        <aside id="session-panel" class="panel sessions-panel" aria-labelledby="sessions-panel-title">
+          <div class="panel-header sessions-panel-header">
+            <div class="sessions-panel-heading">
+              <h2 id="sessions-panel-title">Sessions</h2>
+              <span id="rooms-path" class="muted"></span>
+            </div>
           </div>
-          <div id="session-list" class="panel-body session-list"></div>
+          <div id="session-list" class="panel-body session-list" role="list" tabindex="0" aria-describedby="rooms-path"></div>
         </aside>
       </section>
     </div>

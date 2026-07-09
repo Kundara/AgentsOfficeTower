@@ -32,12 +32,16 @@ The project goal is not generic chat replay. It is live workload visibility:
   High-level system design and current rendering model.
 - `docs/integration-hooks.md`
   Exact Codex, Claude, and Cursor integration surfaces, plus how they map into the product.
+- `docs/agent-workflows.md`
+  GPT-5.6 model policy, Codex role selection, delegation boundaries, skill layout, and workflow validation.
 - `docs/self-development.md`
   Project-quality bar, iteration priorities, and what to improve next.
 - `docs/references.md`
   External references used by this project.
 - `.codex/agents`
-  Local Codex subagent definitions used for demos and role testing.
+  GPT-5.6 Codex role config layers for read-only mapping, copy, and verification.
+- `.agents/skills`
+  Auto-discovered Tower operation and coordination skills.
 - `.codex-agents`
   Legacy project-local runtime path. New per-project runtime data lives in Agents Office user data keyed by project root, with `.codex-agents` kept as a read-compatible fallback.
 
@@ -61,6 +65,11 @@ The project goal is not generic chat replay. It is live workload visibility:
   Do not use the example scene PNG as a runtime collage substitute.
 - Keep `CHANGELOG.md` current for notable additions, fixes, compatibility changes, and behavior shifts.
   Do not treat formatting-only churn, local IDE noise, or generated artifacts as changelog-worthy unless shipped behavior changed.
+- Keep delegation bounded to independent work with non-overlapping file scopes.
+  The lead agent owns integration, user communication, shared-file edits, and the final validation claim.
+- Use `office_mapper` for broad read-only discovery, `content_designer` for constrained UI wording, and `office_verifier` for an independent post-change review.
+- Keep role selection metadata in `.codex/config.toml` and role-specific model, effort, sandbox, and instructions in `.codex/agents/*.toml`.
+- Keep repo skills under `.agents/skills` so Codex discovers them without user-level installation.
 
 ## Commands
 
@@ -68,6 +77,8 @@ The project goal is not generic chat replay. It is live workload visibility:
 npm install
 npm run build
 npm run typecheck
+npm run check:agent-workflows
+npm run check
 npx codex-agents-office demo preview --port 4181
 npx codex-agents-office watch
 npx codex-agents-office snapshot /abs/project/path
@@ -154,6 +165,7 @@ node packages/web/dist/server.js --port 4181
 - Command-window toasts should aggregate per agent instead of stacking duplicate windows.
   Keep one toast per agent, append new command lines at the bottom, and cap the bubble at 3 visible lines.
 - The session panel should keep the durable approval/input "Needs You" queue visible when those states exist.
+- The session panel should present pinned Needs You, then every live session, then at most 10 recent sessions across the selected scope. Its own scroll region must keep the final row reachable and preserve scroll/focus during live refresh; cards must wrap instead of clipping at narrow widths, 200% zoom, and maximum text scale.
 - Hover details should expose the useful live state:
   - name
   - role
@@ -170,6 +182,7 @@ When architecture or behavior changes materially, update:
 - `README.md`
 - `docs/architecture.md`
 - `docs/integration-hooks.md` if hook usage or representation changed
+- `docs/agent-workflows.md` if model, role, delegation, permission, or skill behavior changed
 - `docs/self-development.md` if priorities changed
 - `docs/references.md` if a new external source shaped the implementation
 

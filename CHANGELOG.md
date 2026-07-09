@@ -9,12 +9,15 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added browser-local per-workspace scene customization beside Shared/Focus, with Floor, Wall, and Board color inputs, bounded derived shades, live Pixi preview, reset, and persistence across merged or split worktree views.
+- Added a permanent street-level Chat Café floor that combines canonical projectless Codex Chat and locally materialized Claude Home work sessions, reserves support for an explicit typed Codex Work mode, preserves real source roots for thread actions, and renders pavement, storefronts, tables, chairs, café fixtures, and occupied navigation-aware workstations.
+- Added derived in-product sprites from Gherwit's free 16×16 CAFE and CITY tilesets, with license/attribution notes and without bundling the original source sheets or archives.
 - Added a workspace `activity` snapshot summary and browser Ops Wall that surfaces decayed hottest file changes plus long-running command/process activity, including high-confidence progress only when command output exposes explicit percent or count patterns.
 - Added a snapshot diagnostic note when a hot file-change board row has no agent attribution even though a fresh local Codex thread matches the changed path but is not seated as current workload.
 - Added a read-only `codex-agents-office web query <repo> <recent|last>` CLI path backed by loopback-only web APIs, with bounded agent/event filters and `local` or coordinated `team` scope.
 - Added a lightweight `codex-agents-office web query <repo> gist` CLI state-sync path that returns hot changes plus active-agent last message and last file-change context before deeper reads.
 - Added a browser-to-server coordinated team-fleet cache so CLI `scope=team` reads the same shared-room data already merged for the browser, without giving the CLI PartyKit credentials or write/reply capabilities.
-- Added repo-packaged `Skills/agents-tower` and `Skills/agents-tower-coordination` Codex skills for running/querying the tower CLI and using local/team tower data to avoid duplicate agent work.
+- Added repo-packaged `.agents/skills/agents-tower` and `.agents/skills/agents-tower-coordination` Codex skills for running/querying the tower CLI and using local/team tower data to avoid duplicate agent work.
 - Added browser-side approval actions to the durable `Needs You` queue for local typed Codex approval waits, allowing `Accept`, `Always for session`, `Decline`, and `Cancel` decisions to flow back through the app-server observer connection.
 - Added inline `Needs You` input composers for local typed Codex `tool/requestUserInput` waits, sending schema-backed `answers` payloads back through the app-server observer connection.
 - Added inline `Reply` composers to app-server-owned local typed Codex session cards, routing follow-up text through app-server so idle threads resume with `turn/start` and active turns accept nudges through `turn/steer`.
@@ -22,19 +25,41 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added Claude Agent Teams discovery from `~/.claude/teams`, using teammate `worktreePath` / `cwd` values as cowork project floors.
 - Added Claude Agent View background job discovery from `~/.claude/jobs/*/state.json`, rendering matching jobs as read-only `claude:background` agents and workspace floors without requiring project hooks.
 - Added Claude workflow-subagent discovery from local session `subagents` transcripts, matching `*.meta.json`, and workflow `journal.jsonl` records, rendering inferred child rows under the lead session without requiring hooks.
-- Added Claude Desktop Co-work discovery from `local-agent-mode-sessions`, using saved space folders and session-selected folders as workspace floors with read-only Claude agents and detected-file activity.
-- Added normalized adapter-level goal metadata so Codex typed thread goals and Claude inferred session, subagent, Co-work, and background goals surface through `DashboardAgent.goal`, web-query APIs, shared-room payloads, terminal snapshots, and hover details.
+- Added locally materialized Claude Home work discovery from the legacy `local-agent-mode-sessions` store, using saved space folders and session-selected folders as workspace floors with read-only Claude agents and detected-file activity.
+- Added normalized adapter-level goal metadata so Codex typed thread goals and Claude inferred session, subagent, Home work, and background goals surface through `DashboardAgent.goal`, web-query APIs, shared-room payloads, terminal snapshots, and hover details.
 - Added scene-click thread cards for local Codex agents, exposing recent typed thread history directly from the office map with reply controls only when the thread is owned by the same app-server connection.
 - Added read-only Hermes Agent visibility by reading Hermes `state.db`/profile stores and live Hermes process cwd/env hints, mapping matching project sessions into Agents Office without project-name hard matching.
 - Added `codex-agents-office agents link hermes`, which installs a small Hermes plugin hook bridge into `~/.hermes/plugins/codex-agents-office` so Hermes session activity can stream into Agents Office as typed sidecars without launching Hermes.
 - Added a subtle primary-room wall dashboard in the Pixi office scene, summarizing running commands and hot file changes from the live snapshot without adding a detached admin panel.
 - Added `npm run check:codex-protocol`, which regenerates the installed Codex app-server TypeScript bindings and fails when server notification/request methods drift beyond the reviewed allowlist.
+- Added a GPT-5.6 Codex workflow contract with registered read-only mapper, content, and verifier roles plus `npm run check:agent-workflows` drift validation.
+- Added shared Codex turn-semantics helpers and table-driven lifecycle tests so live monitoring and snapshot summarization use one definition of final, non-final, and open work.
+- Added a generation guard to static adapter refreshes so a slower obsolete loader cannot overwrite fresher cached state.
+- Added a per-project snapshot coordinator with serialized refresh/assembly pumps and focused concurrency tests, allowing live monitors to reuse warm secondary-source caches instead of rescanning every provider for each local event.
+- Added structural TOML workflow validation and fixtures for duplicate keys, orphaned or multiply registered role files, unexpected role metadata, reasoning drift, and writable specialist sandboxes.
 
 - Added a machine-local image-only hat selector in the browser `Settings` popup, with a first `no hat` option and immediate application across the local player's visible agents.
 - Added hat manifest entries under `packages/web/src/config/pixel-office-manifest.json`, including shared default scale/offset values plus per-hat override hooks for outlier sprites.
 
 ### Changed
 
+- Redesigned the Sessions panel as one responsive, independently scrollable workload index with pinned Needs You, Active, and Recent sections, visible state chips, wrapped two-line content, accessible headings/list semantics, keyboard focus, and actions below metadata instead of squeezing titles.
+- Changed All-workspaces session selection to retain every live row while applying the 10-row recent limit globally after cross-project sorting instead of independently per project.
+- Changed macOS Codex app-server resolution to recognize the runtime bundled inside `ChatGPT.app` and prefer it alongside the standalone Codex app before PATH, keeping Agents Office on the same local protocol build as the desktop when available.
+- Changed the local Codex thread model to retain current app-server session, fork, parent, recency, history-mode, extra, and analytics-source fields for forward-compatible classification instead of dropping the updated protocol metadata at the type boundary.
+- Changed Chat Café classification to keep ordinary `vscode` desktop/extension tasks and Claude Code sessions on their project floors unless a supported source supplies an explicit Chat/Home/Work signal, and added an honest empty-state explanation for account-level ChatGPT and personal Claude Home histories that their supported local APIs do not expose.
+- Toned down office-floor baseboards, horizontal seams, and staggered brick joints so the blue tile pattern reads without a bright cyan grid.
+- Changed the browser into a more legible architectural cutaway: the workspace stack now has a straight full-width rectangular rooftop with sparse pixel HVAC/vent/aerial details, continuous facade edges, a rectangular foundation, compact floor markers, the restored saturated blue brick-floor palette, and flush floor joins without gold rail dots or projecting slabs.
+- Restored the original bright blue parallax sky and green/gold shell palette after the muted visual experiment made the tower feel too gray.
+- Changed the browser shell hierarchy with a denser application bar, horizontally scrollable workspace rail, sticky scrollable session rail, clearer focus states, viewport-bounded settings, narrow-screen thread sheets, and reduced-motion styling.
+- Changed grounded avatar reconciliation so same-seat layout adjustments and target refreshes enter the constant-speed navigation route instead of using a separate eased position tween, and vertical wheel gestures now keep scrolling the page unless the gesture is explicitly horizontal.
+- Changed roaming Hermes/OpenClaw motion to use persistent sky slots, distance-based curved flights, separate flight banking and idle drift layers, gentler long-period hovering, and stable visual DOM identity across ordinary live-copy refreshes.
+- Changed project Codex defaults to explicit `gpt-5.6-sol` lead/review routing, medium lead reasoning, high plan reasoning, and bounded four-thread, one-level delegation.
+- Changed live snapshot rebuilding so periodic/manual provider refresh is separate from event-driven local assembly, with only the newest queued monitor state published.
+- Changed browser assistant-message selection, event/icon/history presentation, and horizontal-wheel geometry from generated-scope helpers to typed, directly tested modules, bringing the render and UI runtime sections back under their authored-file limits.
+- Changed the browser scene/navigation runtime into ordered model, renderer, pathing, overlay, floating-orchestrator, lifecycle, furniture, and attention sections, and isolated notification CSS while preserving one built JS/CSS asset contract.
+- Changed the packaged Tower skills to the auto-discovered `.agents/skills` layout, with narrower triggers, explicit runtime/coordination boundaries, progressive references, and `$skill-name` UI prompts.
+- Changed the source-size guard to keep narrow transitional ceilings around the remaining oversized Claude, Hermes, browser UI, and stylesheet files so the repository check prevents further growth while their documented structural splits continue.
 - Changed Codex desktop projectless chat discovery so dated `Documents/Codex/<date>/<chat>` cwd values group onto one `Chat` floor while each chat session still renders as its own local Codex agent.
 - Changed Codex goal command display so `/goal` labels render as `🎯` in snapshot labels, session titles, hover cards, and other shared display surfaces.
 - Changed workstation column spacing from four tiles to three tiles so dense desk layouts waste less horizontal space.
@@ -44,6 +69,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed the Hermes plugin bridge to register Hermes' current lifecycle, LLM/API, `pre_verify`, tool-transform, approval, and `subagent_start` / `subagent_stop` hooks with bounded string payloads, and map transform/tool/verification/subagent sidecars into typed activity.
 - Changed Hermes hook event reads to preserve Hermes turn, tool-call, subagent, and opaque API request correlation fields in dashboard event metadata.
 - Changed `codex-agents-office agents link hermes` so relinking removes a stale `plugins.disabled` entry for the Agents Office bridge before adding it to `plugins.enabled`.
+- Changed Hermes bridge relinking to also clean up legacy malformed root-level `codex-agents-office` plugin entries that can make `~/.hermes/config.yaml` invalid.
 - Changed the Hermes plugin bridge to write a non-session load/error status marker in the hook output directory, making gateway plugin registration verifiable without creating fake workload agents.
 - Changed Hermes cron runs such as `cron_<job>_<timestamp>` sessions to render as temporary Hermes agents with compact project tick labels instead of raw scheduler prompts or raw cron ids.
 - Changed the in-scene hot-stuff board to show only file-change heat, grouped into a title-free 3x3 script/doc/media grid with compact Shared/Focus-style item text, no per-row progress bars, faster decay, and animated leaderboard row movement.
@@ -57,10 +83,11 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed Codex app-server event handling so newer patch-update, MCP-progress, terminal-interaction, hook-run, guardian auto-review, model, warning, rate-limit, MCP startup/login, and Windows sandbox notifications now become typed events or diagnostic notes instead of disappearing silently.
 - Changed Codex app-server protocol compatibility so the reviewed method allowlist includes current metadata/safety notifications, `currentTime/read` requests are answered without marking workload live, and client attestation requests remain explicitly opted out.
 - Changed Codex dynamic-tool server request handling so unsupported `item/tool/call` requests receive an explicit unsuccessful response from Agents Office rather than leaving the Codex turn pending.
-- Changed Claude Agent SDK integration to `@anthropic-ai/claude-agent-sdk` `^0.2.118` and added typed coverage for newer hook events including `PostToolBatch`, `UserPromptExpansion`, `PermissionDenied`, and `TaskCreated`.
+- Changed Claude Agent SDK integration to `@anthropic-ai/claude-agent-sdk` `^0.3.205` and added typed coverage for newer hook events including `PostToolBatch`, `UserPromptExpansion`, `PermissionDenied`, `TaskCreated`, and streamed assistant `MessageDisplay` updates.
+- Changed user-facing Claude Desktop terminology from Co-work to Home work while retaining `claude:cowork` and `local-agent-mode-sessions` as backward-compatible internal identifiers.
 - Changed Claude delegation hooks and Agent/Task tool calls to normalize onto the shared `collabAgentToolCall` activity type used for delegated-agent work.
 - Changed Claude `agent_id` hook records and Agent Teams metadata to produce child `DashboardAgent` rows under the lead Claude session when typed parent/child identifiers are available, with hook-backed rows overriding matching inferred workflow-subagent rows.
-- Changed Claude Desktop Co-work-only project floors to sort after normal workspaces in fleet/server and browser ordering.
+- Changed Claude Desktop Home-work-only project floors to sort after normal workspaces in fleet/server and browser ordering.
 - Changed Cursor cloud API requests to prefer the documented Bearer-token authorization path before falling back to the older Basic-auth compatibility path.
 - Changed per-project Agents Office state so room configs, appearance rosters, presence snapshots, Claude hook bridges, and Cursor hook sidecars now write into machine-local Agents Office user data keyed by project root instead of creating or mutating `.codex-agents/` inside the tracked project.
 - Changed the browser `Needs You` input cards to show required/optional question labels, per-request completion summaries, clearer missing-answer guidance, and explicit clear actions so multi-question prompts read more like structured forms than raw field dumps.
@@ -113,12 +140,21 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed fleet startup/runtime OOMs caused by every project monitor repeatedly full-reading the same large global Codex rollout set: fallback discovery now filters by cached bounded `session_meta`, shares in-flight reads, caps full parsing at three files, and coalesces overlapping per-monitor discovery triggers.
+- Fixed Codex app-server thread discovery to follow bounded `thread/list` cursors instead of silently truncating at the server's 100-row page cap, preventing exec/subagent-heavy histories from hiding older interactive conversations and project roots.
+- Fixed Codex app-server discovery to include the protocol's valid `unknown` source kind instead of filtering those threads out through the explicit source-kind allowlist.
+- Fixed fleet monitor shutdown so an in-flight snapshot rebuild drains cleanly instead of racing stopped coordinator setup and terminating the web server during project-set changes.
+- Fixed grounded navigation fallback so missing EasyStar support uses an internal four-neighbor solver, unreachable targets hold the exact current pose, and reroutes start at the avatar's current position instead of recentering or cutting straight through blocked furniture.
+- Fixed floating-orchestrator banking so tilt settlement no longer rewrites the same transform that owns screen position mid-flight, and kept existing slot targets stable when another floating orchestrator joins or leaves.
 - Fixed roaming Hermes cron rows so they keep the resolved source project's tick label, appearance scope, event paths, and git metadata instead of inheriting the current anchor floor label while project discovery catches up.
 - Fixed office scene agent and hot-stuff hover cards so they render through a fixed body-level overlay layer instead of being clipped by the scrollable scene viewport.
 - Fixed shared-room peer merges so matching Git repositories still merge when the two machines use different display labels such as `Party Game` and `Oops Game`, preserved `deviceId` through the PartyKit relay for same-device filtering, and made connected-but-filtered peers explicit in the shared-room status text.
 - Fixed wide office workspaces so workstation layouts that exceed the visible panel render to a horizontally scrollable scene with continuous wall/floor art, without squeezing the room scale or adding a tall blank floor card, with mouse-wheel scrolling while hovering the map and a wide-office audit route for fake-avatar scroll validation.
 - Fixed Claude workflow/subagent duplication by keeping child `agent_id` hook activity out of lead-session summaries while still routing typed events and child rows to the child thread, and by preserving separate same-named workflow children from distinct workflow ids.
 - Fixed local Codex discovery polling so an already-known thread without a final answer keeps its workstation seat through idle/read-only list refreshes instead of bouncing to the rec room between messages.
+- Fixed file-watch `thread/read` races so an older reread cannot overwrite the fresher timestamp and status already observed through `thread/list`.
+- Fixed concurrent thread rereads so a slower obsolete response cannot overwrite a newer response, and made monitor shutdown a hard barrier against post-stop snapshot timers or coordinator recreation.
+- Removed the older ineffective duplicate `reserveAgentTiles` declaration whose later same-name function had always overridden it through hoisting.
 - Fixed non-local live agents so ongoing Claude/Cursor-style sessions seat at workstations even when they are not the current local workload.
 - Fixed stale transcript-inferred Claude tool/user activity so days-old Edit or prompt records decay to idle instead of rendering as ongoing desk work.
 - Fixed stale Claude team active flags so days-old inferred lead/member sessions no longer force idle Claude rows back into running desk work without fresh team or hook evidence.
@@ -204,6 +240,8 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Docs
 
+- Added explicit Sessions panel, real projectless Chat Café ingestion, responsive/zoom/scroll, and Claude Home API-boundary acceptance criteria to the product specification, architecture notes, and renderer expectations.
+- Added an agent-workflow guide and aligned AGENTS, README, self-development checks, the product doc map, and references with GPT-5.6 configuration, role selection, delegation, permissions, skills, and validation.
 - Rewrote the README as a shorter product overview that highlights current strongest features, including Hermes visibility, CLI queries, packaged Codex skills, shared rooms, and multi-surface workload views.
 - Updated integration-hook and reference docs with the verified current Codex app-server request/response payloads, newer Claude hook-event coverage, and Cursor cloud Bearer-auth behavior.
 - Updated README, architecture notes, product spec, integration hooks, and self-development checks to document the broader Codex app-server event coverage, dynamic-tool unsupported response, and protocol drift check.
@@ -248,7 +286,10 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
-- Changed the file-size guard so generated `packages/web/src/client/app-runtime.ts` no longer blocks the release gate as if it were hand-authored source, while the remaining oversized transitional web runtime/style files now use explicit temporary ceilings instead of one blanket limit.
+- Changed the browser build to assemble runtime sections directly in memory with the TypeScript parser and esbuild, removing the tracked 694 KB `app-runtime.ts` mirror and build-time source execution.
+- Removed dead runtime/style composition mirrors and unused script re-export shims; source-shape tests now inspect the CSS asset that the bundle actually ships.
+- Changed the project Codex workflow to the locally verified GPT-5.6 Sol multi-agent v2 shape for Codex 0.144.0, with a four-thread session cap, depth-one delegation, bounded batch runtime, and no misleading workspace-write demo role.
+- Changed the root lint gate to run ESLint plus import-boundary validation once, fixing the VS Code lint errors that the previous `check` path skipped.
 - Fixed the VS Code embedded server launch on Windows+WSL so it runs inside a login shell with `CODEX_HOME` preserved, restoring Codex session visibility in the activity-bar panel.
 - Fixed `/api/server-meta` and home-route startup timing so those endpoints return immediately from the in-memory project list instead of blocking on project discovery.
 - Fixed live monitor startup so the first snapshot is no longer blocked on thread subscription sync, reducing empty-office warmup stalls.
@@ -277,6 +318,10 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added a root `npm start` bootstrap flow that installs if needed, rebuilds the workspace, and launches the web server on `4181`.
 
 ### Fixed
+
+- Fixed project image previews so callers cannot choose an arbitrary filesystem root, escape a configured project through traversal/sibling/symlink paths, or serve script-capable project SVGs from the application origin.
+- Fixed state-changing browser routes so unsafe non-loopback and cross-origin requests are rejected while normal same-origin loopback and internal CLI-cache flows remain supported.
+- Fixed workspace activity summaries so typed tool activity and running commands, including explicit percent/count progress, are populated instead of always returning empty arrays.
 
 - Fixed shared-room settings so host, room, and nickname now restore from machine-local Agents Office user data on launch, no longer disappear on refresh, and no longer fight active input while the user is typing in the Settings popup.
 - Fixed Codex reply-event precedence so a streamed `item/completed` final answer now keeps ownership of the visible latest reply even if a later `thread/read/agentMessage` fallback arrives from a stale reread, preventing the UI from briefly snapping back to older commentary text after the real final answer already rendered.
@@ -317,8 +362,8 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed Codex worktree naming so split floors now prefer readable branch-derived labels such as `worktree-floor-merge` over opaque `.codex/worktrees/<id>` folder ids when Git worktree metadata is available.
 - Changed several browser icon mappings to use the new RPGIAB pixel pack where the semantics were clearly stronger, including worktree, message, command execution, web search, and image-view icons.
 - Reworked the core internals so dashboard snapshot assembly now lives in `snapshot-lib`, app-server event and rollout-hook parsing live in `live-monitor-lib`, and Cursor local/cloud helpers live in `cursor-lib` instead of staying stacked inside `snapshot.ts`, `live-monitor.ts`, and `cursor.ts`.
-- Changed the browser runtime composition so `packages/web/src/client/runtime-source.ts` now only joins the final runtime sections; layout, scene, navigation, render, settings, and UI behavior are edited directly in their own section modules instead of being rewritten through string patch helpers.
-- Changed the browser client bootstrap so the shipped app now starts from generated `packages/web/src/client/app-runtime.ts` output instead of evaluating a giant runtime string with `new Function(...)`, while the focused section sources remain the editing surface.
+- Changed browser runtime composition so layout, scene, navigation, render, settings, and UI behavior are edited directly in focused section modules and assembled in memory by the build.
+- Changed the browser client bootstrap so focused runtime sections are assembled into the shipped bundle without browser-side source evaluation, while the section sources remain the editing surface.
 - Changed the browser runtime section ownership so workstation/current-workload seat rules now live only in `packages/web/src/client/runtime/seating-source.ts`, while `layout-source.ts`, `render-source.ts`, `scene-source.ts`, `navigation-source.ts`, and `ui-source.ts` no longer leak partial function bodies across file boundaries.
 - Changed file-size and import-boundary guards to walk source files with Node filesystem helpers instead of shelling out to `rg`, so the repo rails keep working in restricted environments.
 - Changed Codex app-server event handling so `turn/plan/updated` now summarizes the documented `{ explanation?, plan }` payload, `turn/diff/updated` summarizes the documented `{ diff }` payload, and `item/tool/call` is labeled as a generic tool-call request instead of an MCP-specific event.
@@ -337,7 +382,7 @@ Entries stay under the active version until an explicit version bump is requeste
 - Reframed the README around the current `Agents Office Tower` product name with a shorter multi-source support matrix instead of a mostly Codex-centric landing page.
 - Moved scene controls into a toggleable settings popup in the web header, removing the manual refresh and rooms scaffold actions from the main toolbar and hiding the toast preview trigger.
 - Changed the scene text-size slider to apply on release instead of during drag so the settings popup stays stable while adjusting scale.
-- Extracted browser toast queueing, stacking, preview, and DOM rendering from the main client script into a dedicated `toast-script` module.
+- Extracted browser toast queueing, stacking, preview, and DOM rendering from the main client script into the dedicated `client/toast-source.ts` section.
 - Extracted PartyKit shared-room transport, settings persistence, and remote fleet merge helpers from the main client script into the dedicated `multiplayer-source` module.
 - Removed the unused DOM office-map renderer path from the web client so the browser map now runs through the retained Pixi scene only.
 - Changed Claude secondary discovery to prefer the official Agent SDK `listSessions()` and `getSessionMessages()` APIs before falling back to raw JSONL transcript sampling.
@@ -345,7 +390,7 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Docs
 
 - Updated the README and architecture/self-development docs to describe the new `snapshot-lib`, `live-monitor-lib`, `cursor-lib`, and browser runtime section boundaries.
-- Updated the README and architecture/integration/self-development docs to describe the generated `app-runtime.ts` bootstrap, the single-owner `seating-source.ts` desk policy, and the cleaned runtime section boundaries.
+- Updated the README and architecture/integration/self-development docs to describe the bundled runtime bootstrap, the single-owner `seating-source.ts` desk policy, and the cleaned runtime section boundaries.
 - Documented the current official Codex app-server event coverage more precisely, including the dynamic-tool meaning of `item/tool/call` and the documented notifications we still ignore for workload rendering (`thread/tokenUsage/updated`, `fuzzyFileSearch/*`, and `windowsSandbox/setupCompleted`).
 - Updated the README and integration/architecture/reference docs to describe the new Cursor Hooks path, the committed `.cursor/hooks.json`, and the typed `.codex-agents/cursor-hooks` sidecars.
 - Expanded the README with explicit step-by-step instructions for copying the committed Cursor hook files into another repo and verifying that local sidecars are being written.

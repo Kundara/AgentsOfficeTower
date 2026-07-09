@@ -1,10 +1,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fsPromises = require("node:fs/promises");
+const { tmpdir } = require("node:os");
+const { basename, join } = require("node:path");
 
 const {
   listCodexProjectThreadCandidates
 } = require("../dist/codex-thread-query.js");
 const {
+  discoverCodexSessionThreads,
   parseCodexSessionThreadFromJsonl
 } = require("../dist/codex-session-files.js");
 const {
@@ -33,6 +37,21 @@ function thread(overrides = {}) {
     turns: [],
     ...overrides
   };
+}
+
+function sessionMetaLine({ id, cwd, subagent = true }) {
+  return JSON.stringify({
+    timestamp: "2026-07-10T00:00:00.000Z",
+    type: "session_meta",
+    payload: {
+      id,
+      timestamp: "2026-07-10T00:00:00.000Z",
+      cwd,
+      source: subagent ? { subagent: {} } : "cli",
+      thread_source: subagent ? "subagent" : "cli",
+      model_provider: "openai"
+    }
+  });
 }
 
 test("Codex project thread query falls back when cwd-scoped Windows listing misses threads", async () => {
@@ -270,4 +289,93 @@ test("Codex session parser reads multiagents v2 subagent JSONL", () => {
   const summary = summariseThread(thread);
   assert.equal(summary.activityEvent.type, "commandExecution");
   assert.equal(summary.activityEvent.title, "rg Firebase Assets");
+});
+
+test("Codex session discovery reads full bodies only for matching subagents and bounded malformed compatibility files", async () => {
+  const directory = await fsPromises.mkdtemp(join(tmpdir(), "agents-office-session-filter-"));
+  const projectRoot = join(directory, "project");
+  const otherRoot = join(directory, "other");
+  const files = {
+    topLevel: join(directory, "top-level.jsonl"),
+    otherProject: join(directory, "other-project.jsonl"),
+    matching: join(directory, "matching.jsonl"),
+    malformedPrefix: join(directory, "malformed-prefix.jsonl")
+  };
+  await Promise.all([
+    fsPromises.writeFile(files.topLevel, `${sessionMetaLine({ id: "top", cwd: projectRoot, subagent: false })}\nignored body\n`),
+    fsPromises.writeFile(files.otherProject, `${sessionMetaLine({ id: "other", cwd: otherRoot })}\n`),
+    fsPromises.writeFile(files.matching, `${sessionMetaLine({ id: "match", cwd: projectRoot })}\n`),
+    fsPromises.writeFile(files.malformedPrefix, `not-json\n${sessionMetaLine({ id: "compat", cwd: projectRoot })}\n`)
+  ]);
+
+  const originalReadFile = fsPromises.readFile;
+  const fullReads = [];
+  fsPromises.readFile = async (...args) => {
+    fullReads.push(basename(String(args[0])));
+    return originalReadFile(...args);
+  };
+  try {
+    const threads = await discoverCodexSessionThreads({
+      projectRoot,
+      sessionDirectories: [directory],
+      now: new Date()
+    });
+    assert.deepEqual(threads.map((entry) => entry.id).sort(), ["compat", "match"]);
+    assert.deepEqual(fullReads.sort(), ["malformed-prefix.jsonl", "matching.jsonl"]);
+    await discoverCodexSessionThreads({
+      projectRoot: join(directory, "unmatched"),
+      sessionDirectories: [directory],
+      now: new Date()
+    });
+    assert.deepEqual(fullReads.sort(), ["malformed-prefix.jsonl", "matching.jsonl"]);
+  } finally {
+    fsPromises.readFile = originalReadFile;
+    await fsPromises.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Codex session discovery globally bounds and shares concurrent full reads", async () => {
+  const directory = await fsPromises.mkdtemp(join(tmpdir(), "agents-office-session-bound-"));
+  const projectRoot = join(directory, "project");
+  const fileCount = 8;
+  await Promise.all(Array.from({ length: fileCount }, (_, index) =>
+    fsPromises.writeFile(
+      join(directory, `session-${index}.jsonl`),
+      `${sessionMetaLine({ id: `session-${index}`, cwd: projectRoot })}\n`
+    )
+  ));
+
+  const originalReadFile = fsPromises.readFile;
+  let activeReads = 0;
+  let maximumActiveReads = 0;
+  let fullReadCount = 0;
+  fsPromises.readFile = async (...args) => {
+    fullReadCount += 1;
+    activeReads += 1;
+    maximumActiveReads = Math.max(maximumActiveReads, activeReads);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return await originalReadFile(...args);
+    } finally {
+      activeReads -= 1;
+    }
+  };
+  try {
+    const options = {
+      projectRoot,
+      sessionDirectories: [directory],
+      now: new Date()
+    };
+    const [first, second] = await Promise.all([
+      discoverCodexSessionThreads(options),
+      discoverCodexSessionThreads(options)
+    ]);
+    assert.equal(first.length, fileCount);
+    assert.equal(second.length, fileCount);
+    assert.equal(fullReadCount, fileCount);
+    assert.ok(maximumActiveReads <= 3, `expected at most 3 active reads, saw ${maximumActiveReads}`);
+  } finally {
+    fsPromises.readFile = originalReadFile;
+    await fsPromises.rm(directory, { recursive: true, force: true });
+  }
 });

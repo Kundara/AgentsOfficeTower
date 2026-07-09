@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agents Tower"
+  short_description: "Operate and inspect the local office tower"
+  default_prompt: "Use $agents-tower to verify and query the local Agents Office Tower runtime."

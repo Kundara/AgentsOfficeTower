@@ -42,7 +42,8 @@ const CLAUDE_SDK_HOOK_EVENTS: HookEvent[] = [
   "WorktreeRemove",
   "InstructionsLoaded",
   "CwdChanged",
-  "FileChanged"
+  "FileChanged",
+  "MessageDisplay"
 ];
 const CLAUDE_HOOK_RESPONSE_POLL_INTERVAL_MS = 100;
 

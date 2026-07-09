@@ -14,5 +14,6 @@ export {
 export {
   buildDashboardSnapshot,
   buildDashboardSnapshotFromState,
+  createProjectSnapshotCoordinator,
   filterProjectCloudTasks
 } from "./snapshot-lib/dashboard-builder";

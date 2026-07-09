@@ -19,13 +19,20 @@ test("candidate list prefers explicit override before PATH", () => {
   );
 });
 
-test("macOS candidates prefer the app bundle before PATH", () => {
+test("macOS candidates prefer ChatGPT and Codex app bundles before PATH", () => {
   assert.deepEqual(
     buildCodexCommandCandidates({
       platform: "darwin",
-      macAppBundlePaths: ["/Applications/Codex.app/Contents/Resources/codex"]
+      macAppBundlePaths: [
+        "/Applications/ChatGPT.app/Contents/Resources/codex",
+        "/Applications/Codex.app/Contents/Resources/codex"
+      ]
     }),
     [
+      {
+        command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+        label: "Codex app bundle"
+      },
       {
         command: "/Applications/Codex.app/Contents/Resources/codex",
         label: "Codex app bundle"

@@ -19,7 +19,17 @@
 - [Codex Advanced Configuration](https://developers.openai.com/codex/config-advanced)
   Telemetry and advanced runtime behavior reference.
 - [Codex Configuration Reference](https://developers.openai.com/codex/config-reference)
-  Persistence and history-related reference.
+  Project configuration, model/reasoning controls, multi-agent limits, and custom role registration.
+- [Custom instructions with AGENTS.md](https://developers.openai.com/codex/guides/agents-md)
+  Repository instruction discovery, precedence, and scope.
+- [Codex Skills](https://developers.openai.com/codex/skills)
+  Repo skill discovery under `.agents/skills`, progressive disclosure, frontmatter, and UI metadata.
+- [Using GPT-5.6](https://developers.openai.com/api/docs/guides/latest-model)
+  Current GPT-5.6 family, explicit Sol routing, reasoning-effort guidance, and migration baseline.
+- [Upgrading to GPT-5.6 Sol](https://developers.openai.com/api/docs/guides/upgrading-to-gpt-5p6-sol)
+  Migration classification, role-aware model mapping, compatibility gates, and validation matrix.
+- [Prompting guidance for GPT-5.6 Sol](https://developers.openai.com/api/docs/guides/prompt-guidance-gpt-5p6)
+  Outcome-first prompts, autonomy boundaries, tool routing, delegation, stopping rules, and validation guidance.
 
 ## Claude
 
@@ -27,6 +37,8 @@
   Official session APIs, hook callback contracts, SDK-managed Claude Code integration surface, and built-in tool schemas such as `Agent`, `TaskOutput`, `Bash`, `Edit`, and `Write`.
 - [Claude Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview)
   Current setup and capability overview confirming SDK hooks, sessions, permissions, MCP, and bundled Claude Code behavior.
+- [Claude Agent SDK sessions](https://code.claude.com/docs/en/agent-sdk/sessions)
+  Official boundary for `listSessions()` and `getSessionMessages()`: local Claude Code / Agent SDK sessions, not Claude Home account conversation history.
 - [Claude Agent SDK TypeScript V2 preview](https://platform.claude.com/docs/en/agent-sdk/typescript-v2-preview)
   Preview reference for `createSession()` / `resumeSession()` and the newer session lifecycle shape.
 - [Claude API client SDKs](https://platform.claude.com/docs/en/api/client-sdks)
@@ -51,6 +63,16 @@
   Official telemetry export reference for Claude Code metrics, log events, traces, and subagent-related span attributes such as `agent_id`, `parent_agent_id`, and `subagent_type`.
 - [Automate workflows with hooks](https://code.claude.com/docs/en/hooks-guide)
   Quickstart examples for wiring command hooks and project-local hook scripts.
+- [Use Claude Cowork on web, desktop, and mobile](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile)
+  Official product guidance for the current Home surface that consolidates chat and Cowork entry points while preserving distinct work behavior.
+- [Open Claude Desktop with a link](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link)
+  Supported deep-link schemes for known Claude chats, Cowork tasks, and Code sessions; opening a known id is not a conversation-list API.
+- [Claude Compliance API: chats](https://platform.claude.com/docs/en/api/compliance/apps/chats)
+  Enterprise-only administrative chat metadata listing with a Compliance Access Key and an optional user filter.
+- [Compliance API content data](https://platform.claude.com/docs/en/manage-claude/compliance-content-data)
+  Scope and access requirements for Enterprise chat export, including the boundary between compliance data and Cowork activity.
+- [Export your Claude data](https://support.claude.com/en/articles/9450526-export-your-claude-data)
+  Supported manual account-data export for personal plans; useful evidence that this is not a live local observation surface.
 - [tanbiralam/claude-code source](https://github.com/tanbiralam/claude-code/tree/main/src)
   Implementation reference used to confirm current `agent_id` / `agent_type`, team config, teammate `sessionId`, and worktree metadata shapes; treat it as supporting evidence below official Claude docs, not a primary API contract.
 
@@ -95,6 +117,10 @@
 
 ## Visual / asset references
 
+- [Gherwit CAFE TILES - FREE](https://gherwit.itch.io/cafe-tiles-16x16)
+  Source for the street-café tables, chairs, shelf, plant, and coffee-machine sprite crops. Commercial and non-commercial use and modification are allowed; raw-pack resale/reposting is prohibited; credit is optional and appreciated.
+- [Gherwit CITY TILES - FREE](https://gherwit.itch.io/city-tiles)
+  Matching 16×16 source for the street-café storefront crop and exterior palette, under the same use and redistribution terms.
 - [PixelOffice asset pack](https://2dpig.itch.io/)
   Source style reference for the office visuals used in this repo.
 - [Justin's 16x16 Icon Pack](https://zeromatrix.itch.io/rpgiab-icons)

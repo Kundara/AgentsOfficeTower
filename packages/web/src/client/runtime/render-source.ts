@@ -239,65 +239,22 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return label + ": " + title;
       }
 
-      function notificationLabel(event) {
-        if (!event) {
-          return "";
-        }
-        switch (event.action) {
-          case "created":
-            return "Created";
-          case "deleted":
-            return "Deleted";
-          case "moved":
-            return "Moved";
-          case "edited":
-            return event.isImage ? "Updated" : "Edited";
-          case "ran":
-            return "Ran";
-          case "said":
-            return "Update";
-          default:
-            return "Changed";
-        }
-      }
-
-      function notificationKindClassForFileChange(action) {
-        switch (action) {
-          case "created":
-            return "create";
-          case "deleted":
-            return "blocked";
-          case "moved":
-            return "update";
-          default:
-            return "edit";
-        }
-      }
-
-      function extensionForNotificationPath(location) {
-        const normalized = String(location || "").split(/[?#]/)[0].toLowerCase();
-        const match = normalized.match(/[.]([a-z0-9]+)$/);
-        return match ? match[1] : "";
-      }
-
-      function isScriptFileChangeEvent(event) {
-        if (!event || (event.kind !== "fileChange" && event.type !== "fileChange")) {
-          return false;
-        }
-        const extension = extensionForNotificationPath(event.path || event.title || event.detail || "");
-        return [
-          "js", "jsx", "ts", "tsx", "mjs", "cjs", "css", "scss", "sass", "less", "html",
-          "py", "rb", "go", "rs", "java", "kt", "kts", "swift", "c", "cc", "cpp", "h",
-          "hpp", "cs", "php", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "sql",
-          "graphql", "gql", "vue", "svelte", "astro", "lua", "pl", "r"
-        ].includes(extension);
-      }
-
-      function scriptFileChangeIconUrl(event) {
-        return isScriptFileChangeEvent(event)
-          ? eventIconUrlForThreadItemType("scriptEdit") || "/assets/pixel-office/sprites/icons/thread-item/scriptEdit.png"
-          : null;
-      }
+      const {
+        notificationLabel,
+        notificationKindClassForFileChange,
+        extensionForNotificationPath,
+        isScriptFileChangeEvent,
+        scriptFileChangeIconUrl,
+        eventIconUrlForMethod,
+        eventIconUrlForThreadItemType,
+        eventIconUrlForActivityType,
+        eventIconUrlForDashboardEvent,
+        threadHistoryEntryTimeMs,
+        historyToneForEvent,
+        historyBodyForEvent,
+        threadEntryExpansionStateKey,
+        threadEntryLooksLong
+      } = createEventPresentation({ eventIconUrls, threadItemIconUrls });
 
       function notificationFileName(projectRoot, location, fallback = "") {
         const cleaned = cleanReportedPath(projectRoot, location);
@@ -346,83 +303,6 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           linesAdded: null,
           linesRemoved: null
         };
-      }
-
-      function eventIconUrlForMethod(method) {
-        if (typeof method !== "string" || method.length === 0) {
-          return null;
-        }
-        if (Object.prototype.hasOwnProperty.call(eventIconUrls, method)) {
-          return eventIconUrls[method];
-        }
-        if (method === "item/fileChange/patchUpdated") {
-          return eventIconUrls["item/fileChange/outputDelta"] || null;
-        }
-        if (method === "item/commandExecution/terminalInteraction") {
-          return eventIconUrls["item/commandExecution/outputDelta"] || null;
-        }
-        if (
-          method === "item/mcpToolCall/progress"
-          || method === "mcpServer/startupStatus/updated"
-          || method === "mcpServer/oauthLogin/completed"
-          || method === "hook/started"
-          || method === "hook/completed"
-        ) {
-          return eventIconUrls["item/tool/call"] || null;
-        }
-        if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
-          return eventIconUrls["item/commandExecution/requestApproval"] || null;
-        }
-        if (method === "turn/interrupted" || method === "turn/failed") {
-          return eventIconUrls["turn/completed"] || null;
-        }
-        return null;
-      }
-
-      function eventIconUrlForThreadItemType(type) {
-        if (typeof type !== "string" || type.length === 0) {
-          return null;
-        }
-        if (Object.prototype.hasOwnProperty.call(threadItemIconUrls, type)) {
-          return threadItemIconUrls[type];
-        }
-        return null;
-      }
-
-      function eventIconUrlForActivityType(type, options = {}) {
-        switch (type) {
-          case "approval":
-            return eventIconUrlForMethod(
-              options.approvalType === "fileChange"
-                ? "item/fileChange/requestApproval"
-                : "item/commandExecution/requestApproval"
-            );
-          case "input":
-            return eventIconUrlForMethod("item/tool/requestUserInput");
-          default:
-            return options.isCommand ? null : eventIconUrlForThreadItemType(type);
-        }
-      }
-
-      function eventIconUrlForDashboardEvent(event) {
-        if (!event) {
-          return null;
-        }
-        const itemIconUrl = eventIconUrlForThreadItemType(event.itemType);
-        const methodIconUrl = eventIconUrlForMethod(event.method);
-        const scriptFileIconUrl = scriptFileChangeIconUrl(event);
-        if (scriptFileIconUrl) {
-          return scriptFileIconUrl;
-        }
-        if (
-          event.kind === "tool"
-          || event.kind === "subagent"
-          || event.method === "item/tool/call"
-          || event.method === "item/mcpToolCall/progress"
-        ) {
-          return itemIconUrl || methodIconUrl;
-        }
-        return methodIconUrl || itemIconUrl;
       }
 
       function isNeedsUserMarkerAgent(agent) {
@@ -834,22 +714,6 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         });
       }
 
-      function latestTypedMessageEvent(snapshot, agent) {
-        if (!snapshot || !agent || !agent.threadId) {
-          return null;
-        }
-        const matching = (snapshot.events || [])
-          .filter((event) => event.threadId === agent.threadId && event.kind === "message");
-        if (matching.length === 0) {
-          return null;
-        }
-        return matching.sort((left, right) => {
-          const leftAt = Date.parse(left.createdAt || "");
-          const rightAt = Date.parse(right.createdAt || "");
-          return (Number.isFinite(rightAt) ? rightAt : 0) - (Number.isFinite(leftAt) ? leftAt : 0);
-        })[0] || null;
-      }
-
       function notificationDescriptor(snapshot, agent, previous) {
         const event = agent.activityEvent;
         const stateChanged = !previous || previous.state !== agent.state || previous.detail !== agent.detail;
@@ -1051,65 +915,6 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return \`<div class="\${escapeHtml(className)}"\${styleAttr}><div class="agent-hover-title"><strong\${titleClassAttr}>\${escapeHtml(hoverTitle)}</strong></div>\${worktreeHtml}<div class="\${escapeHtml(summaryClass)}">\${escapeHtml(summary.text)}</div>\${actionHtml}<div class="agent-hover-meta">\${meta}</div></div>\`;
       }
 
-      function threadHistoryEntryTimeMs(entry) {
-        if (!entry || typeof entry.createdAt !== "string") {
-          return 0;
-        }
-        const value = Date.parse(entry.createdAt);
-        return Number.isFinite(value) ? value : 0;
-      }
-
-      function historyToneForEvent(event) {
-        if (!event) {
-          return { tone: "system", label: "Note" };
-        }
-        if (event.kind === "message") {
-          if (
-            event.method === "thread/read/agentMessage"
-            || event.method === "item/agentMessage/delta"
-            || event.itemType === "agentMessage"
-          ) {
-            return { tone: "agent", label: "Agent" };
-          }
-          if (event.method && event.method.startsWith("item/reasoning/")) {
-            return { tone: "thinking", label: "Think" };
-          }
-          return { tone: "agent", label: "Agent" };
-        }
-        if (event.kind === "approval") {
-          return { tone: "waiting", label: "Wait" };
-        }
-        if (event.kind === "input") {
-          return { tone: "input", label: "Ask" };
-        }
-        if (event.kind === "command") {
-          return { tone: "run", label: "Run" };
-        }
-        if (event.kind === "fileChange") {
-          return { tone: "edit", label: "Edit" };
-        }
-        if (event.kind === "tool") {
-          return { tone: "tool", label: "Tool" };
-        }
-        if (event.kind === "turn") {
-          return { tone: "plan", label: "Turn" };
-        }
-        return { tone: "system", label: "Note" };
-      }
-
-      function historyBodyForEvent(event) {
-        if (!event) {
-          return "";
-        }
-        if (event.kind === "approval" || event.kind === "input") {
-          return event.detail || event.title || "Waiting for input.";
-        }
-        if (event.kind === "command" || event.kind === "fileChange" || event.kind === "tool" || event.kind === "turn") {
-          return event.detail || event.title || event.method || "Updated.";
-        }
-        return event.detail || event.title || "Updated.";
-      }
-
       function threadHistoryIconUrl(entry) {
         if (entry && entry.iconUrl) {
           return entry.iconUrl;
@@ -1135,19 +940,6 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           default:
             return eventIconUrlForThreadItemType("agentMessage");
         }
-      }
-
-      function threadEntryExpansionStateKey(threadId, entryKey) {
-        return [threadId || "", entryKey || ""].join("::");
-      }
-
-      function threadEntryLooksLong(body) {
-        const text = String(body || "");
-        if (!text.trim()) {
-          return false;
-        }
-        const explicitLines = text.split(/\\r\\n|\\r|\\n/).length;
-        return explicitLines > 8 || text.length > 520;
       }
 
       function threadEntryExpanded(threadId, entryKey) {
@@ -1581,26 +1373,10 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         return pixelOffice.props.workstation;
       }
 
-      function buildPixiSpriteDef(sprite, x, y, scale, z, options = {}) {
-        return {
-          kind: "sprite",
-          sprite: sprite.url,
-          x: Math.round(x),
-          y: Math.round(y),
-          width: Math.round(sprite.w * scale),
-          height: Math.round(sprite.h * scale),
-          flipX: options.flipX === true,
-          enteringReveal: options.enteringReveal === true,
-          alpha: options.alpha ?? 1,
-          depthFootY: Number.isFinite(options.depthFootY) ? Math.round(options.depthFootY) : null,
-          depthBaseY: Number.isFinite(options.depthBaseY) ? Math.round(options.depthBaseY) : null,
-          depthRow: Number.isFinite(options.depthRow) ? Math.round(options.depthRow) : null,
-          depthBias: Number.isFinite(options.depthBias) ? Number(options.depthBias) : null,
-          z
-        };
-      }
-
       function buildCubicleCellVisualModel(snapshot, agent, role, x, y, boothWidth, boothHeight, compact, options = {}) {
+        if (snapshot.sceneKind === "street-cafe" && pixelOffice.cafe) {
+          return buildCafeTableVisualModel(snapshot, agent, x, y, boothWidth, boothHeight, compact, options);
+        }
         const DESK_SHELL_DEPTH_BIAS = 120;
         const CHAIR_DEPTH_BIAS = 180;
         const SEATED_AVATAR_DEPTH_BIAS = 760;

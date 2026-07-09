@@ -9,11 +9,33 @@ const { renderWideOfficeAuditHtml } = require("../dist/render/render-wide-office
 const { renderZOrderAuditHtml } = require("../dist/render-z-order-audit-html.js");
 
 function readClientSource(...segments) {
-  return readFileSync(join(__dirname, "../src/client", ...segments), "utf8");
+  const source = readFileSync(join(__dirname, "../src/client", ...segments), "utf8");
+  return segments.length === 1 && segments[0] === "styles.css"
+    ? `${source}\n${readFileSync(join(__dirname, "../src/client/tower-visuals.css"), "utf8")}\n${readFileSync(join(__dirname, "../src/client/notifications.css"), "utf8")}`
+    : source;
 }
 
 function readRuntimeSource(fileName) {
   return readClientSource("runtime", fileName);
+}
+
+const navigationRuntimeFiles = [
+  "navigation-pathing-source.ts",
+  "navigation-overlays-source.ts",
+  "floating-orchestrator-source.ts",
+  "navigation-source.ts",
+  "office-scene-lifecycle-source.ts",
+  "furniture-interaction-source.ts",
+  "attention-panel-source.ts"
+];
+const sceneRuntimeFiles = ["cafe-scene-source.ts", "scene-source.ts", "scene-renderer-source.ts"];
+
+function readNavigationRuntime() {
+  return navigationRuntimeFiles.map(readRuntimeSource).join("\n");
+}
+
+function readSceneRuntime() {
+  return sceneRuntimeFiles.map(readRuntimeSource).join("\n");
 }
 
 test("renderHtml loads external client assets and bootstrap config", () => {
@@ -58,6 +80,60 @@ test("renderHtml includes the global split-worktrees toggle", () => {
 
   assert.match(html, /id="split-worktrees-button"/);
   assert.match(html, /Split Worktrees/);
+});
+
+test("renderHtml exposes an accessible independently scrollable sessions region", () => {
+  const html = renderHtml({
+    host: "127.0.0.1",
+    port: 4181,
+    explicitProjects: false,
+    projects: [{ root: "/tmp/project", label: "project" }]
+  });
+
+  assert.match(html, /<aside id="session-panel" class="panel sessions-panel" aria-labelledby="sessions-panel-title">/);
+  assert.match(html, /<h2 id="sessions-panel-title">Sessions<\/h2>/);
+  assert.match(html, /id="session-list" class="panel-body session-list" role="list" tabindex="0" aria-describedby="rooms-path"/);
+});
+
+test("sessions list keeps status, actions, wrapping, focus, scrolling, and responsive layout explicit", () => {
+  const uiSource = readRuntimeSource("ui-source.ts");
+  const attentionSource = readRuntimeSource("attention-panel-source.ts");
+  const stylesSource = readClientSource("styles.css");
+
+  assert.ok(uiSource.includes("function sessionCardState(agent) {"));
+  assert.ok(uiSource.includes("function renderSessionHierarchy(projects, entries, renderEntry) {"));
+  assert.ok(uiSource.includes("function sessionHierarchySummary(projects) {"));
+  assert.ok(uiSource.includes('return { key: "needs-you", label: "Needs you" };'));
+  assert.ok(uiSource.includes("return Boolean(agent && isBusyAgent(agent));"));
+  assert.ok(uiSource.includes('class="session-card" role="listitem" tabindex="0"'));
+  assert.ok(uiSource.includes('data-session-key="\\${escapeHtml(sessionKey)}"'));
+  assert.ok(uiSource.includes('class="card-actions session-card-actions" aria-label="Session actions"'));
+  assert.ok(uiSource.includes('class="session-group session-group-\\${key}" role="group" aria-labelledby="\\${titleId}"'));
+  assert.ok(uiSource.includes('class="session-group-items" role="list"'));
+  assert.ok(uiSource.includes('aria-label="Needs You, \\${escapeHtml(String(needsYou.length))} sessions"'));
+  assert.ok(uiSource.includes('.slice(0, SESSION_RECENT_LEAD_LIMIT);'));
+  assert.match(
+    uiSource,
+    /return needsYouHtml\n\s+\+ renderSessionGroup\("Active", "active", active, renderEntry\)\n\s+\+ renderSessionGroup\("Recent", "recent", recent, renderEntry\);/
+  );
+  assert.ok(uiSource.includes("sessionHierarchySummary(sessions)"));
+  assert.ok(uiSource.includes("sessionHierarchySummary([sessionSnapshot || snapshot])"));
+  assert.ok(uiSource.includes("preserveScroll: true, preserveFocus: true"));
+  assert.ok(attentionSource.includes('class="needs-you-list" role="list"'));
+  assert.ok(attentionSource.includes('class="needs-you-item" role="listitem" data-session-key='));
+  assert.ok(stylesSource.includes(".sessions-panel {"));
+  assert.ok(stylesSource.includes("max-height: calc(100vh - 24px);"));
+  assert.ok(stylesSource.includes(".session-list:focus-visible {"));
+  assert.ok(stylesSource.includes("overflow-y: auto;"));
+  assert.ok(stylesSource.includes("scrollbar-gutter: stable;"));
+  assert.ok(stylesSource.includes(".session-card:focus-visible {"));
+  assert.ok(stylesSource.includes("-webkit-line-clamp: 2;"));
+  assert.ok(stylesSource.includes(".session-group-header {"));
+  assert.ok(stylesSource.includes(".session-group-items {"));
+  assert.ok(stylesSource.includes(".session-group-needs {"));
+  assert.ok(stylesSource.includes("position: sticky;"));
+  assert.ok(stylesSource.includes("overscroll-behavior-y: auto;"));
+  assert.ok(stylesSource.includes("@media (max-width: 860px) {"));
 });
 
 test("renderHtml includes explicit shared-room save and clear controls", () => {
@@ -125,18 +201,18 @@ test("wide office audit spawns many fake avatars for horizontal scroll validatio
   assert.match(html, /\/client\/app\.js\?v=/);
 });
 
-test("client bootstrap runs the generated runtime module instead of evaling a source string", () => {
-  const indexSource = readClientSource("index.ts");
-  const runtimeModuleSource = readClientSource("app-runtime.ts");
+test("client build assembles the runtime in memory without eval or a tracked generated module", () => {
+  const buildSource = readFileSync(join(__dirname, "../scripts/build-client.mjs"), "utf8");
+  const generatorSource = readFileSync(join(__dirname, "../scripts/generate-runtime-module.mjs"), "utf8");
 
-  assert.ok(indexSource.includes('import { startClientApp } from "./app-runtime";'));
-  assert.ok(indexSource.includes("startClientApp();"));
-  assert.doesNotMatch(indexSource, /new Function\(/);
-  assert.match(
-    runtimeModuleSource,
-    /^\/\/ @ts-nocheck\n\/\/ Generated by packages\/web\/scripts\/generate-runtime-module\.mjs/m
-  );
-  assert.ok(runtimeModuleSource.includes("export function startClientApp(): void {"));
+  assert.match(buildSource, /const runtimeModuleSource = await generateRuntimeModuleSource\(\);/);
+  assert.match(buildSource, /stdin: \{/);
+  assert.match(buildSource, /startClientApp\(\);/);
+  assert.doesNotMatch(buildSource, /entryPoints:/);
+  assert.doesNotMatch(generatorSource, /\bFunction\(/);
+  assert.match(generatorSource, /ts\.createSourceFile/);
+  assert.doesNotMatch(generatorSource, /writeFile/);
+  assert.match(generatorSource, /export async function generateRuntimeModuleSource\(\)/);
 });
 
 test("client runtime keeps current local desk-live work on a workstation through notLoaded transport gaps", () => {
@@ -268,7 +344,7 @@ test("client runtime gives finished subagents a longer workstation cooldown than
 test("client runtime renders each subagent depth at 75 percent of its parent depth", () => {
   const layoutSource = readRuntimeSource("layout-source.ts");
   const renderSource = readRuntimeSource("render-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const sceneSource = readSceneRuntime();
 
   assert.ok(layoutSource.includes("const rawDepth = Number(agent && agent.depth);"));
   assert.ok(layoutSource.includes("const nestedDepth = Number.isFinite(rawDepth)"));
@@ -299,7 +375,7 @@ test("client runtime only keeps ordinary local desks for current workload", () =
 });
 
 test("runtime source keeps desk seats stable when a second workstation appears in a pod", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const sceneSource = readSceneRuntime();
 
   assert.ok(sceneSource.includes("const tile = sceneTileSize(compact);"));
   assert.ok(sceneSource.includes("const leftCellX = 0;"));
@@ -320,8 +396,8 @@ test("runtime source keeps running and validating workers seated at their workst
 
 test("runtime source adds above-head state markers for needs-user, thinking, planning, and blocked-error states", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(renderSource.includes('function stateMarkerIconUrlForAgent(agent) {'));
   assert.ok(renderSource.includes('function shouldShowThinkingMarker(agent) {'));
@@ -341,8 +417,8 @@ test("runtime source adds above-head state markers for needs-user, thinking, pla
 
 test("runtime source adds transient turn-phase badges for started, completed, interrupted, and failed turns", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(renderSource.includes("const TURN_SIGNAL_MAX_AGE_MS = 6000;"));
   assert.ok(renderSource.includes("function recentTurnSignalForAgent(snapshot, agent) {"));
@@ -361,8 +437,8 @@ test("runtime source adds transient turn-phase badges for started, completed, in
 
 test("runtime source keeps typed plan, command, file, and tool events out of mock activity cues", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(renderSource.includes("const ACTIVITY_CUE_MAX_AGE_MS = 4800;"));
   assert.ok(renderSource.includes("function activityCueForEvent(event) {"));
@@ -383,10 +459,10 @@ test("runtime source keeps typed plan, command, file, and tool events out of moc
 
 test("runtime source renders a scene-native office wall dashboard from snapshot activity", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
-  const stylesSource = readClientSource("styles-source.ts");
+  const stylesSource = readClientSource("styles.css");
   const servedStyles = readClientSource("styles.css");
 
   assert.ok(renderSource.includes("function activityWallSnapshot(snapshot)"));
@@ -482,7 +558,7 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
 
 test("runtime source rerenders dragged furniture immediately without per-move storage writes", () => {
   const settingsSource = readRuntimeSource("settings-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
 
   assert.ok(settingsSource.includes("function furnitureLayoutOverrideToken(projectRoot)"));
@@ -499,8 +575,8 @@ test("runtime source rerenders dragged furniture immediately without per-move st
 
 test("runtime source maps approval waits, input waits, and resolved requests into transient lifecycle cues", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(renderSource.includes('return { mode: "approval", label: "WAIT" };'));
   assert.ok(renderSource.includes('return { mode: "input", label: "ASK" };'));
@@ -513,8 +589,8 @@ test("runtime source maps approval waits, input waits, and resolved requests int
 });
 
 test("request lifecycle cues include mode-specific icon adornments and icon-side animation", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(navigationSource.includes("const ACTIVITY_CUE_ICON_WIDTH = 8;"));
   assert.ok(navigationSource.includes("const ACTIVITY_CUE_ICON_GAP = 3;"));
@@ -531,8 +607,8 @@ test("request lifecycle cues include mode-specific icon adornments and icon-side
 
 test("recent workstation request activity also creates non-text desk effects beyond the floating cue chip", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(renderSource.includes("function requestCueProfileForAgent(agent, cue, event = null) {"));
   assert.ok(renderSource.includes("requestProfile: requestCueProfileForAgent(agent, cue, event),"));
@@ -562,8 +638,8 @@ test("recent workstation request activity also creates non-text desk effects bey
 test("runtime source lets scene-agent clicks open a stable thread history card", () => {
   const settingsSource = readRuntimeSource("settings-source.ts");
   const renderSource = readRuntimeSource("render-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
   const stylesSource = readClientSource("styles.css");
 
@@ -577,7 +653,7 @@ test("runtime source lets scene-agent clicks open a stable thread history card",
   assert.ok(renderSource.includes('["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"].includes(agent.activityEvent.type)'));
   assert.ok(renderSource.includes('const isHermes = agent.source === "hermes" || agent.provenance === "hermes";'));
   assert.ok(renderSource.includes("if (title === latest || (!isHermes && title === detail)) {"));
-  assert.ok(renderSource.includes("function threadEntryLooksLong(body) {"));
+  assert.ok(readClientSource("runtime/event-presentation.ts").includes("function threadEntryLooksLong(body: unknown)"));
   assert.ok(renderSource.includes('data-action="toggle-thread-entry"'));
   assert.ok(renderSource.includes('data-thread-entry-key='));
   assert.ok(renderSource.includes('key: ["latest", agent.threadId].join("::"),'));
@@ -647,8 +723,8 @@ test("runtime source lets scene-agent clicks open a stable thread history card",
 });
 
 test("client runtime does not rebuild the Pixi room scene for resize-only updates", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime();
 
   assert.ok(navigationSource.includes("function syncOfficeRendererViewport(renderer, model) {"));
   assert.ok(navigationSource.includes("setPixelStyleIfChanged(renderer.host, \"height\", scaledHeight + \"px\");"));
@@ -676,27 +752,27 @@ test("client runtime does not rebuild the Pixi room scene for resize-only update
   );
 });
 
-test("client runtime tweens workstation shell and same-seat moves across layout refreshes", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+test("client runtime tweens workstation furniture but routes grounded same-seat moves through navigation", () => {
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime();
 
   assert.ok(navigationSource.includes("const WORKSTATION_LAYOUT_TWEEN_MS = 520;"));
-  assert.ok(navigationSource.includes("const MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX = 8;"));
+  assert.ok(navigationSource.includes("const MAX_SEATED_NAVIGATION_DISTANCE_PX = 8;"));
   assert.ok(navigationSource.includes("const previousWorkstationLayoutStates = new Map(renderer.workstationLayoutStates || []);"));
   assert.ok(navigationSource.includes("function animateWorkstationLayoutNodes(kind, item, nodes) {"));
   assert.ok(navigationSource.includes('renderer.animatedSprites.push({\n            kind: "layout-shift",'));
   assert.ok(navigationSource.includes('animateWorkstationLayoutNodes("desk", desk, deskNodes);'));
   assert.ok(navigationSource.includes('animateWorkstationLayoutNodes("office", office, officeNodes);'));
-  assert.ok(navigationSource.includes("function startSeatedLayoutShift(motionState, agent) {"));
-  assert.ok(navigationSource.includes("motionState.seatShift = {"));
-  assert.ok(navigationSource.includes("return Number.isFinite(distance) && distance <= MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX;"));
-  assert.ok(navigationSource.includes("if (!Number.isFinite(shiftDistance) || shiftDistance > MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX) {"));
-  assert.ok(navigationSource.includes("distancePx: shiftDistance,"));
-  assert.ok(navigationSource.includes("const seatedLayoutShifting = startSeatedLayoutShift(previousState, agent);"));
-  assert.ok(navigationSource.includes("if (autonomousResting || seatedLayoutShifting) {"));
+  assert.ok(navigationSource.includes("function startSeatedNavigation(motionState, agent, room, nav, targetTile) {"));
+  assert.ok(navigationSource.includes("{ x: motionState.currentX, y: motionState.currentY }"));
+  assert.ok(navigationSource.includes("return Number.isFinite(distance) && distance <= MAX_SEATED_NAVIGATION_DISTANCE_PX;"));
+  assert.ok(navigationSource.includes("if (!Number.isFinite(shiftDistance) || shiftDistance > MAX_SEATED_NAVIGATION_DISTANCE_PX) {"));
+  assert.ok(navigationSource.includes("const seatedLayoutNavigating = startSeatedNavigation(previousState, agent, room, nav, targetTile);"));
+  assert.ok(navigationSource.includes("if (autonomousResting || seatedLayoutNavigating) {"));
   assert.ok(sceneSource.includes('entry.kind !== "layout-shift"'));
   assert.ok(sceneSource.includes('if (entry.kind === "layout-shift") {'));
-  assert.ok(sceneSource.includes("if (entry.seatShift) {"));
+  assert.doesNotMatch(sceneSource, /entry\.seatShift/);
+  assert.doesNotMatch(navigationSource, /motionState\.seatShift/);
   assert.ok(sceneSource.includes("workstationLayoutStates: new Map(),"));
 });
 
@@ -720,8 +796,8 @@ test("client runtime keeps workspace floor order stable across activity refreshe
 });
 
 test("client runtime clamps avatar walking delta after scene rebuilds", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime();
 
   assert.ok(sceneSource.includes("const OFFICE_MOTION_DEFAULT_DELTA_MS = 16;"));
   assert.ok(sceneSource.includes("const OFFICE_MOTION_MAX_DELTA_MS = 50;"));
@@ -740,7 +816,7 @@ test("client runtime clamps avatar walking delta after scene rebuilds", () => {
   assert.ok(navigationSource.includes("renderer.motionDeltaClampUntil = performance.now() + OFFICE_MOTION_REBUILD_DELTA_CLAMP_MS;"));
   assert.match(
     navigationSource,
-    /const seatedLayoutShifting = startSeatedLayoutShift\(previousState, agent\);[\s\S]*?renderer\.motionStates\.set\(agentKey, previousState\);[\s\S]*?syncMotionStateVisualPosition\(previousState\);\n\s+return avatarVisual\.nodes;/
+    /const seatedLayoutNavigating = startSeatedNavigation\(previousState, agent, room, nav, targetTile\);[\s\S]*?renderer\.motionStates\.set\(agentKey, previousState\);[\s\S]*?syncMotionStateVisualPosition\(previousState\);\n\s+return avatarVisual\.nodes;/
   );
   assert.match(
     navigationSource,
@@ -751,8 +827,8 @@ test("client runtime clamps avatar walking delta after scene rebuilds", () => {
 
 test("runtime source adds stronger state-specific animation for waiting, blocked, and validating work", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(renderSource.includes('color: state === "validating" ? 0x69c7ff : 0x4bd69f,'));
   assert.ok(renderSource.includes('pulse: state === "validating",'));
@@ -767,8 +843,8 @@ test("runtime source adds stronger state-specific animation for waiting, blocked
 });
 
 test("runtime source gives seated active states distinct motion profiles instead of one generic bob", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(navigationSource.includes('stateValue === "planning" ? "planning"'));
   assert.ok(navigationSource.includes('stateValue === "scanning" ? "scanning"'));
@@ -787,7 +863,7 @@ test("runtime source gives seated active states distinct motion profiles instead
 });
 
 test("runtime source adds completion summaries and clear actions for multi-question Needs You inputs", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
 
   assert.ok(navigationSource.includes("function needsUserInputCompletion(need) {"));
@@ -801,7 +877,7 @@ test("runtime source adds completion summaries and clear actions for multi-quest
 });
 
 test("runtime source lets queue items open inline reply composers for general local Codex input prompts", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
 
   assert.ok(navigationSource.includes("const canReplyToInput = Boolean("));
@@ -812,8 +888,8 @@ test("runtime source lets queue items open inline reply composers for general lo
 });
 
 test("runtime source preserves workstation entering-reveal flags for the Pixi flicker animation", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts").replace(/\r\n/g, "\n");
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime().replace(/\r\n/g, "\n");
 
   assert.ok(sceneSource.includes("enteringReveal: options.enteringReveal === true,"));
   assert.ok(sceneSource.includes("enteringReveal: shouldRevealWorkstation(snapshot.projectRoot, agent, entry.slot.id),"));
@@ -836,7 +912,7 @@ test("runtime source preserves workstation entering-reveal flags for the Pixi fl
 
 test("blocked failure hover summaries prefer the current error detail over stale latest messages", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const stylesSource = readClientSource("styles-source.ts");
+  const stylesSource = readClientSource("styles.css");
 
   assert.ok(renderSource.includes("if (isFailureBlockedAgent(agent) && detail) {"));
   assert.ok(renderSource.includes('return { text: detail, source: "agent", emphasis: "error" };'));
@@ -904,7 +980,7 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
 
 test("workspace floors show multiplayer participants and expose a shared toggle", () => {
   const settingsSource = readRuntimeSource("settings-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const sceneSource = readSceneRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
   const styles = readClientSource("styles.css");
 
@@ -918,8 +994,8 @@ test("workspace floors show multiplayer participants and expose a shared toggle"
 
 test("runtime source exposes hat preview controls and hat-attached avatar rendering", () => {
   const layoutSource = readRuntimeSource("layout-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
   const styles = readClientSource("styles.css");
 
@@ -942,8 +1018,8 @@ test("runtime source exposes hat preview controls and hat-attached avatar render
 });
 
 test("navigation source depth-sorts agents and desk shell sprites by feet position instead of fixed layers", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
   const renderSource = readRuntimeSource("render-source.ts");
 
   assert.ok(navigationSource.includes("function sceneFootDepth(y, height, bias = 0, tileSize = 16, depthBaseY = 0, depthRow = null) {"));
@@ -979,9 +1055,9 @@ test("navigation source depth-sorts agents and desk shell sprites by feet positi
   assert.ok(renderSource.includes("const workstationBoundsHeight = sceneTile * 2;"));
   assert.ok(renderSource.includes("const workstationSortFootY = stationBoundsY + workstationBoundsHeight - 1;"));
   assert.ok(renderSource.includes("const workstationSortRow = Math.floor((workstationSortFootY - depthBaseY) / sceneTile);"));
-  assert.ok(renderSource.includes("depthBaseY: Number.isFinite(options.depthBaseY) ? Math.round(options.depthBaseY) : null,"));
-  assert.ok(renderSource.includes("depthRow: Number.isFinite(options.depthRow) ? Math.round(options.depthRow) : null,"));
-  assert.ok(renderSource.includes("enteringReveal: options.enteringReveal === true,"));
+  assert.ok(sceneSource.includes("depthBaseY: Number.isFinite(options.depthBaseY) ? Math.round(options.depthBaseY) : null,"));
+  assert.ok(sceneSource.includes("depthRow: Number.isFinite(options.depthRow) ? Math.round(options.depthRow) : null,"));
+  assert.ok(sceneSource.includes("enteringReveal: options.enteringReveal === true,"));
   assert.ok(renderSource.includes("const DESK_SHELL_DEPTH_BIAS = 120;"));
   assert.ok(renderSource.includes("const CHAIR_DEPTH_BIAS = 180;"));
   assert.ok(renderSource.includes("const SEATED_AVATAR_DEPTH_BIAS = 760;"));
@@ -1005,7 +1081,7 @@ test("navigation source depth-sorts agents and desk shell sprites by feet positi
 });
 
 test("debug tiles expose visible workstation and avatar pivot markers", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const navigationSource = readNavigationRuntime();
   const renderSource = readRuntimeSource("render-source.ts");
 
   assert.ok(navigationSource.includes("function addDebugPivot(x, y, color) {"));
@@ -1068,23 +1144,18 @@ test("workspace focus lets the expanded floor fill the full panel rect", () => {
 });
 
 test("workspace office maps keep wide workstation layouts horizontally scrollable", () => {
-  const stylesSource = readClientSource("styles-source.ts").replace(/\r\n/g, "\n");
   const servedStyles = readClientSource("styles.css").replace(/\r\n/g, "\n");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
 
-  assert.match(
-    stylesSource,
-    /\.office-map-host \{\n\s+position: relative;\n\s+width: 100%;\n\s+min-height: 0;\n\s+overflow-x: auto;\n\s+overflow-y: hidden;/
-  );
   assert.match(
     servedStyles,
     /\.office-map-host \{\n\s+position: relative;\n\s+width: 100%;\n\s+min-height: 0;\n\s+overflow-x: auto;\n\s+overflow-y: hidden;/
   );
-  assert.ok(stylesSource.includes("overflow-clip-margin: 360px;"));
+  assert.ok(servedStyles.includes("overflow-clip-margin: 360px;"));
   assert.match(
-    stylesSource,
-    /\.tower-floor-body \.scene-fit\.compact \{\n\s+min-height: 0;\n\s+\}/
+    servedStyles,
+    /\.tower-floor-body \.scene-fit\.compact \{\n\s+min-height: 0;\n\s*\}/
   );
   assert.ok(
     navigationSource.includes("const scaledWidth = Math.max(1, Math.round(model.width * scale));"),
@@ -1099,16 +1170,17 @@ test("workspace office maps keep wide workstation layouts horizontally scrollabl
     "room wall and floor art should stretch to the synthetic visual width"
   );
   assert.ok(
-    readRuntimeSource("scene-source.ts").includes("fitWidth: baseMaxX * tile,"),
+    readSceneRuntime().includes("fitWidth: baseMaxX * tile,"),
     "the renderer should remember the unexpanded room width for scale fitting"
   );
   assert.ok(
-    readRuntimeSource("scene-source.ts").includes("function expandRoomVisualWidth(roomModel, nextVisualWidth) {"),
+    readSceneRuntime().includes("function expandRoomVisualWidth(roomModel, nextVisualWidth) {"),
     "wide desk columns should expand the rendered room and scene model"
   );
   assert.ok(uiSource.includes("function handleOfficeMapHorizontalWheel(event) {"));
-  assert.ok(uiSource.includes("function officeMapHorizontalMaxScrollLeft(host) {"));
-  assert.ok(uiSource.includes('const canvas = host.querySelector("[data-office-map-canvas]");'));
+  const horizontalWheelSource = readClientSource("runtime/horizontal-wheel.ts");
+  assert.ok(horizontalWheelSource.includes("export function officeMapHorizontalMaxScrollLeft"));
+  assert.ok(horizontalWheelSource.includes('const canvas = host.querySelector("[data-office-map-canvas]");'));
   assert.ok(uiSource.includes("const maxScrollLeft = officeMapHorizontalMaxScrollLeft(host);"));
   assert.ok(uiSource.includes("host.scrollLeft = nextScrollLeft;"));
   assert.ok(uiSource.includes('document.body.addEventListener("wheel", handleOfficeMapHorizontalWheel, { passive: false });'));
@@ -1131,7 +1203,7 @@ test("runtime source sanitizes path-heavy labels and latest messages with the pr
   const layoutSource = readRuntimeSource("layout-source.ts");
   const renderSource = readRuntimeSource("render-source.ts");
   const uiSource = readRuntimeSource("ui-source.ts");
-  const stylesSource = readClientSource("styles-source.ts");
+  const stylesSource = readClientSource("styles.css");
   const servedStyles = readClientSource("styles.css");
 
   assert.ok(layoutSource.includes("function compactPathyLabel(snapshot, label) {"));
@@ -1148,7 +1220,7 @@ test("runtime source sanitizes path-heavy labels and latest messages with the pr
 
 test("agent hover names use source brand color classes", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const stylesSource = readClientSource("styles-source.ts");
+  const stylesSource = readClientSource("styles.css");
   const servedStyles = readClientSource("styles.css");
 
   assert.ok(renderSource.includes("function agentBrandClass(agent) {"));
@@ -1182,17 +1254,39 @@ test("runtime source only keeps finished subagents in recent sessions during the
 });
 
 test("runtime source section files now start on function boundaries instead of continuing previous functions", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const sceneSource = readSceneRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
+  const generatorSource = readFileSync(join(__dirname, "../scripts/generate-runtime-module.mjs"), "utf8");
+  const orderedSections = [
+    ["cafe-scene-source.ts", "CLIENT_RUNTIME_CAFE_SCENE_SOURCE"],
+    ["scene-source.ts", "CLIENT_RUNTIME_SCENE_SOURCE"],
+    ["scene-renderer-source.ts", "CLIENT_RUNTIME_SCENE_RENDERER_SOURCE"],
+    ...navigationRuntimeFiles.map((fileName, index) => [fileName, [
+      "CLIENT_RUNTIME_NAVIGATION_PATHING_SOURCE",
+      "CLIENT_RUNTIME_NAVIGATION_OVERLAYS_SOURCE",
+      "CLIENT_RUNTIME_FLOATING_ORCHESTRATOR_SOURCE",
+      "CLIENT_RUNTIME_NAVIGATION_SOURCE",
+      "CLIENT_RUNTIME_OFFICE_SCENE_LIFECYCLE_SOURCE",
+      "CLIENT_RUNTIME_FURNITURE_INTERACTION_SOURCE",
+      "CLIENT_RUNTIME_ATTENTION_PANEL_SOURCE"
+    ][index]])
+  ];
 
-  assert.match(sceneSource, /^export const CLIENT_RUNTIME_SCENE_SOURCE = `\s*function buildLeadClusters/);
-  assert.match(uiSource, /^export const CLIENT_RUNTIME_UI_SOURCE = `\s*function renderSessions/);
+  assert.match(readRuntimeSource("scene-source.ts"), /^export const CLIENT_RUNTIME_SCENE_SOURCE = `\s*function buildLeadClusters/);
+  assert.match(uiSource, /^export const CLIENT_RUNTIME_UI_SOURCE = `\s*function sessionCardState/);
+  let previousGeneratorOffset = -1;
+  for (const [fileName, exportName] of orderedSections) {
+    assert.match(readRuntimeSource(fileName), new RegExp("^export const " + exportName + " = `"));
+    const generatorOffset = generatorSource.indexOf(`"src/client/runtime/${fileName}"`);
+    assert.ok(generatorOffset > previousGeneratorOffset, `${fileName} should keep its runtime generator order`);
+    previousGeneratorOffset = generatorOffset;
+  }
 });
 
 test("runtime source merges worktrees by repo and renders worktree badges in hover and split floor headers", () => {
   const layoutSource = readRuntimeSource("layout-source.ts");
   const renderSource = readRuntimeSource("render-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const sceneSource = readSceneRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
   const settingsSource = readRuntimeSource("settings-source.ts");
 
@@ -1212,7 +1306,7 @@ test("runtime source merges worktrees by repo and renders worktree badges in hov
   assert.ok(!renderSource.includes('" @ " + agent.network.peerHost'));
   assert.ok(sceneSource.includes('tower-floor-title-project'));
   assert.ok(sceneSource.includes('tower-floor-title-worktree'));
-  assert.ok(uiSource.includes('const selectableProjects = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)'));
+  assert.ok(uiSource.includes('const selectableProjects = state.globalSceneSettings?.splitWorktrees ? rawProjects : floorProjects;'));
   assert.ok(uiSource.includes('...selectableProjects.map((project) => {'));
   assert.ok(settingsSource.includes("splitWorktrees: Boolean(parsed && parsed.splitWorktrees)"));
 });
@@ -1246,7 +1340,7 @@ test("rec-room roster keeps space for recently visible resting leads that went a
 });
 
 test("runtime source limits visible rec-room resters to recent top-level leads", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts").replace(/\r\n/g, "\n");
+  const sceneSource = readSceneRuntime().replace(/\r\n/g, "\n");
 
   assert.ok(sceneSource.includes('const allRestingAgents = restingAgentsFor(snapshot, compact);'));
   assert.match(sceneSource, /\.filter\(\(agent\) =>\n\s*!agent\.parentThreadId/);
@@ -1282,7 +1376,7 @@ test("runtime source falls back to default rec layout when saved sofa columns ov
 
 test("runtime source resolves facility providers and service tiles from startup scene definitions", () => {
   const renderSource = readRuntimeSource("render-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const sceneSource = readSceneRuntime();
 
   assert.ok(renderSource.includes("function sceneHeldItemDefinition(itemId) {"));
   assert.ok(renderSource.includes("function normalizeFurnitureFacilityProvider(item, roomWidthTiles) {"));
@@ -1295,8 +1389,8 @@ test("runtime source resolves facility providers and service tiles from startup 
 });
 
 test("runtime source animates sliding room doors and autonomous resting-item trips", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime();
 
   assert.ok(sceneSource.includes('if (entry.autonomy && !entry.exiting && typeof renderer.updateAutonomousRestingMotion === "function") {'));
   assert.ok(sceneSource.includes('if (entry.kind === "thrown-item") {'));
@@ -1310,11 +1404,14 @@ test("runtime source animates sliding room doors and autonomous resting-item tri
 });
 
 test("runtime source starts new subagent arrivals from their parent", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime();
+  const settingsSource = readRuntimeSource("settings-source.ts");
 
   assert.ok(sceneSource.includes("parentThreadId: agent.parentThreadId || null"));
-  assert.ok(sceneSource.includes("parentKey: agent.parentThreadId"));
+  assert.ok(sceneSource.includes("parentKey: parentAgentKey(snapshot.projectRoot, agent)"));
+  assert.ok(sceneSource.includes("parentKey: parentAgentKey(snapshot.projectRoot, entry.agent)"));
+  assert.ok(settingsSource.includes('parentId.startsWith(\\`\\${sourceRoot}::\\`)'));
   assert.ok(navigationSource.includes("function parentSpawnPointForAgent(agent, parentState)"));
   assert.ok(navigationSource.includes("const enteringFromParent = !previousState && !previousRoomState && enteringAgentKeys.has(agent.key || agent.id) && Boolean(parentSpawnPoint);"));
   assert.ok(navigationSource.includes("const enteringFromDoor = enteringFromParent"));
@@ -1332,11 +1429,8 @@ test("runtime source keeps current agents in the map scene even when they are be
   const layoutSource = readRuntimeSource("layout-source.ts");
   const seatingSource = readRuntimeSource("seating-source.ts");
 
-  assert.ok(layoutSource.includes("function isLiveSceneAgent(agent) {"));
-  assert.ok(layoutSource.includes('agent.source === "hermes" && agent.sourceKind === "hermes:roaming"'));
-  assert.ok(layoutSource.includes('agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming"'));
+  assert.ok(seatingSource.includes("function isLiveSceneAgent(agent) {"));
   assert.ok(layoutSource.includes("return agent.isCurrent === true || agent.isOngoing === true || isRuntimeActiveLocalAgent(agent);"));
-  assert.ok(layoutSource.includes("return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;"));
   assert.ok(layoutSource.includes("const liveAgents = snapshot.agents.filter(isLiveSceneAgent);"));
   assert.ok(layoutSource.includes("const seenAgentIds = new Set();"));
   assert.ok(seatingSource.includes('agent.source === "hermes" && agent.sourceKind === "hermes:roaming"'));
@@ -1345,10 +1439,10 @@ test("runtime source keeps current agents in the map scene even when they are be
 });
 
 test("runtime source renders projectless Hermes agents in a left-of-tower floating layer", () => {
-  const sceneSource = readRuntimeSource("scene-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const sceneSource = readSceneRuntime();
+  const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
-  const styleSource = readClientSource("styles-source.ts");
+  const styleSource = readClientSource("styles.css");
   const servedStyles = readClientSource("styles.css");
 
   assert.ok(sceneSource.includes("function isFloatingOrchestratorAgent(agent) {"));
@@ -1440,7 +1534,7 @@ test("toast renderer keeps the message, file-change, and command toast classes a
 });
 
 test("toast label icons fit a fixed slot instead of driving toast height", () => {
-  const stylesSource = readClientSource("styles-source.ts");
+  const stylesSource = readClientSource("styles.css");
   const servedStyles = readClientSource("styles.css");
 
   assert.ok(stylesSource.includes(".agent-toast-label-icon-slot {"));
@@ -1461,6 +1555,7 @@ test("toast label icons fit a fixed slot instead of driving toast height", () =>
 
 test("tool dashboard events prefer semantic thread-item icon overrides", () => {
   const renderSource = readRuntimeSource("render-source.ts").replace(/\r\n/g, "\n");
+  const eventPresentationSource = readClientSource("runtime/event-presentation.ts").replace(/\r\n/g, "\n");
   const pixelOfficeSource = readFileSync(
     join(__dirname, "../src/pixel-office.ts"),
     "utf8"
@@ -1475,11 +1570,11 @@ test("tool dashboard events prefer semantic thread-item icon overrides", () => {
     "toast events should use the dashboard-event icon resolver"
   );
   assert.ok(
-    renderSource.includes('event.method === "item/tool/call"'),
+    eventPresentationSource.includes('event.method === "item/tool/call"'),
     "dashboard-event icon resolver should special-case generic dynamic tool calls"
   );
   assert.ok(
-    renderSource.includes("return itemIconUrl || methodIconUrl;"),
+    eventPresentationSource.includes("return itemIconUrl || methodIconUrl;"),
     "tool and subagent events should prefer semantic item icons over exact method icons"
   );
   assert.ok(
@@ -1491,7 +1586,7 @@ test("tool dashboard events prefer semantic thread-item icon overrides", () => {
     "dynamic tool calls should reuse the regular MCP gear icon"
   );
   assert.ok(
-    renderSource.includes('eventIconUrlForThreadItemType("scriptEdit")'),
+    eventPresentationSource.includes('eventIconUrlForThreadItemType("scriptEdit")'),
     "dashboard-event icon resolver should have a script file-change icon fallback"
   );
   assert.ok(
@@ -1651,8 +1746,8 @@ test("toast notifications use the merged worktree view so unsplit floors keep ma
 
 test("boss relationship arrows are hover-only curved overlays with arrowheads", () => {
   const layoutSource = readRuntimeSource("layout-source.ts");
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
   const specSource = readFileSync(
     join(__dirname, "../../../docs/spec.md"),
     "utf8"
@@ -1699,7 +1794,7 @@ test("spec defines parent-spawn subagent arrivals and door departures", () => {
 });
 
 test("runtime source only animates exit ghosts for explicit departures and dedupes them", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
   const layoutSource = readRuntimeSource("layout-source.ts");
   const settingsSource = readRuntimeSource("settings-source.ts");
@@ -1715,8 +1810,8 @@ test("runtime source only animates exit ghosts for explicit departures and dedup
 });
 
 test("runtime source preserves exit ghosts across scene refreshes and reuses the same exit builder", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
-  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const sceneSource = readSceneRuntime();
 
   assert.ok(navigationSource.includes("function buildExitGhostMotion(key, motionState, roomNavigation, reservations) {"));
   assert.ok(navigationSource.includes("if (!motionState || motionState.exiting !== true || currentAgentKeys.has(key) || renderer.motionStates.has(key)) {"));
@@ -1726,7 +1821,7 @@ test("runtime source preserves exit ghosts across scene refreshes and reuses the
 });
 
 test("runtime source turns room changes into old-room exits plus new-room door entries and ignores tiny same-slot retargets", () => {
-  const navigationSource = readRuntimeSource("navigation-source.ts");
+  const navigationSource = readNavigationRuntime();
 
   assert.ok(navigationSource.includes("function shouldReuseMotionTarget(previousState, agent, preserveAutonomyRoute = false) {"));
   assert.ok(navigationSource.includes("const distance = motionTargetDistance(previousState, agent);"));
@@ -1735,4 +1830,72 @@ test("runtime source turns room changes into old-room exits plus new-room door e
   assert.ok(navigationSource.includes("const enteringFromDoor = enteringFromParent"));
   assert.ok(navigationSource.includes("const transitionGhostKey = agentKey + \"::transition-exit::\" + previousRoomState.roomId;"));
   assert.ok(navigationSource.includes("const transitionGhost = buildExitGhostMotion(transitionGhostKey, previousRoomState, roomNavigation, reservations);"));
+});
+
+test("tower all-view combines chat and cowork sessions into a dedicated street cafe ground floor", () => {
+  const settingsSource = readRuntimeSource("settings-source.ts");
+  const layoutSource = readRuntimeSource("layout-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const manifest = JSON.parse(readFileSync(join(__dirname, "../src/config/pixel-office-manifest.json"), "utf8"));
+
+  assert.ok(settingsSource.includes('const STREET_CAFE_PROJECT_ROOT = "__agents-office-street-cafe__";'));
+  assert.ok(settingsSource.includes('label: "Chat Café"'));
+  assert.ok(settingsSource.includes('return \\`\\${agent.sourceProjectRoot || projectRoot}::\\${agent.sourceAgentId || agent.id}\\`;'));
+  assert.ok(layoutSource.includes("function partitionStreetCafeProjects(projects) {"));
+  assert.ok(layoutSource.includes("isCodexChatProjectRootForStreetCafe(snapshot && snapshot.projectRoot)"));
+  assert.ok(layoutSource.includes('String(agent.sourceKind || "").startsWith("claude:cowork")'));
+  assert.ok(layoutSource.includes('return agent.interactionMode === "work";'));
+  assert.ok(layoutSource.includes('sourceProjectRoot,'));
+  assert.ok(layoutSource.includes("ChatGPT and personal Claude Home Recent chats are account history that their supported local APIs do not expose."));
+  assert.ok(layoutSource.includes("notes: streetAgents.length === 0"));
+  assert.ok(layoutSource.includes('...(snapshot.mergedProjectRoots || [])'));
+  assert.ok(layoutSource.includes('agents.map((agent) => agent.sourceProjectRoot).filter(Boolean)'));
+  assert.ok(layoutSource.includes('roomId: "street-cafe"'));
+  assert.ok(uiSource.includes("[...street.workspaceProjects, street.cafeSnapshot]"));
+  assert.ok(sceneSource.includes('snapshot.sceneKind === "street-cafe"'));
+  assert.ok(sceneSource.includes("Combined Chat, Claude Home work, and typed Codex Work sessions"));
+  assert.ok(sceneSource.includes("Chat · Home · Work"));
+  assert.ok(sceneSource.includes("const floorMarker = streetCafe"));
+  assert.ok(sceneSource.includes('? "G"'));
+  assert.ok(sceneSource.includes('pixelOffice.cafe.table'));
+  assert.ok(sceneSource.includes("if (occupants.length === 0) {"));
+  assert.ok(navigationSource.includes('model.sceneKind === "street-cafe"'));
+  assert.equal(manifest.cafe.table.url, "/assets/pixel-office/sprites/cafe/table.png");
+  assert.equal(manifest.cafe.storefrontOrange.url, "/assets/pixel-office/sprites/cafe/storefront-orange.png");
+});
+
+test("workspace floors expose persisted bounded scene color customization", () => {
+  const sceneSource = readSceneRuntime();
+  const settingsSource = readRuntimeSource("settings-source.ts");
+  const customizationSource = readRuntimeSource("scene-customization-source.ts");
+  const lifecycleSource = readRuntimeSource("office-scene-lifecycle-source.ts");
+  const navigationSource = readNavigationRuntime();
+  const styles = readClientSource("styles.css");
+
+  assert.ok(settingsSource.includes("projectScenePalettes: loadScenePaletteSettings()"));
+  assert.ok(settingsSource.includes('const SCENE_PALETTE_STORAGE_KEY = "codex-agents-office:scene-palettes:v1"'));
+  assert.match(customizationSource, /function saveScenePaletteSettings\(\) \{[\s\S]*try \{[\s\S]*localStorage\.setItem[\s\S]*catch \{\}/);
+  assert.ok(customizationSource.includes('data-action="toggle-floor-customize"'));
+  assert.ok(customizationSource.includes('aria-controls="\\${escapeHtml(domId + "-panel")}"'));
+  assert.ok(customizationSource.includes("focusSceneCustomizer(projectRoot, open);"));
+  assert.ok(customizationSource.includes("focusSceneCustomizer(projectRoot, false);"));
+  assert.ok(customizationSource.includes('data-scene-color-role="\\${escapeHtml(role)}"'));
+  assert.ok(customizationSource.includes('renderSceneColorField(paletteKey, palette, "floor", "Floor")'));
+  assert.ok(customizationSource.includes('renderSceneColorField(paletteKey, palette, "wall", "Wall")'));
+  assert.ok(customizationSource.includes('renderSceneColorField(paletteKey, palette, "board", "Board")'));
+  assert.ok(customizationSource.includes('data-action="reset-floor-customize"'));
+  assert.ok(customizationSource.includes('if (event.key === "Escape" && state.customizeFloorRoot)'));
+  assert.ok(customizationSource.includes("lastSceneRenderToken = null;"));
+  assert.ok(sceneSource.includes("const customization = renderFloorCustomization(snapshot);"));
+  assert.ok(sceneSource.includes("palette: scenePaletteForSnapshot(snapshot).pixi"));
+  assert.ok(lifecycleSource.includes("scenePaletteToken(snapshot)"));
+  assert.ok(navigationSource.includes("scenePalette.floorSeam, alpha: streetCafe ? 0.42 : 0.32"));
+  assert.ok(navigationSource.includes("scenePalette.floorSeam, alpha: streetCafe ? 0.24 : 0.18"));
+  assert.ok(navigationSource.includes("scenePalette.floorSeam, alpha: streetCafe ? 0.18 : 0.12"));
+  assert.ok(navigationSource.includes("scenePalette.wallBase"));
+  assert.ok(navigationSource.includes("scenePalette.boardBase"));
+  assert.ok(styles.includes(".tower-floor-customizer"));
+  assert.ok(styles.includes(".scene-color-ramp"));
 });

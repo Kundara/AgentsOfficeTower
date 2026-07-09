@@ -1,4 +1,0 @@
-interface:
-  display_name: "Agents Tower Coordination"
-  short_description: "Use tower data to coordinate local and team agents."
-  default_prompt: "Use Agents Tower coordination to inspect what other agents are doing before acting."

@@ -117,6 +117,8 @@ export async function listCodexCommandCandidates(): Promise<CodexCommandCandidat
 
   if (platform === "darwin") {
     const bundleCandidates = [
+      "/Applications/ChatGPT.app/Contents/Resources/codex",
+      join(homedir(), "Applications", "ChatGPT.app", "Contents", "Resources", "codex"),
       "/Applications/Codex.app/Contents/Resources/codex",
       join(homedir(), "Applications", "Codex.app", "Contents", "Resources", "codex")
     ];
@@ -204,7 +206,7 @@ function formatSpawnError(error: unknown): string {
 
 function codexResolutionHint(): string {
   if (platform === "darwin") {
-    return "Install Codex CLI, set CODEX_CLI_PATH, or install the Codex app in /Applications.";
+    return "Install Codex CLI, set CODEX_CLI_PATH, or install ChatGPT/Codex in /Applications.";
   }
   if (platform === "win32") {
     return "Install Codex CLI, install the Codex Windows app, install Codex CLI inside WSL, or set CODEX_CLI_PATH to a runnable Codex executable.";

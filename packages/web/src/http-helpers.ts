@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { extname, normalize, resolve } from "node:path";
 
 import { canonicalizeProjectPath } from "@codex-agents-office/core";
@@ -137,7 +137,7 @@ export function notFound(response: ServerResponse): void {
 }
 
 function isPreviewableImage(filePath: string): boolean {
-  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(filePath);
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(filePath);
 }
 
 export async function sendProjectFile(
@@ -157,9 +157,18 @@ export async function sendProjectFile(
   }
 
   try {
-    const body = await readFile(candidate);
+    const [realRoot, realCandidate] = await Promise.all([
+      realpath(normalizedRoot),
+      realpath(candidate)
+    ]);
+    if (!isInsideDirectory(realRoot, realCandidate)) {
+      notFound(response);
+      return;
+    }
+
+    const body = await readFile(realCandidate);
     response.writeHead(200, {
-      "content-type": contentTypeForPath(candidate),
+      "content-type": contentTypeForPath(realCandidate),
       "cache-control": "no-store"
     });
     if (method === "HEAD") {

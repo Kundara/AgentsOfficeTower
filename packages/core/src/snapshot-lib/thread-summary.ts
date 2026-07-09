@@ -1,5 +1,6 @@
 import { looksLikeValidationCommand, shortenText, isMeaningfulText } from "../utils/text";
 import { summarizeWebSearch } from "../web-search";
+import { turnHasFinalAnswer, turnHasNonFinalWorkSignal } from "../domain/codex-turn-semantics";
 import type {
   AgentActivityEvent,
   ActivityState,
@@ -564,36 +565,6 @@ export function inferThreadAgentRole(thread: CodexThread, sourceKind: string): s
     }
   }
   return thread.agentRole ?? sourceAgentRole(thread);
-}
-
-function turnHasFinalAnswer(turn: CodexTurn): boolean {
-  return turn.items.some((item) => item.type === "agentMessage" && item.phase === "final_answer");
-}
-
-const NON_FINAL_WORK_ITEM_TYPES = new Set([
-  "agentMessage",
-  "plan",
-  "reasoning",
-  "commandExecution",
-  "fileChange",
-  "mcpToolCall",
-  "dynamicToolCall",
-  "collabToolCall",
-  "collabAgentToolCall",
-  "webSearch",
-  "imageView",
-  "enteredReviewMode",
-  "exitedReviewMode",
-  "contextCompaction"
-]);
-
-function turnHasNonFinalWorkSignal(turn: CodexTurn): boolean {
-  return turn.items.some((item) => {
-    if (!NON_FINAL_WORK_ITEM_TYPES.has(item.type)) {
-      return false;
-    }
-    return item.type !== "agentMessage" || item.phase !== "final_answer";
-  });
 }
 
 const FRESH_SPAWNED_THREAD_WINDOW_MS = 2 * 60 * 1000;

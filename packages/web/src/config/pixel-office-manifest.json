@@ -59,6 +59,16 @@
   "icons": {
     "worktree": { "url": "/assets/pixel-office/sprites/icons/worktree.png", "w": 16, "h": 16 }
   },
+  "cafe": {
+    "table": { "url": "/assets/pixel-office/sprites/cafe/table.png", "w": 48, "h": 48 },
+    "shelf": { "url": "/assets/pixel-office/sprites/cafe/shelf.png", "w": 32, "h": 48 },
+    "plant": { "url": "/assets/pixel-office/sprites/cafe/plant.png", "w": 16, "h": 24 },
+    "coffeeMachine": { "url": "/assets/pixel-office/sprites/cafe/coffee-machine.png", "w": 16, "h": 24 },
+    "chairRed": { "url": "/assets/pixel-office/sprites/cafe/chair-red.png", "w": 16, "h": 16 },
+    "chairBlue": { "url": "/assets/pixel-office/sprites/cafe/chair-blue.png", "w": 16, "h": 16 },
+    "chairGreen": { "url": "/assets/pixel-office/sprites/cafe/chair-green.png", "w": 16, "h": 16 },
+    "storefrontOrange": { "url": "/assets/pixel-office/sprites/cafe/storefront-orange.png", "w": 48, "h": 80 }
+  },
   "props": {
     "sky": { "url": "/assets/pixel-office/sprites/props/sky.png", "w": 256, "h": 38 },
     "floorStrip": { "url": "/assets/pixel-office/sprites/props/floorStrip.png", "w": 73, "h": 24 },
