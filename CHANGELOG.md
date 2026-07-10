@@ -9,7 +9,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
-- Added a `/layout-audit` route that runs the normal client bundle against synthetic floors (6-boss vertical column, mixed boss/desk, desks-only, quiet) for previewing and tuning workstation layout dynamics.
+- Added a `/layout-audit` route that runs the normal client bundle against synthetic floors (6-boss vertical column, mixed boss/desk, desks-only, big-team overflow, quiet) for previewing and tuning workstation layout dynamics.
 - Added a private rootless account-agent lane and bounded Claude Desktop HTTP-cache observer for recent `product:cowork-remote` Home work metadata, rendering inferred read-only Claude agents in Chat Café and Sessions without extracting, retaining, or exposing credentials or prompt/message bodies, and without calling private endpoints.
 - Added browser-local per-workspace scene customization beside Shared/Focus, with Floor, Wall, and Board color inputs, bounded derived shades, live Pixi preview, reset, and persistence across merged or split worktree views.
 - Added a permanent street-level Chat Café floor that combines canonical projectless Codex Chat and locally materialized Claude Home work sessions, reserves support for an explicit typed Codex Work mode, preserves real source roots for thread actions, and renders pavement, storefronts, tables, chairs, café fixtures, and occupied navigation-aware workstations.
@@ -53,7 +53,6 @@ Entries stay under the active version until an explicit version bump is requeste
 - Hover-card action lines ("File:", "Command:") got their own style - smaller gray monospace that wraps instead of overflowing the card - and display text now strips the project root from absolute paths on all platforms, not just WSL `/mnt/` paths.
 - Redesigned the page header into a compact top bar: pixel AOT brand mark with an inline update time, live summary chips that hide zero Waiting/Blocked/Cloud counts, and a single slim workspace-tabs row replacing the separate Workspaces heading and the duplicated tracked/floors/recent copy.
 - Redesigned the tower wrapper and floor strips: a rooftop signage plate reading AGENTS OFFICE TOWER, slimmer shaft walls with window banding, an entrance on the foundation, and 34px floor strips whose verbose zero-count text became colored status chips (live/waiting/blocked/cloud, with a dashed quiet/open chip when idle) plus smaller floor actions; full counts moved into the strip tooltip, including the café's Quick Chat: Add to task hint.
-- Trimmed default single-room workspace floors to 13 tile rows in the compact fleet view so towers stop stretching empty bottom floor, while keeping every desk row, full-width scenes without side letterboxing, and untouched heights for focus mode, custom multi-room layouts, and the Chat Café.
 - Redesigned Chat Café seating around a new round pedestal-table sprite (derived in Gherwit café palette): occupied workstations now seat the agent behind a round table with the laptop on the tabletop, and the empty café is dressed with staggered round tables flanked by chairs that stay off the pavement.
 - Clarified the Chat Café integration boundary: Codex Quick Chat appears only after **Add to task**, ordinary ChatGPT/Claude chat histories are not synthesized, and remote Claude Home work cache misses mean unobserved rather than empty.
 - Redesigned the Sessions panel as one responsive, independently scrollable workload index with pinned Needs You, Active, and Recent sections, visible state chips, wrapped two-line content, accessible headings/list semantics, keyboard focus, and actions below metadata instead of squeezing titles.
@@ -153,6 +152,9 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed compact boss-booth depth sorting so booth walls and their workstation contents share one room-relative depth plane, allowing lower booth walls to occlude upper bosses correctly.
+- Fixed grouped workstation allocation to preserve prior pod and mirrored-seat placement as team membership changes, and to keep nested descendants with their top-level lead even when an intermediate parent is absent from the snapshot.
+- Fixed project-root stripping in hover and activity text for native Windows, UNC, mixed-separator, and case-varied paths instead of limiting the cleanup to POSIX roots.
 - Fixed fleet startup/runtime OOMs caused by every project monitor repeatedly full-reading the same large global Codex rollout set: fallback discovery now filters by cached bounded `session_meta`, shares in-flight reads, caps full parsing at three files, and coalesces overlapping per-monitor discovery triggers.
 - Fixed Codex app-server thread discovery to follow bounded `thread/list` cursors instead of silently truncating at the server's 100-row page cap, preventing exec/subagent-heavy histories from hiding older interactive conversations and project roots.
 - Fixed Codex app-server discovery to include the protocol's valid `unknown` source kind instead of filtering those threads out through the explicit source-kind allowlist.

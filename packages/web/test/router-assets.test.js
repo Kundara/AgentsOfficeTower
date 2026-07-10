@@ -137,6 +137,24 @@ test("wide office audit route serves the fake-avatar scroll harness", async (t) 
   }
 });
 
+test("layout audit route serves GET and HEAD without consulting the live fleet", async (t) => {
+  const testServer = await startTestServer(t);
+  if (!testServer) return;
+
+  try {
+    const getResponse = await rawRequest(testServer.baseUrl, "/layout-audit");
+    assert.equal(getResponse.status, 200);
+    assert.match(getResponse.body, /Workstation Layout Audit/);
+    assert.match(getResponse.body, /window\.EventSource = MockEventSource/);
+
+    const headResponse = await rawRequest(testServer.baseUrl, "/layout-audit", { method: "HEAD" });
+    assert.equal(headResponse.status, 200);
+    assert.equal(headResponse.body, "");
+  } finally {
+    await testServer.close();
+  }
+});
+
 test("project file route only serves images from a current configured project", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "agents-office-router-project-"));
   const projectRoot = join(temporaryRoot, "project");

@@ -3191,9 +3191,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
             addDebugBounds(office.x, office.y, office.width, office.height, 0xff8d4d, tileBoundsLabel(office.width, office.height, model.tile));
           }
           const wallHeight = Math.max(model.tile + 8, Math.round(office.height * 0.42));
-          // Booth contents sort with depthBaseY 0 (cell defs never receive a
-          // finite base), so the booth box must use the same base to interleave.
-          const officeDepthBase = 0;
+          // Keep the booth box on the same room-relative depth plane as its
+          // workstation sprites so lower booth walls can occlude upper bosses.
+          const officeDepthBase = Number.isFinite(office.depthBaseY) ? Number(office.depthBaseY) : 0;
           const shell = new PIXI.Graphics()
             .rect(office.x, office.y, office.width, office.height)
             .fill({ color: 0x1b2b33, alpha: 0.96 })

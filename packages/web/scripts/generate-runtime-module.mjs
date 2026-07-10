@@ -14,6 +14,7 @@ const RUNTIME_SECTIONS = [
   ["src/client/toast-source.ts", "TOAST_SCRIPT"],
   ["src/client/multiplayer-source.ts", "MULTIPLAYER_SCRIPT"],
   ["src/client/runtime/layout-source.ts", "CLIENT_RUNTIME_LAYOUT_SOURCE"],
+  ["src/client/runtime/display-text-source.ts", "CLIENT_RUNTIME_DISPLAY_TEXT_SOURCE"],
   ["src/client/runtime/seating-source.ts", "CLIENT_RUNTIME_SEATING_SOURCE"],
   ["src/client/runtime/cafe-scene-source.ts", "CLIENT_RUNTIME_CAFE_SCENE_SOURCE"],
   ["src/client/runtime/render-source.ts", "CLIENT_RUNTIME_RENDER_SOURCE"],

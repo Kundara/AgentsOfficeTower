@@ -5,6 +5,7 @@ const { join } = require("node:path");
 
 const { renderHtml } = require("../dist/render-html.js");
 const { renderSceneEffectsAuditHtml } = require("../dist/render/render-scene-effects-audit-html.js");
+const { renderLayoutAuditHtml } = require("../dist/render/render-layout-audit-html.js");
 const { renderWideOfficeAuditHtml } = require("../dist/render/render-wide-office-audit-html.js");
 const { renderZOrderAuditHtml } = require("../dist/render-z-order-audit-html.js");
 
@@ -199,6 +200,21 @@ test("wide office audit spawns many fake avatars for horizontal scroll validatio
   assert.match(html, /window\.fetch = \(input, init = undefined\)/);
   assert.match(html, /window\.EventSource = MockEventSource/);
   assert.match(html, /\/client\/app\.js\?v=/);
+});
+
+test("layout audit injects all synthetic scenarios before the normal client bundle", () => {
+  const html = renderLayoutAuditHtml();
+  const mockIndex = html.indexOf("window.EventSource = MockEventSource");
+  const appIndex = html.indexOf('<script src="/client/app.js?v=');
+
+  assert.match(html, /Workstation Layout Audit/);
+  assert.match(html, /Layout A · 6 Bosses/);
+  assert.match(html, /Layout B · 2 Bosses \+ Desks/);
+  assert.match(html, /Layout C · Desks Only/);
+  assert.match(html, /Layout E · Big Team/);
+  assert.match(html, /Layout D · Quiet Floor/);
+  assert.match(html, /const mockFleet = /);
+  assert.ok(mockIndex >= 0 && appIndex > mockIndex, "the synthetic fleet must be installed before app.js starts");
 });
 
 test("client build assembles the runtime in memory without eval or a tracked generated module", () => {
@@ -1041,6 +1057,8 @@ test("navigation source depth-sorts agents and desk shell sprites by feet positi
   assert.ok(navigationSource.includes("renderHeight = Number.isFinite(motionState.renderHeight) ? Number(motionState.renderHeight) : Number(motionState.height);"));
   assert.ok(navigationSource.includes("renderTopY = Number.isFinite(motionState.currentY)"));
   assert.ok(navigationSource.includes("function applyFootDepth(node, y, height, bias = 0, tileSize = 16, depthBaseY = 0, depthRow = null) {"));
+  assert.ok(sceneSource.includes("depthBaseY: room.floorTop,"));
+  assert.ok(navigationSource.includes("const officeDepthBase = Number.isFinite(office.depthBaseY) ? Number(office.depthBaseY) : 0;"));
   assert.ok(navigationSource.includes("if (Number.isFinite(definition.depthFootY)) {"));
   assert.ok(navigationSource.includes("Number(definition.depthFootY) - snappedHeight,"));
   assert.ok(navigationSource.includes("const fixedZ = Number.isFinite(agent.z) ? Number(agent.z) : null;"));
@@ -1132,6 +1150,20 @@ test("workspace desk columns keep a one-tile gap between workstation pods", () =
   assert.ok(sceneGridSource.includes("const columnX = deskStartX + columnIndex * (config.podWidth + config.deskColumnGap);"));
 });
 
+test("grouped desk layout preserves family slots and resolves nested agents to the top-level lead", () => {
+  const sceneGridSource = readClientSource("scene-grid-source.ts");
+  const sceneSource = readSceneRuntime();
+
+  assert.ok(sceneGridSource.includes("function deskFamilyLeadId(snapshot, agent) {"));
+  assert.ok(sceneGridSource.includes("!visited.has(familyAgent.parentThreadId)"));
+  assert.ok(sceneGridSource.includes("return familyAgent.parentThreadId || familyAgent.id || agent.parentThreadId || agent.id;"));
+  assert.ok(sceneGridSource.includes("function assignGroupedDeskAgents(snapshot, groups, slots, podCapacity) {"));
+  assert.ok(sceneGridSource.includes("const previousSlot = slotById.get(previousSceneSlotId(snapshot, agent));"));
+  assert.ok(sceneGridSource.includes("const leftMirrored = previousSceneMirrored(snapshot, left);"));
+  assert.ok(sceneGridSource.includes("previousIndex + 1"));
+  assert.ok(sceneSource.includes("const deskAssignments = assignGroupedDeskAgents("));
+});
+
 test("workspace focus lets the expanded floor fill the full panel rect", () => {
   const stylesSource = readFileSync(
     join(__dirname, "../src/client/styles.css"),
@@ -1196,7 +1228,7 @@ test("workspace office maps keep wide workstation layouts horizontally scrollabl
 });
 
 test("runtime source strips markdown formatting markers from display text", () => {
-  const layoutSource = readRuntimeSource("layout-source.ts");
+  const layoutSource = readRuntimeSource("display-text-source.ts");
 
   assert.ok(layoutSource.includes("function stripDisplayMarkdown(value) {"));
   assert.ok(layoutSource.includes('.replace(/\\\\[([^\\\\]]+)\\\\]\\\\(([^)]+)\\\\)/g, "$1")'));
@@ -1204,6 +1236,11 @@ test("runtime source strips markdown formatting markers from display text", () =
   assert.ok(layoutSource.includes("function replaceGoalCommandLabel(value) {"));
   assert.ok(layoutSource.includes('replace(/(^|[\\\\s(\\\\x5B\\\\x7B<"\'])\\\\/goal(?=$|[\\\\s)\\\\]\\\\x7D,.!?:;"\'>])/g, "$1🎯")'));
   assert.ok(layoutSource.includes("let displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));"));
+  assert.ok(layoutSource.includes('const windowsRoot = ('));
+  assert.ok(layoutSource.includes('root.length >= 3 && root[1] === ":"'));
+  assert.ok(layoutSource.includes('const comparableLocation = windowsRoot ? normalizedLocation.toLowerCase() : normalizedLocation;'));
+  assert.ok(layoutSource.includes('root.split("\\\\\\\\").join("/")'));
+  assert.ok(layoutSource.includes('const searchableText = windowsRoot ? text.toLowerCase() : text;'));
   assert.ok(layoutSource.includes('const next = displayText.indexOf("/mnt/", index);'));
   assert.ok(layoutSource.includes("output += displayText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));"));
 });

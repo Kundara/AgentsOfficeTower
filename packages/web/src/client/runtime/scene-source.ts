@@ -745,7 +745,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           );
           const deskRows = Math.min(
             12,
-            groupedDeskRowsDemand(layoutConfig, deskGroupPodCounts(capDeskGroups, layoutConfig.deskPodCapacity))
+            groupedDeskRowsDemand(layoutConfig, deskGroupPodCounts(snapshot, capDeskGroups, layoutConfig.deskPodCapacity))
           );
           const minContentRows = Math.max(
             bossInsetRows + 2 * layoutConfig.bossOfficeHeightTiles,
@@ -991,20 +991,16 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           const deskSlots = buildGroupedDeskSlots(
             layoutConfig,
             roomPixelWidth,
-            deskGroupPodCounts(deskGroups, layoutConfig.deskPodCapacity),
+            deskGroupPodCounts(snapshot, deskGroups, layoutConfig.deskPodCapacity),
             deskContentRows,
             officeAssignments.length > 0
           );
-          const deskSlotById = new Map(deskSlots.map((slot) => [slot.id, slot]));
-          const deskAssignments = [];
-          deskGroups.forEach((group) => {
-            for (let podIndex = 0, cursor = 0; cursor < group.agents.length; podIndex += 1, cursor += layoutConfig.deskPodCapacity) {
-              const slot = deskSlotById.get(\`pod-\${group.key}-\${podIndex}\`);
-              if (slot) {
-                deskAssignments.push({ slot, agents: group.agents.slice(cursor, cursor + layoutConfig.deskPodCapacity) });
-              }
-            }
-          });
+          const deskAssignments = assignGroupedDeskAgents(
+            snapshot,
+            deskGroups,
+            deskSlots,
+            layoutConfig.deskPodCapacity
+          );
           expandRoomVisualWidth(
             roomModel,
             deskSlots.reduce((rightEdge, slot) => Math.max(rightEdge, slot.x + slot.width + tile), roomPixelWidth)
@@ -1148,6 +1144,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
               y: officeY,
               width: entry.slot.width,
               height: entry.slot.height,
+              depthBaseY: room.floorTop,
               role: "boss",
               badgeLabel: liveChildAgentsFor(snapshot, entry.agent.id).length + " spawned",
               shell: visual.shell,

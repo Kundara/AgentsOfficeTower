@@ -130,6 +130,21 @@ export const SCENE_GRID_SCRIPT = `
       const DESK_GROUP_MAX_TOUCHING_PODS = 6;
       const DESK_GROUP_PASSAGE_TILES = 1;
 
+      function deskFamilyLeadId(snapshot, agent) {
+        const agentsById = new Map(snapshot.agents.map((entry) => [entry.id, entry]));
+        let familyAgent = agent;
+        const visited = new Set([agent.id]);
+        while (
+          familyAgent.parentThreadId
+          && agentsById.has(familyAgent.parentThreadId)
+          && !visited.has(familyAgent.parentThreadId)
+        ) {
+          familyAgent = agentsById.get(familyAgent.parentThreadId);
+          visited.add(familyAgent.id);
+        }
+        return familyAgent.parentThreadId || familyAgent.id || agent.parentThreadId || agent.id;
+      }
+
       function buildDeskAgentGroups(snapshot, agents, podCapacity) {
         const capacity = Math.max(1, Number(podCapacity) || 1);
         const sorted = [...agents].sort((left, right) => compareAgentsForDeskLayout(snapshot, left, right));
@@ -137,7 +152,7 @@ export const SCENE_GRID_SCRIPT = `
         const groupsByParent = new Map();
         sorted.forEach((agent) => {
           if (agent.parentThreadId) {
-            const parentKey = "boss" + stableHash(String(agent.parentThreadId));
+            const parentKey = "boss" + stableHash(String(deskFamilyLeadId(snapshot, agent)));
             let group = groupsByParent.get(parentKey);
             if (!group) {
               group = { key: parentKey, agents: [] };
@@ -157,12 +172,74 @@ export const SCENE_GRID_SCRIPT = `
         return groups;
       }
 
-      function deskGroupPodCounts(groups, podCapacity) {
+      function deskGroupPodCounts(snapshot, groups, podCapacity) {
         const capacity = Math.max(1, Number(podCapacity) || 1);
         return groups.map((group) => ({
           key: group.key,
-          podCount: Math.max(1, Math.ceil(group.agents.length / capacity))
+          podCount: Math.max(
+            1,
+            Math.ceil(group.agents.length / capacity),
+            ...group.agents.map((agent) => {
+              const previousSlotId = previousSceneSlotId(snapshot, agent);
+              const prefix = "pod-" + group.key + "-";
+              if (!previousSlotId || !previousSlotId.startsWith(prefix)) return 0;
+              const previousIndex = Number(previousSlotId.slice(prefix.length));
+              return Number.isInteger(previousIndex) && previousIndex >= 0 ? previousIndex + 1 : 0;
+            })
+          )
         }));
+      }
+
+      function assignGroupedDeskAgents(snapshot, groups, slots, podCapacity) {
+        const capacity = Math.max(1, Number(podCapacity) || 1);
+        const slotsByGroup = new Map();
+        slots.forEach((slot) => {
+          const groupSlots = slotsByGroup.get(slot.groupKey) || [];
+          groupSlots.push(slot);
+          slotsByGroup.set(slot.groupKey, groupSlots);
+        });
+        const assignments = [];
+        groups.forEach((group) => {
+          const groupSlots = (slotsByGroup.get(group.key) || []).sort((left, right) => left.order - right.order);
+          const slotById = new Map(groupSlots.map((slot) => [slot.id, slot]));
+          const slotAgents = new Map();
+          const remaining = [];
+          group.agents.forEach((agent) => {
+            const previousSlot = slotById.get(previousSceneSlotId(snapshot, agent));
+            const assigned = previousSlot ? slotAgents.get(previousSlot.id) || [] : [];
+            if (!previousSlot || assigned.length >= capacity) {
+              remaining.push(agent);
+              return;
+            }
+            assigned.push(agent);
+            slotAgents.set(previousSlot.id, assigned);
+          });
+          remaining.forEach((agent) => {
+            const slot = groupSlots.find((candidate) => (slotAgents.get(candidate.id) || []).length < capacity);
+            if (!slot) return;
+            const assigned = slotAgents.get(slot.id) || [];
+            assigned.push(agent);
+            slotAgents.set(slot.id, assigned);
+          });
+          groupSlots.forEach((slot) => {
+            const assigned = slotAgents.get(slot.id) || [];
+            if (assigned.length === 0) return;
+            assignments.push({
+              slot,
+              agents: assigned.sort((left, right) => {
+                const leftMirrored = previousSceneMirrored(snapshot, left);
+                const rightMirrored = previousSceneMirrored(snapshot, right);
+                if (leftMirrored !== rightMirrored) {
+                  if (leftMirrored === null) return 1;
+                  if (rightMirrored === null) return -1;
+                  return Number(leftMirrored) - Number(rightMirrored);
+                }
+                return compareAgentsForDeskLayout(snapshot, left, right);
+              })
+            });
+          });
+        });
+        return assignments.sort((left, right) => left.slot.order - right.slot.order);
       }
 
       function buildGroupedDeskSlots(config, roomPixelWidth, groups, maxContentRowTiles, hasBossLane) {

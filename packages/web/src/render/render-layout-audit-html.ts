@@ -48,7 +48,8 @@ function mockAgent(
   scenario: LayoutScenario,
   index: number,
   role: "lead" | "worker",
-  parentId: string | null
+  parentId: string | null,
+  depth = parentId ? 1 : 0
 ): DashboardAgent {
   const projectRoot = scenarioRoot(scenario);
   const id = `layout-${scenario.slug}-${role}-${String(index + 1).padStart(2, "0")}`;
@@ -59,7 +60,7 @@ function mockAgent(
     source: "local",
     sourceKind: "vscode",
     parentThreadId: parentId,
-    depth: parentId ? 1 : 0,
+    depth,
     isCurrent: true,
     isOngoing: true,
     statusText: "active",
@@ -92,12 +93,18 @@ function mockAgent(
 
 function scenarioAgents(scenario: LayoutScenario): DashboardAgent[] {
   const agents: DashboardAgent[] = [];
+  let firstChild: DashboardAgent | null = null;
   for (let bossIndex = 0; bossIndex < scenario.bossCount; bossIndex += 1) {
     const boss = mockAgent(scenario, bossIndex, "lead", null);
     agents.push(boss);
     for (let childIndex = 0; childIndex < scenario.childrenPerBoss; childIndex += 1) {
-      agents.push(mockAgent(scenario, bossIndex * scenario.childrenPerBoss + childIndex + 40, "worker", boss.id));
+      const child = mockAgent(scenario, bossIndex * scenario.childrenPerBoss + childIndex + 40, "worker", boss.id);
+      firstChild ??= child;
+      agents.push(child);
     }
+  }
+  if (scenario.slug === "big-team" && firstChild) {
+    agents.push(mockAgent(scenario, 120, "worker", firstChild.id, 2));
   }
   for (let workerIndex = 0; workerIndex < scenario.soloWorkerCount; workerIndex += 1) {
     agents.push(mockAgent(scenario, workerIndex + 80, "worker", null));
