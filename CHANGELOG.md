@@ -156,6 +156,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Prevented disconnected HTTP/SSE clients from crashing the Tower process with an unhandled `EPIPE` or `ECONNRESET` socket error.
 - Fixed long-lived fleet monitors permanently missing newly started Codex threads after an app-server read, loaded-thread query, or goal lookup stalled; discovery requests are now bounded, timed-out observer connections are replaced before the next discovery pass, a degraded project can no longer block a fleet-wide refresh, and CLI gist counts no longer report stale blocked history as active work.
 - Fixed agent-workflow validation rejecting valid repo skills solely because their frontmatter used Windows CRLF line endings.
 

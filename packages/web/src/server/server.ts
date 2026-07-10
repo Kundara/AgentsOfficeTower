@@ -18,6 +18,17 @@ export async function startWebServer(argv: string[] = process.argv.slice(2)): Pr
     });
   });
 
+  server.on("connection", (socket) => {
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EPIPE" || error.code === "ECONNRESET") {
+        return;
+      }
+      console.error(
+        `Agents Office Tower client socket failed: ${error.stack ?? error.message}`
+      );
+    });
+  });
+
   await new Promise<void>((resolvePromise) => {
     server.listen(options.port, options.host, () => {
       resolvePromise();
