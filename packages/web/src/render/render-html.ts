@@ -50,14 +50,14 @@ export function renderHtml(
     <div class="page">
       <section class="hero">
         <div class="hero-top">
-          <div class="hero-copy">
-            <div class="muted">Live workload observatory</div>
-            <div class="hero-title-row">
+          <div class="hero-brand" title="Live workload observatory">
+            <span class="hero-mark" aria-hidden="true">AOT</span>
+            <div class="hero-copy">
               <h1>Agents Office Tower</h1>
-              <div id="hero-summary" class="hero-summary"></div>
+              <div id="stamp" class="hero-stamp muted">Loading…</div>
             </div>
-            <div id="stamp" class="muted">Loading…</div>
           </div>
+          <div id="hero-summary" class="hero-summary"></div>
           <div class="hero-actions">
             <div class="view-toggle" role="group" aria-label="Workspace view">
               <button id="map-view-button" data-view="map" type="button" aria-pressed="true">Map</button>
@@ -179,13 +179,8 @@ export function renderHtml(
           </div>
         </div>
         <div class="tabs-shell">
-          <div class="tabs-head">
-            <strong>Workspaces</strong>
-            <div class="tabs-actions">
-              <span class="muted" id="project-count"></span>
-            </div>
-          </div>
           <div id="project-tabs" class="project-tabs" role="navigation" aria-label="Workspaces"></div>
+          <span class="muted tabs-count" id="project-count"></span>
         </div>
       </section>
 

@@ -61,6 +61,7 @@
   },
   "cafe": {
     "table": { "url": "/assets/pixel-office/sprites/cafe/table.png", "w": 48, "h": 48 },
+    "tableRound": { "url": "/assets/pixel-office/sprites/cafe/table-round.png", "w": 32, "h": 32 },
     "shelf": { "url": "/assets/pixel-office/sprites/cafe/shelf.png", "w": 32, "h": 48 },
     "plant": { "url": "/assets/pixel-office/sprites/cafe/plant.png", "w": 16, "h": 24 },
     "coffeeMachine": { "url": "/assets/pixel-office/sprites/cafe/coffee-machine.png", "w": 16, "h": 24 },

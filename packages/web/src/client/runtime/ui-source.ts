@@ -914,12 +914,12 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
 
       function renderHeroSummary(counts) {
         return [
-          ["Agents", counts.total, "primary"],
-          ["Active", counts.active, "is-active"],
-          ["Waiting", counts.waiting, "is-waiting"],
-          ["Blocked", counts.blocked, "is-blocked"],
-          ["Cloud", counts.cloud, "is-cloud"]
-        ].map(([label, value, className]) =>
+          ["Agents", counts.total, "primary", true],
+          ["Active", counts.active, "is-active", true],
+          ["Waiting", counts.waiting, "is-waiting", counts.waiting > 0],
+          ["Blocked", counts.blocked, "is-blocked", counts.blocked > 0],
+          ["Cloud", counts.cloud, "is-cloud", counts.cloud > 0]
+        ].filter(([, , , visible]) => visible).map(([label, value, className]) =>
           \`<span class="hero-summary-item \${className}"><strong>\${value}</strong><span>\${label}</span></span>\`
         ).join("");
       }
@@ -986,8 +986,11 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
             ? \`project::\${sceneSnapshotToken(snapshot)}\`
             : \`fleet::\${displayedProjects.map(sceneSnapshotToken).join("||")}\`);
 
-        setTextIfChanged(stamp, \`Updated \${fleet.generatedAt}\`);
-        setTextIfChanged(projectCount, \`\${fleet.projects.length} tracked · \${towerProjects.length} floors · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live · \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`);
+        const generatedAtDate = new Date(fleet.generatedAt);
+        setTextIfChanged(stamp, Number.isNaN(generatedAtDate.getTime())
+          ? \`Updated \${fleet.generatedAt}\`
+          : \`Updated \${generatedAtDate.toLocaleTimeString([], { hour12: false })}\`);
+        setTextIfChanged(projectCount, \`\${towerProjects.length} floors · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live\`);
         mapViewButton.classList.toggle("active", state.view === "map");
         terminalViewButton.classList.toggle("active", state.view === "terminal");
         mapViewButton.setAttribute("aria-pressed", state.view === "map" ? "true" : "false");

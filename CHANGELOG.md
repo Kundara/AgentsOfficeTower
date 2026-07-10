@@ -44,6 +44,10 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Redesigned the page header into a compact top bar: pixel AOT brand mark with an inline update time, live summary chips that hide zero Waiting/Blocked/Cloud counts, and a single slim workspace-tabs row replacing the separate Workspaces heading and the duplicated tracked/floors/recent copy.
+- Redesigned the tower wrapper and floor strips: a rooftop signage plate reading AGENTS OFFICE TOWER, slimmer shaft walls with window banding, an entrance on the foundation, and 34px floor strips whose verbose zero-count text became colored status chips (live/waiting/blocked/cloud, with a dashed quiet/open chip when idle) plus smaller floor actions; full counts moved into the strip tooltip, including the café's Quick Chat: Add to task hint.
+- Trimmed default single-room workspace floors to 13 tile rows in the compact fleet view so towers stop stretching empty bottom floor, while keeping every desk row, full-width scenes without side letterboxing, and untouched heights for focus mode, custom multi-room layouts, and the Chat Café.
+- Redesigned Chat Café seating around a new round pedestal-table sprite (derived in Gherwit café palette): occupied workstations now seat the agent behind a round table with the laptop on the tabletop, and the empty café is dressed with staggered round tables flanked by chairs that stay off the pavement.
 - Clarified the Chat Café integration boundary: Codex Quick Chat appears only after **Add to task**, ordinary ChatGPT/Claude chat histories are not synthesized, and remote Claude Home work cache misses mean unobserved rather than empty.
 - Redesigned the Sessions panel as one responsive, independently scrollable workload index with pinned Needs You, Active, and Recent sections, visible state chips, wrapped two-line content, accessible headings/list semantics, keyboard focus, and actions below metadata instead of squeezing titles.
 - Changed All-workspaces session selection to retain every live row while applying the 10-row recent limit globally after cross-project sorting instead of independently per project.

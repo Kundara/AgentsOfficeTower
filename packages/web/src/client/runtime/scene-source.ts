@@ -593,6 +593,28 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         return \`<div class="terminal-shell">\${html}</div>\`;
       }
 
+      function renderFloorStatusChips(counts, streetCafe) {
+        const chips = [];
+        if (counts.active > 0) {
+          chips.push(["is-active", \`\${counts.active} live\`]);
+        }
+        if (counts.waiting > 0) {
+          chips.push(["is-waiting", \`\${counts.waiting} waiting\`]);
+        }
+        if (counts.blocked > 0) {
+          chips.push(["is-blocked", \`\${counts.blocked} blocked\`]);
+        }
+        if (counts.cloud > 0) {
+          chips.push(["is-cloud", \`\${counts.cloud} cloud\`]);
+        }
+        if (chips.length === 0) {
+          chips.push(["is-idle", streetCafe ? "open" : "quiet"]);
+        }
+        return chips
+          .map(([tone, label]) => \`<span class="floor-chip \${tone}"><i></i>\${escapeHtml(label)}</span>\`)
+          .join("");
+      }
+
       function renderWorkspaceFloor(snapshot, options = {}) {
         const counts = countsForSnapshot(snapshot);
         const compact = options.compact === true;
@@ -610,11 +632,10 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const titleHtml = worktreeName
           ? \`<div class="tower-floor-title\${remoteOnlyTitleClass}" title="\${titleAttr}"><span class="tower-floor-title-project">\${escapeHtml(projectTitle)}</span>\${participantHtml}<span class="tower-floor-title-worktree"><img class="worktree-inline-icon tower-floor-worktree-icon" src="\${escapeHtml(worktreeIconUrl())}" alt="" aria-hidden="true" /><span>\${escapeHtml(worktreeName)}</span></span></div>\`
           : \`<div class="tower-floor-title\${remoteOnlyTitleClass}" title="\${titleAttr}"><span class="tower-floor-title-project">\${escapeHtml(projectTitle)}</span>\${participantHtml}</div>\`;
-        const summary = streetCafe
-          ? \`Chat · Home · Work · \${counts.active} live · Quick Chat: Add to task\`
-          : state.view === "map"
-          ? \`\${counts.active} live · \${counts.waiting} waiting · \${counts.blocked} blocked\`
+        const summaryTitle = streetCafe
+          ? "Chat · Home · Work · Quick Chat: Add to task"
           : \`\${counts.total} agents · \${counts.active} active · \${counts.waiting} waiting · \${counts.blocked} blocked · \${counts.cloud} cloud\`;
+        const summaryChips = renderFloorStatusChips(counts, streetCafe);
         const floorMarker = streetCafe
           ? "G"
           : Number.isFinite(options.floorNumber)
@@ -636,11 +657,11 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           ? \`<button class="tower-floor-open" data-action="\${escapeHtml(options.action.type)}"\${options.action.projectRoot ? \` data-project-root="\${escapeHtml(options.action.projectRoot)}"\` : ""}>\${escapeHtml(options.action.label)}</button>\`
           : "";
         const customization = renderFloorCustomization(snapshot);
-        return \`<section class="tower-floor\${compact ? " compact" : ""}\${streetCafe ? " street-cafe-floor" : ""}" data-project-root="\${escapeHtml(snapshot.projectRoot)}"><div class="tower-floor-strip"><span class="tower-floor-index" aria-hidden="true">\${escapeHtml(floorMarker)}</span><div class="tower-floor-label">\${titleHtml}</div><div class="tower-floor-trailing"><div class="tower-floor-meta">\${escapeHtml(summary)}</div><div class="tower-floor-actions">\${shareToggleHtml}\${customization.button}\${actionHtml}</div></div></div>\${customization.panel}<div class="tower-floor-body">\${notes ? \`<div class="tower-floor-note">\${escapeHtml(notes)}</div>\` : ""}\${body}</div></section>\`;
+        return \`<section class="tower-floor\${compact ? " compact" : ""}\${streetCafe ? " street-cafe-floor" : ""}" data-project-root="\${escapeHtml(snapshot.projectRoot)}"><div class="tower-floor-strip"><span class="tower-floor-index" aria-hidden="true">\${escapeHtml(floorMarker)}</span><div class="tower-floor-label">\${titleHtml}</div><div class="tower-floor-trailing"><div class="tower-floor-meta" title="\${escapeHtml(summaryTitle)}">\${summaryChips}</div><div class="tower-floor-actions">\${shareToggleHtml}\${customization.button}\${actionHtml}</div></div></div>\${customization.panel}<div class="tower-floor-body">\${notes ? \`<div class="tower-floor-note">\${escapeHtml(notes)}</div>\` : ""}\${body}</div></section>\`;
       }
 
       function renderWorkspaceTower(floorHtml, extraClass = "") {
-        return \`<div class="workspace-tower\${extraClass ? " " + escapeHtml(extraClass) : ""}"><div class="tower-crown" aria-hidden="true"><span class="tower-roof-unit"></span><span class="tower-roof-vent"></span><span class="tower-beacon"></span><span class="tower-crown-mark">AOT</span></div><div class="tower-shaft">\${floorHtml}</div><div class="tower-foundation" aria-hidden="true"></div></div>\`;
+        return \`<div class="workspace-tower\${extraClass ? " " + escapeHtml(extraClass) : ""}"><div class="tower-crown" aria-hidden="true"><span class="tower-roof-unit"></span><span class="tower-roof-vent"></span><span class="tower-beacon"></span><span class="tower-crown-mark">AGENTS OFFICE TOWER</span></div><div class="tower-shaft">\${floorHtml}</div><div class="tower-foundation" aria-hidden="true"></div></div>\`;
       }
 
       function renderWorkspaceScroll(projects) {
@@ -682,16 +703,25 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
 
       function buildOfficeSceneModel(snapshot, options = {}) {
         const sceneRooms = buildSceneRooms(snapshot.rooms.rooms);
-        const rooms = sceneRooms.visibleRooms;
-        if (rooms.length === 0) {
+        if (sceneRooms.visibleRooms.length === 0) {
           return null;
         }
 
         const compact = options.compact === true;
+        const focusMode = options.focusMode === true;
+        const roomHeightCapTiles = compact
+          && !focusMode
+          && (snapshot.sceneKind || "workspace") !== "street-cafe"
+          && sceneRooms.visibleRooms.length === 1
+          ? 13
+          : Number.POSITIVE_INFINITY;
+        const rooms = sceneRooms.visibleRooms.map((room) =>
+          room.height > roomHeightCapTiles ? { ...room, height: roomHeightCapTiles } : room
+        );
         const layoutConfig = fixedSceneLayoutConfig(compact);
         const tile = layoutConfig.tileSize;
         const baseMaxX = Math.max(...rooms.map((room) => room.x + room.width), 24);
-        const maxY = Math.max(...rooms.map((room) => room.y + room.height), 16);
+        const maxY = Math.max(...rooms.map((room) => room.y + room.height), 8);
         const waitingAgents = sortAgentsStably(
           \`\${snapshot.projectRoot}::\${compact ? "compact-waiting" : "waiting"}\`,
           snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !isFloatingOrchestratorAgent(agent) && !shouldSeatAtWorkstation(agent))
@@ -862,21 +892,25 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
               buildSceneTileObject(room.id + "::cafe-plant-right", room.id, pixelOffice.cafe.plant, room.width - 7, 0, 1, 2, 3)
             );
             if (occupants.length === 0) {
+              const roundTable = pixelOffice.cafe.tableRound || pixelOffice.cafe.table;
               [
-                { column: 2, row: 3, tone: "Red" },
-                { column: 7, row: 3, tone: "Blue" },
-                { column: 17, row: 3, tone: "Green" },
-                { column: 21, row: 3, tone: "Red" },
-                { column: 2, row: 8, tone: "Blue" },
-                { column: 7, row: 8, tone: "Green" },
-                { column: 17, row: 8, tone: "Red" },
-                { column: 21, row: 8, tone: "Blue" }
+                { column: 3, row: 3, tone: "Red" },
+                { column: 9, row: 4, tone: "Blue" },
+                { column: 16, row: 3, tone: "Green" },
+                { column: 22, row: 4, tone: "Red" },
+                { column: 4, row: 7, tone: "Blue" },
+                { column: 11, row: 8, tone: "Green" },
+                { column: 18, row: 7, tone: "Red" },
+                { column: 23, row: 8, tone: "Blue" }
               ].forEach((placement, index) => {
+                if (placement.column + 2 > room.width - 1) {
+                  return;
+                }
                 const chairSprite = pixelOffice.cafe["chair" + placement.tone];
                 model.tileObjects.push(
-                  buildSceneTileObject(room.id + "::cafe-table-" + index, room.id, pixelOffice.cafe.table, placement.column, placement.row, 3, 3, 4),
-                  buildSceneTileObject(room.id + "::cafe-chair-left-" + index, room.id, chairSprite, Math.max(0, placement.column - 1), placement.row, 1, 1, 4.1),
-                  buildSceneTileObject(room.id + "::cafe-chair-right-" + index, room.id, chairSprite, Math.min(room.width - 1, placement.column + 3), placement.row, 1, 1, 4.1, { flipX: true })
+                  buildSceneTileObject(room.id + "::cafe-table-" + index, room.id, roundTable, placement.column, placement.row, 2, 2, 4),
+                  buildSceneTileObject(room.id + "::cafe-chair-left-" + index, room.id, chairSprite, Math.max(0, placement.column - 1), placement.row + 1, 1, 1, 4.1),
+                  buildSceneTileObject(room.id + "::cafe-chair-right-" + index, room.id, chairSprite, Math.min(room.width - 1, placement.column + 2), placement.row + 1, 1, 1, 4.1, { flipX: true })
                 );
               });
             }
