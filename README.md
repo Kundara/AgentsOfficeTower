@@ -114,7 +114,7 @@ See [docs/agent-workflows.md](docs/agent-workflows.md) for the model baseline, r
 
 - **Cursor**: this repo includes `.cursor/hooks.json` and `.cursor/hooks/capture-cursor-hook.mjs` for local hook sidecars. Cursor cloud visibility can use `CURSOR_API_KEY` or the browser settings flow.
 
-- **Shared rooms**: use the browser `Settings` popup to join a PartyKit room. Each local project floor also has a persisted `Shared` toggle that defaults off; only shared projects with active agents are broadcast, and remote activity appears only on matching local projects that you also marked shared.
+- **Shared rooms**: use the browser `Settings` popup to join a PartyKit room. Each local project floor also has a persisted `Shared` toggle that defaults off; turning it on publishes that project's active agents to connected peers, and incoming shared activity appears on each peer's matching local project without requiring a second opt-in.
 
   ```bash
   npm run party:dev

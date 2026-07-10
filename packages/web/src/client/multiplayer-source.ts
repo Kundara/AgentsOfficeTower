@@ -228,7 +228,11 @@ export const MULTIPLAYER_SCRIPT = `
       }
 
       function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {
-        for (const key of snapshotWorkspaceKeys(remoteSnapshot)) {
+        const remoteRepoIdentity = sharedRepoIdentityForSnapshot(remoteSnapshot);
+        const candidateKeys = remoteRepoIdentity
+          ? ["git-repo:" + remoteRepoIdentity]
+          : snapshotWorkspaceKeys(remoteSnapshot).filter((key) => key.startsWith("workspace:"));
+        for (const key of candidateKeys) {
           const localSnapshot = localProjectsByKey.get(key);
           if (localSnapshot) {
             return localSnapshot;
@@ -697,7 +701,7 @@ export const MULTIPLAYER_SCRIPT = `
           sharedPeerCount += 1;
           for (const remoteSnapshot of peer.projects) {
             const localSnapshot = matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot);
-            if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {
+            if (!localSnapshot) {
               continue;
             }
             const remoteAgents = snapshotActiveSharedAgents(remoteSnapshot);
@@ -894,6 +898,7 @@ export const MULTIPLAYER_SCRIPT = `
         ) {
           return;
         }
+        const firstPayloadFromPeer = !multiplayerPeers.has(payload.peerId);
         const peerLabel = sanitizeMultiplayerNickname(payload.nickname) || sanitizeMultiplayerField(payload.peerLabel) || "Peer";
         multiplayerPeers.set(payload.peerId, {
           peerId: String(payload.peerId),
@@ -902,6 +907,9 @@ export const MULTIPLAYER_SCRIPT = `
           projects: payload.projects
         });
         applyFleet(state.localFleet);
+        if (firstPayloadFromPeer) {
+          scheduleMultiplayerBroadcast();
+        }
         pruneMultiplayerPeers();
       }
 

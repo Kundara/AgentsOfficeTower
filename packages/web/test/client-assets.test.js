@@ -326,10 +326,15 @@ test("client runtime active counters group subagents under their lead session", 
   const layoutSource = readRuntimeSource("layout-source.ts");
 
   assert.ok(layoutSource.includes("const countedFamilies = new Map();"));
+  assert.ok(layoutSource.includes("const live = !cloud && isLiveSceneAgent(agent);"));
   assert.ok(layoutSource.includes("while ("));
   assert.ok(layoutSource.includes("familyAgent.parentThreadId"));
   assert.ok(layoutSource.includes("const familyKey = familyAgent.id || agent.id;"));
   assert.ok(layoutSource.includes("for (const family of countedFamilies.values())"));
+  assert.match(
+    layoutSource,
+    /if \(family\.active\) counters\.active \+= 1;\n\s+if \(family\.blocked\) counters\.blocked \+= 1;\n\s+if \(family\.waiting\) counters\.waiting \+= 1;/
+  );
 });
 
 test("client runtime does not keep stale active local subagents busy forever", () => {
@@ -964,8 +969,12 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("function indexSharedSnapshotsByWorkspaceKey(snapshots) {"));
   assert.ok(multiplayerSource.includes("if (!snapshotsByKey.has(key)) {"));
   assert.ok(multiplayerSource.includes("function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {"));
+  assert.ok(multiplayerSource.includes("const remoteRepoIdentity = sharedRepoIdentityForSnapshot(remoteSnapshot);"));
+  assert.ok(multiplayerSource.includes('? ["git-repo:" + remoteRepoIdentity]'));
+  assert.ok(multiplayerSource.includes('.filter((key) => key.startsWith("workspace:"));'));
   assert.ok(multiplayerSource.includes("function snapshotActiveSharedAgents(snapshot) {"));
-  assert.ok(multiplayerSource.includes("if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {"));
+  assert.ok(multiplayerSource.includes("if (!localSnapshot) {"));
+  assert.ok(!multiplayerSource.includes("if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {"));
   assert.ok(multiplayerSource.includes("const localSnapshot = matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot);"));
   assert.ok(multiplayerSource.includes("function multiplayerLiveStatusDetail(room, host, peerCount) {"));
   assert.ok(multiplayerSource.includes('" - no shared active matching projects"'));
@@ -983,6 +992,11 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("hatId: localHatId"));
   assert.ok(multiplayerSource.includes("deviceId: currentMultiplayerDeviceId(),"));
   assert.ok(multiplayerSource.includes("payload.deviceId === currentMultiplayerDeviceId()"));
+  assert.ok(multiplayerSource.includes("const firstPayloadFromPeer = !multiplayerPeers.has(payload.peerId);"));
+  assert.match(
+    multiplayerSource,
+    /applyFleet\(state\.localFleet\);\n\s+if \(firstPayloadFromPeer\) \{\n\s+scheduleMultiplayerBroadcast\(\);/
+  );
   assert.ok(multiplayerSource.includes("accountAgents: Array.isArray(mergedFleet.accountAgents) ? mergedFleet.accountAgents : []"));
   assert.match(
     multiplayerSource,
@@ -1012,7 +1026,9 @@ test("workspace floors show multiplayer participants and expose a shared toggle"
   assert.ok(settingsSource.includes("function sharedParticipantLabelsForSnapshot(snapshot) {"));
   assert.ok(sceneSource.includes('class="tower-floor-participants"'));
   assert.ok(sceneSource.includes('data-action="toggle-project-share"'));
+  assert.ok(sceneSource.includes('"Shared On" : "Shared"'));
   assert.ok(uiSource.includes('if (action === "toggle-project-share") {'));
+  assert.ok(uiSource.includes('target.textContent = !enabled ? "Shared On" : "Shared";'));
   assert.ok(styles.includes(".tower-floor-participants {"));
   assert.ok(styles.includes(".tower-floor-share.active {"));
 });

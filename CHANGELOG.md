@@ -45,6 +45,8 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed per-floor `Shared` into a one-sided publish control: an active project shared by one peer now appears on connected peers with a matching workspace without requiring them to enable their own outbound toggle, late joiners receive a bounded first-seen-peer fleet reply, Git identity prevents unrelated same-named projects from merging, and the enabled state is brighter and labeled `Shared On`.
+- Changed floor workload counts so desk-live waiting, blocked, current, and cooldown work remains included in the active total while waiting and blocked remain visible as secondary counts, preventing occupied floors from reporting `quiet` or `0 active`.
 - Compacted the office scene: seated avatars, chairs, desks, and workstations render smaller, desk columns keep a one-tile gap with five-tile pods, and boss booths dropped to two tiles tall so six bosses stack vertically; boss booth boxes now sort by foot depth so each booth's back wall occludes the boss above it like a real wall separator.
 - Desk pods are now laid out by boss group: two-tile pods belonging to the same lead stack touching vertically (up to six per run, then a one-tile passage), while unrelated pods and solo pairs keep a one-tile passage between them.
 - Floor height is now fully adaptive in the compact fleet view: floors clip their unused bottom down to a minimum that fits two boss booths and two desk pod rows (9 tiles), grow with seating demand up to the configured 16-tile room as the maximum, and tween height changes (~240ms) instead of snapping.
