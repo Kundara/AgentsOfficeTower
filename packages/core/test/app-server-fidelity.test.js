@@ -4994,6 +4994,39 @@ test("discoverThreads coalesces overlapping refresh requests into one queued rer
   await monitor.stop();
 });
 
+test("discovery recovers when a thread reread never settles", async () => {
+  const projectRoot = "/tmp/CodexAgentsOffice-timeout";
+  const listedThread = {
+    ...sampleThread(),
+    id: "thr_timeout",
+    cwd: projectRoot
+  };
+  const monitor = new ProjectLiveMonitor({
+    projectRoot,
+    includeCloud: false,
+    localLimit: 1,
+    appServerRequestTimeoutMs: 10
+  });
+  let listCalls = 0;
+  monitor.client = {
+    listThreads: async () => {
+      listCalls += 1;
+      return [listedThread];
+    },
+    listLoadedThreads: async () => [],
+    readThread: async () => new Promise(() => {
+      setTimeout(() => {}, 100);
+    }),
+    close: () => {}
+  };
+
+  await monitor.discoverThreads();
+  await monitor.discoverThreads();
+
+  assert.equal(listCalls, 2);
+  await monitor.stop();
+});
+
 test("discovery does not stop ongoing threads missing from the current list page", async () => {
   const projectRoot = "/tmp/CodexAgentsOffice";
   const monitor = new ProjectLiveMonitor({

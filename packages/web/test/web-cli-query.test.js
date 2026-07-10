@@ -43,7 +43,10 @@ function agent(overrides = {}) {
     threadId: overrides.threadId ?? "thread-1",
     provenance: overrides.provenance ?? "codex",
     confidence: overrides.confidence ?? "typed",
-    network: overrides.network ?? null
+    network: overrides.network ?? null,
+    isCurrent: overrides.isCurrent ?? false,
+    isOngoing: overrides.isOngoing ?? false,
+    needsUser: overrides.needsUser ?? null
   };
 }
 
@@ -207,6 +210,14 @@ test("web CLI gist returns hot changes and active agent state sync", () => {
               blockers: [],
               updatedAt: "2026-05-13T10:02:30.000Z"
             }
+          }),
+          agent({
+            id: "agent-stale-blocked",
+            label: "Historical blocker",
+            state: "blocked",
+            isCurrent: false,
+            isOngoing: false,
+            updatedAt: "2026-05-01T10:00:00.000Z"
           }),
           agent({ id: "agent-idle", label: "Resting", state: "idle", isCurrent: false, isOngoing: false })
         ]

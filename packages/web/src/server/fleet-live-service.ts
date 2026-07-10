@@ -38,6 +38,7 @@ import {
 
 export const DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
+export const FLEET_MONITOR_REFRESH_TIMEOUT_MS = 20000;
 const HERMES_FLOATING_AGENT_LIMIT = 12;
 const OPENCLAW_FLOATING_AGENT_LIMIT = 12;
 
@@ -62,6 +63,30 @@ export function shouldRefreshProjectSet(
   return force
     || lastRefreshAt <= 0
     || now - lastRefreshAt >= refreshIntervalMs;
+}
+
+export async function refreshMonitorWithinTimeout(
+  refresh: () => Promise<void>,
+  timeoutMs = FLEET_MONITOR_REFRESH_TIMEOUT_MS
+): Promise<boolean> {
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    await Promise.race([
+      refresh(),
+      new Promise<void>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Project monitor refresh timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      })
+    ]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 export function mergeDiscoveredProjectRootsWithSeeds(
@@ -228,7 +253,9 @@ export class FleetLiveService {
     await this.ensureProjectSet(true);
     await this.refreshSharedCloudTasks();
     await this.refreshAccountAgents(true);
-    await Promise.all(Array.from(this.monitors.values()).map((monitor) => monitor.refreshNow()));
+    await Promise.all(Array.from(this.monitors.values()).map((monitor) => (
+      refreshMonitorWithinTimeout(() => monitor.refreshNow())
+    )));
     await this.publish();
     return this.getFleet();
   }

@@ -333,7 +333,7 @@ function eventToItem(snapshot: DashboardSnapshot, event: DashboardEvent): WebCli
 function isActiveAgent(agent: DashboardAgent): boolean {
   return agent.isCurrent
     || agent.isOngoing
-    || !["done", "idle", "cloud"].includes(agent.state);
+    || Boolean(agent.needsUser);
 }
 
 function hotChangeToGist(change: HotChangeSummary): WebCliGistHotChange {

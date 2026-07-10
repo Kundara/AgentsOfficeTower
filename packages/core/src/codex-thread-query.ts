@@ -105,11 +105,12 @@ export async function listCodexProjectThreadCandidates(input: {
 
 export async function readCodexThreadWithTimeout(
   client: CodexAppServerClient,
-  threadId: string
+  threadId: string,
+  timeoutMs = APP_SERVER_THREAD_READ_TIMEOUT_MS
 ): Promise<CodexThread> {
   return await withTimeout(
     client.readThread(threadId),
-    APP_SERVER_THREAD_READ_TIMEOUT_MS,
+    timeoutMs,
     "thread/read"
   );
 }

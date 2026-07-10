@@ -4,13 +4,24 @@ const assert = require("node:assert/strict");
 const { buildFleetResponse, buildServerMeta } = require("../dist/server-metadata.js");
 const {
   DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS,
+  FLEET_MONITOR_REFRESH_TIMEOUT_MS,
   FleetLiveService,
   PROJECT_SET_REFRESH_INTERVAL_MS,
   filterFreshDiscoveredProjects,
   mergeDiscoveredProjectRootsWithSeeds,
+  refreshMonitorWithinTimeout,
   shouldRefreshProjectSet,
   sortProjectRootsWithCoworkLast
 } = require("../dist/server/fleet-live-service.js");
+
+test("fleet monitor refresh timeout keeps a degraded project from blocking the fleet", async () => {
+  assert.equal(FLEET_MONITOR_REFRESH_TIMEOUT_MS, 20000);
+  assert.equal(await refreshMonitorWithinTimeout(async () => {}, 10), true);
+  assert.equal(
+    await refreshMonitorWithinTimeout(() => new Promise(() => {}), 10),
+    false
+  );
+});
 
 test("server metadata can reflect the live fleet project set", () => {
   const options = {

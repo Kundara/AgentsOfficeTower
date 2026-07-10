@@ -156,6 +156,9 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed long-lived fleet monitors permanently missing newly started Codex threads after an app-server read, loaded-thread query, or goal lookup stalled; discovery requests are now bounded, a degraded project can no longer block a fleet-wide refresh, and CLI gist counts no longer report stale blocked history as active work.
+- Fixed agent-workflow validation rejecting valid repo skills solely because their frontmatter used Windows CRLF line endings.
+
 - Fixed compact boss-booth depth sorting so booth walls and their workstation contents share one room-relative depth plane, allowing lower booth walls to occlude upper bosses correctly.
 - Fixed grouped workstation allocation to preserve prior pod and mirrored-seat placement as team membership changes, and to keep nested descendants with their top-level lead even when an intermediate parent is absent from the snapshot.
 - Fixed project-root stripping in hover and activity text for native Windows, UNC, mixed-separator, and case-varied paths instead of limiting the cleanup to POSIX roots.

@@ -197,7 +197,7 @@ function validateSkill(repoRoot, skillName, fail) {
     return;
   }
 
-  const source = readFileSync(skillPath, "utf8");
+  const source = readFileSync(skillPath, "utf8").replace(/\r\n/g, "\n");
   const frontmatter = source.match(/^---\n([\s\S]*?)\n---\n/);
   if (!frontmatter) {
     fail(`${skillName} has invalid YAML frontmatter.`);

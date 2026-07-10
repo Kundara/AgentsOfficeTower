@@ -91,6 +91,7 @@ const RECENT_EVENT_RETENTION_MS = 45 * 60 * 1000;
 // Desktop-backed thread attaches can easily take 20s+ on large rollouts.
 // Keep a wider budget so live subscriptions don't flap back to read-only.
 const APP_SERVER_SUBSCRIPTION_TIMEOUT_MS = 60000;
+const APP_SERVER_DISCOVERY_REQUEST_TIMEOUT_MS = 15000;
 const CLOUD_NOTE_LEGACY_PREFIX = "Codex cloud list unavailable:";
 const CLOUD_NOTE_PREFIX = "Codex cloud ";
 const STOPPED_THREAD_REMOVAL_BUFFER_MS = 1000;
@@ -218,12 +219,14 @@ export interface ProjectLiveMonitorOptions {
   projectRoot: string;
   localLimit?: number;
   includeCloud?: boolean;
+  appServerRequestTimeoutMs?: number;
 }
 
 export class ProjectLiveMonitor extends EventEmitter {
   private readonly projectRoot: string;
   private readonly localLimit: number;
   private readonly includeCloud: boolean;
+  private readonly appServerRequestTimeoutMs: number;
   private readonly threads = new Map<string, CodexThread>();
   private readonly threadWatchers = new Map<string, FSWatcher>();
   private readonly threadReadTimers = new Map<string, NodeJS.Timeout>();
@@ -268,6 +271,8 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.projectRoot = options.projectRoot;
     this.localLimit = options.localLimit ?? DEFAULT_LOCAL_THREAD_LIMIT;
     this.includeCloud = options.includeCloud !== false;
+    this.appServerRequestTimeoutMs = options.appServerRequestTimeoutMs
+      ?? APP_SERVER_DISCOVERY_REQUEST_TIMEOUT_MS;
     this.roomConfigPath = getRoomsFilePath(this.projectRoot);
   }
 
@@ -617,14 +622,22 @@ export class ProjectLiveMonitor extends EventEmitter {
       );
       const listedThreadsById = new Map(query.allThreads.map((thread) => [thread.id, thread]));
       const listedChildrenByParent = childThreadsByParent(query.allThreads);
-      const loadedThreadIds = await this.client.listLoadedThreads().catch(() => []);
+      const loadedThreadIds = await withTimeout(
+        this.client.listLoadedThreads(),
+        this.appServerRequestTimeoutMs,
+        "thread/loaded/list"
+      ).catch(() => []);
       for (const threadId of loadedThreadIds) {
         if (projectThreadsById.has(threadId) || trackedThreads.has(threadId)) {
           continue;
         }
         let loadedThread: CodexThread | null = null;
         try {
-          loadedThread = await readCodexThreadWithTimeout(this.client, threadId);
+          loadedThread = await readCodexThreadWithTimeout(
+            this.client,
+            threadId,
+            this.appServerRequestTimeoutMs
+          );
         } catch {
           loadedThread = null;
         }
@@ -653,7 +666,11 @@ export class ProjectLiveMonitor extends EventEmitter {
             ?? null;
           if (!parentThread) {
             try {
-              parentThread = await readCodexThreadWithTimeout(this.client, parentThreadId);
+              parentThread = await readCodexThreadWithTimeout(
+                this.client,
+                parentThreadId,
+                this.appServerRequestTimeoutMs
+              );
             } catch {
               parentThread = null;
             }
@@ -1145,7 +1162,11 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
 
     try {
-      const goal = codexGoalToAgentGoal(await this.client.getThreadGoal(threadId));
+      const goal = codexGoalToAgentGoal(await withTimeout(
+        this.client.getThreadGoal(threadId),
+        this.appServerRequestTimeoutMs,
+        `thread/goal/get ${threadId.slice(0, 8)}`
+      ));
       if (goal) {
         this.threadGoals.set(threadId, goal);
       } else {
@@ -1172,7 +1193,11 @@ export class ProjectLiveMonitor extends EventEmitter {
         || (previousThread ? isOngoingThread(previousThread) : false);
       let readThread: CodexThread;
       try {
-        readThread = await this.client.readThread(threadId);
+        readThread = await readCodexThreadWithTimeout(
+          this.client,
+          threadId,
+          this.appServerRequestTimeoutMs
+        );
       } catch (error) {
         if (!listedThread) {
           throw error;
