@@ -5008,7 +5008,16 @@ test("discovery recovers when a thread reread never settles", async () => {
     appServerRequestTimeoutMs: 10
   });
   let listCalls = 0;
-  monitor.client = {
+  const healthyClient = {
+    listThreads: async () => {
+      listCalls += 1;
+      return [listedThread];
+    },
+    listLoadedThreads: async () => [],
+    readThread: async () => listedThread,
+    close: () => {}
+  };
+  const stalledClient = {
     listThreads: async () => {
       listCalls += 1;
       return [listedThread];
@@ -5019,11 +5028,20 @@ test("discovery recovers when a thread reread never settles", async () => {
     }),
     close: () => {}
   };
+  monitor.client = stalledClient;
+  monitor.ensureClient = async () => {
+    if (!monitor.client) {
+      monitor.client = healthyClient;
+    }
+  };
 
   await monitor.discoverThreads();
+  assert.equal(monitor.client, null);
   await monitor.discoverThreads();
 
   assert.equal(listCalls, 2);
+  assert.equal(monitor.client, healthyClient);
+  assert.equal(monitor.threads.get(listedThread.id)?.id, listedThread.id);
   await monitor.stop();
 });
 

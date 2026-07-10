@@ -552,6 +552,17 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
   }
 
+  private recoverTimedOutAppServerClient(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/timed out after \d+ms/i.test(message)) {
+      return;
+    }
+    this.addNote(`Local Codex app-server connection reset after timeout: ${message}`);
+    this.client?.close();
+    this.client = null;
+    this.subscribedThreadIds.clear();
+  }
+
   private setCloudErrorNote(errorMessage: string | null): void {
     this.clearMatchingNote(CLOUD_NOTE_LEGACY_PREFIX);
     this.clearMatchingNote(CLOUD_NOTE_PREFIX);
@@ -626,7 +637,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         this.client.listLoadedThreads(),
         this.appServerRequestTimeoutMs,
         "thread/loaded/list"
-      ).catch(() => []);
+      );
       for (const threadId of loadedThreadIds) {
         if (projectThreadsById.has(threadId) || trackedThreads.has(threadId)) {
           continue;
@@ -743,6 +754,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       }
       const message = error instanceof Error ? error.message : String(error);
       this.addNote(`Local Codex app-server unavailable: ${message}`);
+      this.recoverTimedOutAppServerClient(error);
       this.client?.close();
       this.client = null;
       this.subscribedThreadIds.clear();
@@ -1172,7 +1184,8 @@ export class ProjectLiveMonitor extends EventEmitter {
       } else {
         this.threadGoals.delete(threadId);
       }
-    } catch {
+    } catch (error) {
+      this.recoverTimedOutAppServerClient(error);
       // Goal metadata is best-effort and should not disturb thread visibility.
     }
   }
@@ -1199,6 +1212,7 @@ export class ProjectLiveMonitor extends EventEmitter {
           this.appServerRequestTimeoutMs
         );
       } catch (error) {
+        this.recoverTimedOutAppServerClient(error);
         if (!listedThread) {
           throw error;
         }
