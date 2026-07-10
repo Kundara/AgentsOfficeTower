@@ -7,6 +7,7 @@ import { readJsonBody, notFound, sendAbsoluteFileAsset, sendHtml, sendJson, send
 import { buildServerMeta } from "./server-metadata";
 import { renderHtml } from "../render/render-html";
 import { renderIconAuditHtml } from "../render/render-icon-audit-html";
+import { renderLayoutAuditHtml } from "../render/render-layout-audit-html";
 import { renderSceneEffectsAuditHtml } from "../render/render-scene-effects-audit-html";
 import { renderWideOfficeAuditHtml } from "../render/render-wide-office-audit-html";
 import { renderZOrderAuditHtml } from "../render/render-z-order-audit-html";
@@ -342,6 +343,24 @@ async function handleWideOfficeAuditRoute(context: RequestContext): Promise<bool
   }
 
   sendHtml(context.response, renderWideOfficeAuditHtml());
+  return true;
+}
+
+async function handleLayoutAuditRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET", "HEAD") || context.url.pathname !== "/layout-audit") {
+    return false;
+  }
+
+  if (requestMethod(context) === "HEAD") {
+    context.response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    context.response.end();
+    return true;
+  }
+
+  sendHtml(context.response, renderLayoutAuditHtml());
   return true;
 }
 
@@ -713,6 +732,7 @@ const ROUTES: RouteHandler[] = [
   handleIconAuditRoute,
   handleSceneEffectsAuditRoute,
   handleWideOfficeAuditRoute,
+  handleLayoutAuditRoute,
   handleZOrderAuditRoute,
   handleFleetRoute,
   handleServerMetaRoute,

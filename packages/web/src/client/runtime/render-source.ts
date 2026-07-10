@@ -1355,7 +1355,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const seatIndex = index % 4;
         const sofa = layout.sofas[Math.floor(seatIndex / 2)];
         const seatWithinSofa = seatIndex % 2;
-        const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5);
+        const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1.06 : 1.28);
         const avatarHeight = avatarSize.height;
         const sofaWidth = Number(sofa?.sprite?.w) || layout.sofaWidth;
         const seatOffsetRatio = seatWithinSofa === 0 ? 0.18 : 0.62;
@@ -1382,7 +1382,7 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const SEATED_AVATAR_DEPTH_BIAS = 760;
         const WORKSTATION_FRONT_DEPTH_BIAS = 620;
         const state = agent?.state || "idle";
-        const avatarSize = agent ? avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5) : null;
+        const avatarSize = agent ? avatarVisualSizeForAgent(agent, compact ? 1.06 : 1.28) : null;
         const avatar = avatarSize ? avatarSize.avatar : null;
         const avatarWidth = avatarSize ? avatarSize.width : 0;
         const avatarHeight = avatarSize ? avatarSize.height : 0;
@@ -1392,17 +1392,17 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const deskScale = fitSpriteToWidth(
           deskSprite,
           boothWidth * (options.lead ? 0.2 : 0.18),
-          compact ? 1.28 : 1.42,
-          compact ? 1.44 : 1.62
+          compact ? 1.1 : 1.24,
+          compact ? 1.26 : 1.42
         );
         const computerSprite = computerSpriteForAgent(agent, mirrored);
         const workstationScale = fitSpriteToWidth(
           computerSprite,
           boothWidth * (options.lead ? 0.23 : 0.21),
-          compact ? 1.32 : 1.48,
-          compact ? 1.68 : 1.96
+          compact ? 1.14 : 1.3,
+          compact ? 1.46 : 1.72
         );
-        const chairScale = compact ? 1.18 : 1.34;
+        const chairScale = compact ? 1.0 : 1.16;
         const deskWidth = deskSprite.w * deskScale;
         const deskHeight = deskSprite.h * deskScale;
         const workstationWidth = computerSprite.w * workstationScale;
@@ -1440,7 +1440,11 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
             return null;
           }
           const workstationFlip = mirrored;
-          const baseY = Math.round(deskY + deskHeight - avatarHeight + (compact ? 1 : 2));
+          const depthShrink = avatarVisualScaleForAgent(agent, 1);
+          const seatLift = depthShrink < 1
+            ? Math.round(avatarHeight * (1 / depthShrink - 1) * 0.6)
+            : 0;
+          const baseY = Math.round(deskY + deskHeight - avatarHeight + (compact ? 1 : 2)) - seatLift;
           const seatInset = chairWidth * 0.22 - (compact ? 4 : 6);
           const seatedX = mirrored
             ? clampAvatarX(Math.round(chairX + chairWidth - avatarWidth - seatInset))

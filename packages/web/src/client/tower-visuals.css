@@ -586,6 +586,23 @@ textarea:focus-visible,
   scrollbar-gutter: stable;
 }
 
+/* ------------------------------------------------------------ hover cards */
+.agent-hover-action {
+  margin-top: 1px;
+  font-size: 6px;
+  line-height: 1.15;
+  color: rgba(214, 222, 214, 0.58);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.office-map-agent-hit .agent-hover-action,
+.office-map-hover-layer[data-hover-kind="agent"] .agent-hover-action {
+  margin-top: 4px;
+  font-size: calc(11px * var(--ui-text-scale));
+  line-height: 1.3;
+}
+
 /* ------------------------------------------------------------------ misc */
 .hermes-float-agent {
   transition:

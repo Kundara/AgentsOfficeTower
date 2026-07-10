@@ -9,6 +9,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added a `/layout-audit` route that runs the normal client bundle against synthetic floors (6-boss vertical column, mixed boss/desk, desks-only, quiet) for previewing and tuning workstation layout dynamics.
 - Added a private rootless account-agent lane and bounded Claude Desktop HTTP-cache observer for recent `product:cowork-remote` Home work metadata, rendering inferred read-only Claude agents in Chat Café and Sessions without extracting, retaining, or exposing credentials or prompt/message bodies, and without calling private endpoints.
 - Added browser-local per-workspace scene customization beside Shared/Focus, with Floor, Wall, and Board color inputs, bounded derived shades, live Pixi preview, reset, and persistence across merged or split worktree views.
 - Added a permanent street-level Chat Café floor that combines canonical projectless Codex Chat and locally materialized Claude Home work sessions, reserves support for an explicit typed Codex Work mode, preserves real source roots for thread actions, and renders pavement, storefronts, tables, chairs, café fixtures, and occupied navigation-aware workstations.
@@ -44,6 +45,11 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Compacted the office scene: seated avatars, chairs, desks, and workstations render smaller, desk columns keep a two-tile gap with five-tile pods, and boss booths dropped to two tiles tall so six bosses stack vertically; boss booth boxes now sort by foot depth so each booth's back wall occludes the boss above it like a real wall separator.
+- Floor height is now content-driven in the compact fleet view (wall + boss column/desk rows + walkway, clamped 10-16 rows) instead of a fixed trim, so quiet floors stay short and busy floors grow to fit their seating.
+- Fixed shared desk pods overlapping into one consolidated pile after the pod-width reduction: paired occupants now split the pod into two non-overlapping mirrored back-to-back cells.
+- Depth-shrunk subagents now sit proportionally higher at their desks so they read as seated on the chair instead of standing beside it.
+- Hover-card action lines ("File:", "Command:") got their own style - smaller gray monospace that wraps instead of overflowing the card - and display text now strips the project root from absolute paths on all platforms, not just WSL `/mnt/` paths.
 - Redesigned the page header into a compact top bar: pixel AOT brand mark with an inline update time, live summary chips that hide zero Waiting/Blocked/Cloud counts, and a single slim workspace-tabs row replacing the separate Workspaces heading and the duplicated tracked/floors/recent copy.
 - Redesigned the tower wrapper and floor strips: a rooftop signage plate reading AGENTS OFFICE TOWER, slimmer shaft walls with window banding, an entrance on the foundation, and 34px floor strips whose verbose zero-count text became colored status chips (live/waiting/blocked/cloud, with a dashed quiet/open chip when idle) plus smaller floor actions; full counts moved into the strip tooltip, including the café's Quick Chat: Add to task hint.
 - Trimmed default single-room workspace floors to 13 tile rows in the compact fleet view so towers stop stretching empty bottom floor, while keeping every desk row, full-width scenes without side letterboxing, and untouched heights for focus mode, custom multi-room layouts, and the Chat Café.

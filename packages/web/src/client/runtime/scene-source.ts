@@ -709,19 +709,8 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
 
         const compact = options.compact === true;
         const focusMode = options.focusMode === true;
-        const roomHeightCapTiles = compact
-          && !focusMode
-          && (snapshot.sceneKind || "workspace") !== "street-cafe"
-          && sceneRooms.visibleRooms.length === 1
-          ? 13
-          : Number.POSITIVE_INFINITY;
-        const rooms = sceneRooms.visibleRooms.map((room) =>
-          room.height > roomHeightCapTiles ? { ...room, height: roomHeightCapTiles } : room
-        );
         const layoutConfig = fixedSceneLayoutConfig(compact);
         const tile = layoutConfig.tileSize;
-        const baseMaxX = Math.max(...rooms.map((room) => room.x + room.width), 24);
-        const maxY = Math.max(...rooms.map((room) => room.y + room.height), 8);
         const waitingAgents = sortAgentsStably(
           \`\${snapshot.projectRoot}::\${compact ? "compact-waiting" : "waiting"}\`,
           snapshot.agents.filter((agent) => agent.state === "waiting" && agent.source !== "cloud" && !isFloatingOrchestratorAgent(agent) && !shouldSeatAtWorkstation(agent))
@@ -735,6 +724,33 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           )
           .slice(0, 4);
         const offDeskAgentIds = new Set([...waitingAgents, ...allRestingAgents].map((agent) => agent.id));
+        const roomHeightCapTiles = (() => {
+          if (!compact || focusMode || (snapshot.sceneKind || "workspace") === "street-cafe" || sceneRooms.visibleRooms.length !== 1) {
+            return Number.POSITIVE_INFINITY;
+          }
+          const seatedAgents = snapshot.agents.filter((agent) =>
+            agent.source !== "cloud"
+            && !isFloatingOrchestratorAgent(agent)
+            && !offDeskAgentIds.has(agent.id)
+          );
+          const officeCount = seatedAgents.filter((agent) => isBossOfficeCandidate(snapshot, agent)).length;
+          const deskAgentCount = seatedAgents.length - officeCount;
+          const bossInsetRows = layoutConfig.bossOfficeTopRow - layoutConfig.deskTopRow;
+          const bossRows = officeCount > 0
+            ? bossInsetRows + officeCount * layoutConfig.bossOfficeHeightTiles
+            : 0;
+          const podCount = Math.ceil(deskAgentCount / Math.max(1, layoutConfig.deskPodCapacity));
+          const deskRows = podCount > 0
+            ? Math.min(podCount, layoutConfig.cubiclesPerColumn * layoutConfig.cubicleRows) * layoutConfig.podHeightTiles
+            : 0;
+          const contentRows = Math.max(6, bossRows, deskRows);
+          return Math.max(10, layoutConfig.deskTopRow + contentRows + 1);
+        })();
+        const rooms = sceneRooms.visibleRooms.map((room) =>
+          room.height > roomHeightCapTiles ? { ...room, height: roomHeightCapTiles } : room
+        );
+        const baseMaxX = Math.max(...rooms.map((room) => room.x + room.width), 24);
+        const maxY = Math.max(...rooms.map((room) => room.y + room.height), 8);
         const model = {
           projectRoot: snapshot.projectRoot,
           sceneKind: snapshot.sceneKind || "workspace",
@@ -983,8 +999,11 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             };
             entry.agents.forEach((agent, index) => {
               const tile = sceneTileSize(compact);
-              const cellWidth = Math.min(entry.slot.width, tile * 3);
               const hasBothSides = Boolean(entry.agents[0] && entry.agents[1]);
+              const cellWidth = Math.min(
+                hasBothSides ? Math.floor(entry.slot.width / 2) : entry.slot.width,
+                tile * 3
+              );
               const leftCellX = 0;
               const rightCellX = Math.max(0, entry.slot.width - cellWidth);
               const seatMirrored = hasBothSides

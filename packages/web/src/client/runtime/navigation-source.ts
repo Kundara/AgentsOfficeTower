@@ -3187,32 +3187,35 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
             addDebugBounds(office.x, office.y, office.width, office.height, 0xff8d4d, tileBoundsLabel(office.width, office.height, model.tile));
           }
           const wallHeight = Math.max(model.tile + 8, Math.round(office.height * 0.42));
+          // Booth contents sort with depthBaseY 0 (cell defs never receive a
+          // finite base), so the booth box must use the same base to interleave.
+          const officeDepthBase = 0;
           const shell = new PIXI.Graphics()
             .rect(office.x, office.y, office.width, office.height)
             .fill({ color: 0x1b2b33, alpha: 0.96 })
             .stroke({ color: 0xffcf4d, width: 2, alpha: 0.42 });
-          shell.zIndex = 5;
+          applyFootDepth(shell, office.y, wallHeight, 10, model.tile, officeDepthBase);
           renderer.root.addChild(shell);
           officeNodes.push(shell);
 
           const wall = new PIXI.Graphics()
             .rect(office.x + 2, office.y + 2, Math.max(0, office.width - 4), Math.max(0, wallHeight - 2))
             .fill({ color: 0xd8d5c6, alpha: 0.98 });
-          wall.zIndex = 6;
+          applyFootDepth(wall, office.y, wallHeight, 20, model.tile, officeDepthBase);
           renderer.root.addChild(wall);
           officeNodes.push(wall);
 
           const divider = new PIXI.Graphics()
             .rect(office.x + 2, office.y + wallHeight, Math.max(0, office.width - 4), 2)
             .fill({ color: 0x788f87, alpha: 0.94 });
-          divider.zIndex = 7;
+          applyFootDepth(divider, office.y, wallHeight + 2, 30, model.tile, officeDepthBase);
           renderer.root.addChild(divider);
           officeNodes.push(divider);
 
           const floor = new PIXI.Graphics()
             .rect(office.x + 2, office.y + wallHeight + 2, Math.max(0, office.width - 4), Math.max(0, office.height - wallHeight - 4))
             .fill({ color: 0x405851, alpha: 0.96 });
-          floor.zIndex = 6;
+          applyFootDepth(floor, office.y, wallHeight, 12, model.tile, officeDepthBase);
           renderer.root.addChild(floor);
           officeNodes.push(floor);
 
@@ -3221,7 +3224,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
           const doorway = new PIXI.Graphics()
             .rect(doorwayX, office.y + office.height - 2, doorwayWidth, 2)
             .fill({ color: 0x0b1b2b, alpha: 1 });
-          doorway.zIndex = 7;
+          applyFootDepth(doorway, office.y, office.height, 14, model.tile, officeDepthBase);
           renderer.root.addChild(doorway);
           officeNodes.push(doorway);
 
@@ -3310,7 +3313,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
               .roundRect(office.x + 4, office.y + 4, Math.max(32, office.badgeLabel.length * 4 + 6), 10, 2)
               .fill({ color: 0x0c1210, alpha: 0.62 })
               .stroke({ color: 0xffffff, width: 1, alpha: 0.14 });
-            badgeBg.zIndex = 11;
+            applyFootDepth(badgeBg, office.y, wallHeight, 880, model.tile, officeDepthBase);
             renderer.root.addChild(badgeBg);
             const badgeText = createPixiText(renderer, office.badgeLabel, {
               fill: 0xf6eed9,
@@ -3319,7 +3322,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
             });
             badgeText.x = office.x + 7;
             badgeText.y = office.y + 5;
-            badgeText.zIndex = 12;
+            applyFootDepth(badgeText, office.y, wallHeight, 890, model.tile, officeDepthBase);
             renderer.root.addChild(badgeText);
             officeNodes.push(badgeBg, badgeText);
           }

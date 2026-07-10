@@ -349,8 +349,8 @@ test("client runtime renders each subagent depth at 75 percent of its parent dep
   assert.ok(layoutSource.includes("const rawDepth = Number(agent && agent.depth);"));
   assert.ok(layoutSource.includes("const nestedDepth = Number.isFinite(rawDepth)"));
   assert.ok(layoutSource.includes("return normalizedBaseScale * Math.pow(0.75, nestedDepth);"));
-  assert.ok(renderSource.includes("const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5);"));
-  assert.ok(renderSource.includes("const avatarSize = agent ? avatarVisualSizeForAgent(agent, compact ? 1.25 : 1.5) : null;"));
+  assert.ok(renderSource.includes("const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1.06 : 1.28);"));
+  assert.ok(renderSource.includes("const avatarSize = agent ? avatarVisualSizeForAgent(agent, compact ? 1.06 : 1.28) : null;"));
   assert.ok(sceneSource.includes("const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1 : 1.08);"));
   assert.doesNotMatch(sceneSource, /avatarForAgent\(agent\)\.[wh] \* \(compact \? 1 : 1\.08\)/);
 });
@@ -1121,14 +1121,14 @@ test("workspace focus reuses compact scene geometry and grid-snapped desk starts
   );
 });
 
-test("workspace desk columns keep a three-tile gap between workstation pods", () => {
+test("workspace desk columns keep a two-tile gap between workstation pods", () => {
   const sceneConfigSource = readFileSync(
     join(__dirname, "../src/scene-config.ts"),
     "utf8"
   ).replace(/\r\n/g, "\n");
   const sceneGridSource = readClientSource("scene-grid-source.ts");
 
-  assert.match(sceneConfigSource, /deskColumnGapTiles: 3,/);
+  assert.match(sceneConfigSource, /deskColumnGapTiles: 2,/);
   assert.ok(sceneGridSource.includes("const columnX = deskStartX + columnIndex * (config.podWidth + config.deskColumnGap);"));
 });
 
@@ -1203,7 +1203,7 @@ test("runtime source strips markdown formatting markers from display text", () =
   assert.ok(layoutSource.includes('.split(String.fromCharCode(96)).join("")'));
   assert.ok(layoutSource.includes("function replaceGoalCommandLabel(value) {"));
   assert.ok(layoutSource.includes('replace(/(^|[\\\\s(\\\\x5B\\\\x7B<"\'])\\\\/goal(?=$|[\\\\s)\\\\]\\\\x7D,.!?:;"\'>])/g, "$1🎯")'));
-  assert.ok(layoutSource.includes("const displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));"));
+  assert.ok(layoutSource.includes("let displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));"));
   assert.ok(layoutSource.includes('const next = displayText.indexOf("/mnt/", index);'));
   assert.ok(layoutSource.includes("output += displayText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));"));
 });

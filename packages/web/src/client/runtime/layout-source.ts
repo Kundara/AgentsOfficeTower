@@ -1631,9 +1631,16 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         if (!normalized) {
           return "";
         }
-        const displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));
+        let displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));
         if (!displayText) {
           return "";
+        }
+        const root = String(projectRoot || "").replace(/\\/+$/, "");
+        if (root.length > 1 && root.startsWith("/")) {
+          displayText = displayText.split(root + "/").join("");
+          if (displayText === root) {
+            displayText = ".";
+          }
         }
         const isPathBoundary = (character) => {
           if (!character) {
