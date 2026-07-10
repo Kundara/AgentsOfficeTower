@@ -387,8 +387,8 @@ The active office view currently favors an open station language over enclosed c
 - workstation slots are pinned to a fixed floor grid instead of being repacked when new agents appear
 - workstation slot ownership should be sticky across incremental scene updates; a scene rerender or non-positional refresh must not discard prior slot memory
 - desk columns start around one-fifth of the room width, leaving room for a compact stacked boss-office column on the left when needed
-- each workstation column now uses a single visible cubicle stack with 3 tightly stacked workstation rows so active desks stay inside a standard room height
-- role grouping prefers to keep the same agent types inside the same visible workstation stack before spilling into a new column
+- desk pods are two tiles tall and laid out by lead group: pods whose occupants share the same boss stack touching vertically (up to six pods per run before a one-tile passage), while unrelated pods and paired solo sessions keep a one-tile passage between them; desk columns are one tile apart and pods flow into a new column when the run exceeds the floor's content rows
+- compact fleet floors size themselves to seating demand: height is wall depth plus max(boss column, first desk column, two-boss/two-desk-row minimum) plus one walkway row, clamped to the configured room height (16 rows) as the maximum; quiet floors clip their unused bottom and the host tweens height changes (~240ms) instead of snapping
 - a single occupied two-seat pod stays anchored to a real seat cell instead of collapsing to a centered pseudo-seat
 - the first occupied seat in a pod defaults to the left seat cell, and a second occupied seat expands into the right seat cell without shifting the first workstation
 - newly occupied seats use a short retro blink reveal so the workstation appears before the worker settles
@@ -398,7 +398,7 @@ The active office view currently favors an open station language over enclosed c
 - lead-session arrivals and all departures use the center-top room entrance as the path anchor; newly visible subagents start from their parent agent's current scene position before walking to their assigned workstation
 - ordinary refreshes now reuse a settled same-slot target when the layout delta is only a tiny no-op drift, so polling does not look like an unnecessary seat shuffle
 - finished subagents now keep a longer readable desk cooldown before they walk back out through that doorway instead of vanishing immediately
-- lead sessions with active subagents move into a dedicated left-side boss-office column; the column starts one floor tile below the floor start and uses contiguous 3-tile-tall office slots so four bosses can stack in a standard room while still reading as offices instead of rounded placeholder frames
+- lead sessions with active subagents move into a dedicated left-side boss-office column; the column starts one floor tile below the floor start and uses contiguous 2-tile-tall office slots so six bosses can stack in a standard room, and booth boxes sort by foot depth so each booth's back wall occludes the boss above it like a wall separator
 - hovering a boss reveals arrow lines to the related spawned subagents whether that lead is in a boss office or in an ordinary workstation with one visible child
 - chairs and seated reach points sit slightly outward from the desk so the monitor relationship reads cleanly
 - workstation computers currently use the single complete desk cut, avoiding the broken narrow pseudo-monitor asset

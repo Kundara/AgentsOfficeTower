@@ -585,6 +585,12 @@ textarea:focus-visible,
 .office-map-host {
   scrollbar-gutter: stable;
 }
+.office-map-host-animated {
+  transition: height 240ms cubic-bezier(0.3, 0.75, 0.25, 1);
+}
+body.workspace-focus .office-map-host-animated {
+  transition: none;
+}
 
 /* ------------------------------------------------------------ hover cards */
 .agent-hover-action {

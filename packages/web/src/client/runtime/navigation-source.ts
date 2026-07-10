@@ -43,7 +43,11 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
         const leftOffset = Math.max(0, Math.round((availableWidth - scaledWidth) / 2));
         renderer.scale = scale;
         renderer.leftOffset = leftOffset;
+        if (renderer.hostHeightSynced === true) {
+          renderer.host.classList.add("office-map-host-animated");
+        }
         setPixelStyleIfChanged(renderer.host, "height", scaledHeight + "px");
+        renderer.hostHeightSynced = true;
         setPixelStyleIfChanged(renderer.canvasContainer, "left", leftOffset + "px");
         setPixelStyleIfChanged(renderer.canvasContainer, "width", scaledWidth + "px");
         setPixelStyleIfChanged(renderer.canvasContainer, "height", scaledHeight + "px");

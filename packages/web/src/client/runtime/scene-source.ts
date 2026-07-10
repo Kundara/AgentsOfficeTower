@@ -747,8 +747,12 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             12,
             groupedDeskRowsDemand(layoutConfig, deskGroupPodCounts(capDeskGroups, layoutConfig.deskPodCapacity))
           );
-          const contentRows = Math.max(6, bossRows, deskRows);
-          return Math.max(10, layoutConfig.deskTopRow + contentRows + 1);
+          const minContentRows = Math.max(
+            bossInsetRows + 2 * layoutConfig.bossOfficeHeightTiles,
+            2 * layoutConfig.podHeightTiles
+          );
+          const contentRows = Math.max(minContentRows, bossRows, deskRows);
+          return layoutConfig.deskTopRow + contentRows + 1;
         })();
         const rooms = sceneRooms.visibleRooms.map((room) =>
           room.height > roomHeightCapTiles ? { ...room, height: roomHeightCapTiles } : room

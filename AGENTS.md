@@ -152,6 +152,7 @@ node packages/web/dist/server.js --port 4181
 - Use current workload by default.
 - Keep the browser map fixed to live agents on desks plus the 4 most recent lead sessions in the rec area.
 - Keep browser layout responsive across wide and narrow screens.
+- Compact fleet floors size themselves to seating demand: minimum height fits two boss booths and two desk pod rows, maximum is the configured 16-tile room, and floor-height changes tween quickly instead of snapping.
 - Empty rooms should read as quiet space, not error states.
 - Rec Room is for resting/recent-finished lead sessions only.
 - Waiting, blocked, validating, running, and other still-live local Codex work should stay at workstations.

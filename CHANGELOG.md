@@ -47,7 +47,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 - Compacted the office scene: seated avatars, chairs, desks, and workstations render smaller, desk columns keep a one-tile gap with five-tile pods, and boss booths dropped to two tiles tall so six bosses stack vertically; boss booth boxes now sort by foot depth so each booth's back wall occludes the boss above it like a real wall separator.
 - Desk pods are now laid out by boss group: two-tile pods belonging to the same lead stack touching vertically (up to six per run, then a one-tile passage), while unrelated pods and solo pairs keep a one-tile passage between them.
-- Floor height is now content-driven in the compact fleet view (wall + boss column/desk rows + walkway, clamped 10-16 rows) instead of a fixed trim, so quiet floors stay short and busy floors grow to fit their seating.
+- Floor height is now fully adaptive in the compact fleet view: floors clip their unused bottom down to a minimum that fits two boss booths and two desk pod rows (9 tiles), grow with seating demand up to the configured 16-tile room as the maximum, and tween height changes (~240ms) instead of snapping.
 - Fixed shared desk pods overlapping into one consolidated pile after the pod-width reduction: paired occupants now split the pod into two non-overlapping mirrored back-to-back cells.
 - Depth-shrunk subagents now sit proportionally higher at their desks so they read as seated on the chair instead of standing beside it.
 - Hover-card action lines ("File:", "Command:") got their own style - smaller gray monospace that wraps instead of overflowing the card - and display text now strips the project root from absolute paths on all platforms, not just WSL `/mnt/` paths.
