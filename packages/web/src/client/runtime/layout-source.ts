@@ -714,7 +714,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
               x: 0,
               y: 0,
               width: 24,
-              height: 16,
+              height: 9,
               children: []
             }]
           },

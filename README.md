@@ -154,3 +154,4 @@ The VS Code panel embeds the real office renderer by starting a local Agents Off
 
 - Main PixelOffice environment assets come from [2D Pig's Pixel Office pack](https://2dpig.itch.io/pixel-office).
 - Pixel food/drink held-item icons in `packages/web/public/pixel-office/sprites/props/drinks/` come from [Alex Kovacs Art's "100 Free Pixel Art Foods!"](https://alexkovacsart.itch.io/free-pixel-art-foods), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- Chat Café tiles in `packages/web/public/pixel-office/sprites/cafe/` are derived from [Gherwit's free CAFE TILES and CITY TILES packs](https://gherwit.itch.io/cafe-tiles-16x16).

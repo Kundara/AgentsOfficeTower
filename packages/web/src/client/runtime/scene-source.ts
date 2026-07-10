@@ -906,26 +906,45 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             }
           }
           if (streetCafe && isPrimaryRoom && pixelOffice.cafe) {
+            const cafeSofaColumns = { left: room.width - 6, right: room.width - 3 };
+            const cafeSofaBaseRow = 0;
             model.tileObjects.push(
               buildSceneTileObject(room.id + "::storefront-left", room.id, pixelOffice.cafe.storefrontOrange, 1, 0, 3, 5, 2.7, { anchor: "wall" }),
-              buildSceneTileObject(room.id + "::storefront-center", room.id, pixelOffice.cafe.storefrontOrange, 10, 0, 3, 5, 2.7, { anchor: "wall" }),
+              buildSceneTileObject(room.id + "::storefront-center", room.id, pixelOffice.cafe.storefrontOrange, 14, 0, 3, 5, 2.7, { anchor: "wall" }),
               buildSceneTileObject(room.id + "::storefront-right", room.id, pixelOffice.cafe.storefrontOrange, 20, 0, 3, 5, 2.7, { anchor: "wall" }),
               buildSceneTileObject(room.id + "::cafe-shelf", room.id, pixelOffice.cafe.shelf, 0, 1, 2, 3, 3),
               buildSceneTileObject(room.id + "::coffee-machine", room.id, pixelOffice.cafe.coffeeMachine, 4, 0, 1, 2, 3),
               buildSceneTileObject(room.id + "::cafe-plant-left", room.id, pixelOffice.cafe.plant, 6, 0, 1, 2, 3),
-              buildSceneTileObject(room.id + "::cafe-plant-right", room.id, pixelOffice.cafe.plant, room.width - 7, 0, 1, 2, 3)
+              buildSceneTileObject(room.id + "::cafe-plant-right", room.id, pixelOffice.cafe.plant, room.width - 7, 0, 1, 2, 3),
+              buildSceneTileObject(room.id + "::cafe-sofa-left", room.id, pixelOffice.props.sofaBlue, cafeSofaColumns.left, cafeSofaBaseRow, 2, 1, 3),
+              buildSceneTileObject(room.id + "::cafe-sofa-right", room.id, pixelOffice.props.sofaGreen, cafeSofaColumns.right, cafeSofaBaseRow, 2, 1, 3)
+            );
+            room.__sofaColumns = cafeSofaColumns;
+            room.__cafeSofaBaseY = layoutConfig.deskTopY + cafeSofaBaseRow * tile;
+            room.__cafeDeskRowShift = tile * 2;
+            model.facilities.push(
+              {
+                id: room.id + "::facility::coffee-machine",
+                roomId: room.id,
+                furnitureId: "coffee-machine",
+                items: ["coffee"],
+                serviceTile: { column: 5, row: 1, approachOffsetPx: { x: -6, y: -10 } }
+              },
+              {
+                id: room.id + "::facility::cafe-shelf",
+                roomId: room.id,
+                furnitureId: "cafe-shelf",
+                items: ["juice-mango", "juice-peach", "juice-strawberry"],
+                serviceTile: { column: 2, row: 1, approachOffsetPx: { x: -6, y: -10 } }
+              }
             );
             if (occupants.length === 0) {
               const roundTable = pixelOffice.cafe.tableRound || pixelOffice.cafe.table;
               [
-                { column: 3, row: 3, tone: "Red" },
-                { column: 9, row: 4, tone: "Blue" },
-                { column: 16, row: 3, tone: "Green" },
-                { column: 22, row: 4, tone: "Red" },
-                { column: 4, row: 7, tone: "Blue" },
-                { column: 11, row: 8, tone: "Green" },
-                { column: 18, row: 7, tone: "Red" },
-                { column: 23, row: 8, tone: "Blue" }
+                { column: 3, row: 2, tone: "Red" },
+                { column: 9, row: 2, tone: "Blue" },
+                { column: 15, row: 2, tone: "Green" },
+                { column: 21, row: 2, tone: "Red" }
               ].forEach((placement, index) => {
                 if (placement.column + 2 > room.width - 1) {
                   return;
@@ -987,14 +1006,27 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             : occupants.filter((agent) => !isBossOfficeCandidate(snapshot, agent));
           const officeAssignments = assignAgentsToOfficeSlots(snapshot, officeAgents, buildBossOfficeSlots(layoutConfig, officeAgents.length));
           const deskGroups = buildDeskAgentGroups(snapshot, deskAgents, layoutConfig.deskPodCapacity);
-          const deskContentRows = Math.max(layoutConfig.podHeightTiles, room.height - layoutConfig.deskTopRow - 1);
-          const deskSlots = buildGroupedDeskSlots(
+          const deskContentRows = streetCafe
+            ? layoutConfig.podHeightTiles
+            : Math.max(layoutConfig.podHeightTiles, room.height - layoutConfig.deskTopRow - 1);
+          const deskPodCounts = streetCafe
+            ? deskGroups.map((group) => ({
+                key: group.key,
+                podCount: Math.max(1, Math.ceil(group.agents.length / Math.max(1, layoutConfig.deskPodCapacity)))
+              }))
+            : deskGroupPodCounts(snapshot, deskGroups, layoutConfig.deskPodCapacity);
+          const builtDeskSlots = buildGroupedDeskSlots(
             layoutConfig,
             roomPixelWidth,
-            deskGroupPodCounts(snapshot, deskGroups, layoutConfig.deskPodCapacity),
+            deskPodCounts,
             deskContentRows,
             officeAssignments.length > 0
           );
+          const deskSlots = streetCafe
+            ? builtDeskSlots
+                .filter((slot) => slot.x + slot.width <= roomPixelWidth - tile)
+                .map((slot) => ({ ...slot, y: slot.y + (Number(room.__cafeDeskRowShift) || 0) }))
+            : builtDeskSlots;
           const deskAssignments = assignGroupedDeskAgents(
             snapshot,
             deskGroups,
@@ -1110,6 +1142,80 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             });
             model.desks.push(pod);
           });
+
+          if (streetCafe) {
+            const seatedAgentIds = new Set(
+              deskAssignments.flatMap((entry) => entry.agents.map((agent) => agent.id))
+            );
+            const standingAgents = deskAgents.filter((agent) => !seatedAgentIds.has(agent.id));
+            const standingAssignments = stableSceneSlotAssignments(snapshot.projectRoot, "cafe-standing", standingAgents);
+            const standStartX = tile * 6;
+            const standEndX = Math.max(standStartX + 1, roomPixelWidth - tile * 7);
+            const standStepX = 28;
+            const standSlotsPerRow = Math.max(1, Math.floor((standEndX - standStartX) / standStepX));
+            standingAssignments.forEach(({ agent, slotIndex }) => {
+                const hash = stableHash("cafe-standing::" + String(agent.id));
+                const avatarSize = avatarVisualSizeForAgent(agent, compact ? 1 : 1.08);
+                const stagedOffset = openThreadStageOffset(agent);
+                const column = slotIndex % standSlotsPerRow;
+                const wrapRow = Math.floor(slotIndex / standSlotsPerRow);
+                const walkwayFootY = Math.min(
+                  layoutConfig.deskTopY + tile * 2 - 2,
+                  layoutConfig.deskTopY + tile + 6 + (hash % 7) + Math.min(wrapRow, 1) * 3
+                );
+                const avatarX = roomX + Math.min(
+                  standEndX,
+                  standStartX + column * standStepX + (hash % 9) - 4 + wrapRow * 13
+                ) + stagedOffset.x;
+                const avatarY = roomY + walkwayFootY - avatarSize.height + stagedOffset.y;
+                const anchorX = avatarX + Math.round(tile * 0.4);
+                const anchorY = avatarY + Math.round(tile * 0.6);
+                model.recAgents.push({
+                  id: agent.id,
+                  key: agentKey(snapshot.projectRoot, agent),
+                  roomId: room.id,
+                  kind: "standing",
+                  label: agent.label,
+                  state: agent.state,
+                  role: agentRole(agent),
+                  focusKey: focusAgentKey(snapshot, agent),
+                  focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                  appearance: agent.appearance,
+                  hatId: effectiveHatIdForAgent(agent),
+                  needsUser: agent.needsUser || null,
+                  turnSignal: recentTurnSignalForAgent(snapshot, agent),
+                  activityCue: recentActivityCueForAgent(snapshot, agent),
+                  statusMarkerIconUrl: stateMarkerIconUrlForAgent(agent),
+                  sprite: avatarSize.avatar.url,
+                  x: avatarX,
+                  y: avatarY,
+                  width: avatarSize.width,
+                  height: avatarSize.height,
+                  depthBaseY: room.floorTop,
+                  bubble: "...",
+                  flip: hash % 2 === 1
+                });
+                agentPositions.set(agent.id, { roomId: room.id, x: anchorX, y: anchorY });
+                registerThreadPanel(agent);
+                model.anchors.push({
+                  id: "agent::" + agentKey(snapshot.projectRoot, agent),
+                  type: "agent",
+                  key: agentKey(snapshot.projectRoot, agent),
+                  x: anchorX,
+                  y: anchorY,
+                  left: avatarX,
+                  top: avatarY,
+                  width: avatarSize.width,
+                  height: avatarSize.height,
+                  threadId: agent.threadId || "",
+                  replyProjectRoot: threadViewProjectRoot(snapshot, agent) || "",
+                  focusKey: focusAgentKey(snapshot, agent),
+                  focusKeys: collectFocusedSessionKeys(snapshot, agent),
+                  hoverHtml: openThreadSuppressesHover ? "" : renderAgentHover(snapshot, agent),
+                  threadOpen: Boolean(sceneThreadPanelState(agent))
+                });
+              });
+          }
 
           officeAssignments.forEach((entry) => {
             const officeX = roomX + entry.slot.x;
@@ -1261,7 +1367,10 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
               });
             });
             restingAssignments.forEach(({ agent, slotIndex }) => {
-              const slot = recRoomSeatSlotAt(agent, slotIndex, compact, roomPixelWidth, layoutConfig.recAreaGridTopY, room.__sofaColumns || null);
+              const restBaseY = streetCafe && Number.isFinite(room.__cafeSofaBaseY)
+                ? room.__cafeSofaBaseY
+                : layoutConfig.recAreaGridTopY;
+              const slot = recRoomSeatSlotAt(agent, slotIndex, compact, roomPixelWidth, restBaseY, room.__sofaColumns || null);
               const stagedOffset = openThreadStageOffset(agent);
               const avatarX = roomX + slot.x + stagedOffset.x;
               const avatarY = roomY + slot.y + stagedOffset.y;

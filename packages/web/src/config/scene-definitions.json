@@ -71,6 +71,11 @@
       "spriteKey": "paper",
       "durationMs": 15000,
       "handOffsetPx": { "x": 7, "y": 11 }
+    },
+    "coffee": {
+      "spriteKey": "mug",
+      "durationMs": 15000,
+      "handOffsetPx": { "x": 4, "y": 7 }
     }
   },
   "primaryRoomFurniture": [
