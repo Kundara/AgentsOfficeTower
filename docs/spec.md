@@ -326,7 +326,7 @@ Global text scale rules:
 - The browser should expose a global `Split Worktrees` toggle that restores the current one-floor-per-worktree presentation without changing the monitored workspace set.
 - When worktrees are split into separate floors, a worktree floor title should use the worktree name with a distinct bright-blue worktree badge/icon treatment.
 - Fleet startup should include configured Codex workspaces from `~/.codex/config.toml` when available, not only workspaces that already emitted recent local thread activity.
-- Fleet mode should hide autodiscovered workspaces once their last session timestamp is more than 7 days old.
+- Fleet mode should hide workspaces once their last agent or session-log timestamp is more than 7 days old. Launch seeds and configured roots are discovery aliases, not exemptions from this weekly window; explicit project mode remains pinned.
 - Fallback Codex rollout discovery must inspect bounded session metadata before loading whole JSONL histories, reject non-subagent and nonmatching-project files early, share in-flight metadata/full reads across fleet monitors, and cap concurrent full-file parsing. Each project monitor coalesces overlapping startup, interval, and notification discovery triggers into one active scan plus at most one queued rerun.
 - A uniquely titled projectless Codex Chat task whose normal cwd is under `~/Documents/Codex/<date>/<slug>` must normalize to the single canonical `~/Documents/Codex` Chat root within one live refresh. It appears exactly once as its own agent at a Chat Café table and exactly once in Sessions, retains the real thread id/title/state, and never creates a dated or slug-specific floor.
 - While that Chat task is active it belongs to Active and remains seated. After a final answer it keeps the normal roughly 3-second lead cooldown, then becomes Recent/off-desk according to the shared placement policy. Clicking it opens read-only history unless the exact app-server connection owns reply authority.
@@ -366,14 +366,14 @@ Worktree identity rules:
 - Local project share preferences should be persisted client-side per project root and default to not shared until the user turns a floor on.
 - Toggling a floor's `Shared` state should update the button immediately in place and must not rebuild or blank the office floor shell.
 - The browser should broadcast only local project roots whose `Shared` floor toggle is on and whose snapshot has active agents.
-- Remote workspace activity should merge into locally matching workspaces regardless of the receiver's local `Shared` toggle; the toggle controls outbound publishing, and shared-room data must not create standalone remote-only floors.
+- Remote workspace activity should merge into locally matching workspaces regardless of the receiver's local `Shared` toggle; the toggle controls outbound publishing. If weekly local retention has hidden the matching project, current active peer activity should create a temporary read-only remote-only floor.
 - A newly observed peer payload should trigger one debounced local fleet reply so late joiners receive already-published activity without waiting for the next unrelated fleet refresh; replies must not form a broadcast loop.
 - Shared workspace matching should prefer Git repository identity whenever the sender provides it and use normalized workspace names only when repository identity is unavailable, preventing unrelated same-named projects from merging.
 - Remote snapshots without active agents should stay hidden instead of creating or preserving a room/floor.
 - Each floor header should list the active participant nicknames currently visible in that workspace.
 - Remote shared-room agents should preserve peer labeling and shared-room context so they remain visibly distinct from local sessions.
 - Shared-room broadcasts should also preserve each participant's selected `hatId`, and remote merged agents should keep rendering with that hat even when the local viewer has chosen a different one.
-- Turning a project from shared to not shared should remove it from subsequent room payloads and hide it on other connected clients without a remote-only cooldown.
+- Turning a project from shared to not shared should remove it from subsequent room payloads and hide any remote-only floor on other connected clients without an additional project cooldown. A disconnected peer may remain visible only through the normal bounded multiplayer stale-peer window.
 - Screenshot mode should disable shared-room sync.
 - `/api/multiplayer` should expose the current server multiplayer transport status even when the transport is currently disabled.
 - The CLI should be able to read the running local web server's shared model with `web query <repo> <gist|recent|last>`, scoped to `local` or `team`, without gaining any write, reply, file-read, or arbitrary-command capability.

@@ -4,8 +4,11 @@ const assert = require("node:assert/strict");
 const { buildFleetResponse, buildServerMeta } = require("../dist/server-metadata.js");
 const {
   DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS,
+  FleetLiveService,
+  PROJECT_SET_REFRESH_INTERVAL_MS,
   filterFreshDiscoveredProjects,
   mergeDiscoveredProjectRootsWithSeeds,
+  shouldRefreshProjectSet,
   sortProjectRootsWithCoworkLast
 } = require("../dist/server/fleet-live-service.js");
 
@@ -72,36 +75,48 @@ test("fleet discovery hides autodiscovered workspaces older than the internal 7-
   const visible = filterFreshDiscoveredProjects(
     [
       { root: "/fresh", label: "Fresh", updatedAt: thresholdSeconds + 1, count: 1 },
+      { root: "/fresh-ms", label: "Fresh ms", updatedAt: (thresholdSeconds + 1) * 1000, count: 1 },
       { root: "/borderline", label: "Borderline", updatedAt: thresholdSeconds, count: 0 },
       { root: "/stale", label: "Stale", updatedAt: thresholdSeconds - 1, count: 1 }
     ],
     nowMs
   );
 
-  assert.deepEqual(visible.map((project) => project.root), ["/fresh"]);
+  assert.deepEqual(visible.map((project) => project.root), ["/fresh", "/fresh-ms"]);
 });
 
-test("fleet discovery keeps seed workspaces when autodiscovery finds other projects", () => {
+test("fleet discovery drops seed workspaces without recent discovered activity", () => {
   assert.deepEqual(
     mergeDiscoveredProjectRootsWithSeeds(
       ["/mnt/c/Users/User/OtherProject"],
       ["/mnt/c/Users/User/AgentsOfficeTower"]
     ),
-    [
-      "/mnt/c/Users/User/OtherProject",
-      "/mnt/c/Users/User/AgentsOfficeTower"
-    ]
+    ["/mnt/c/Users/User/OtherProject"]
   );
 });
 
-test("fleet discovery does not duplicate seed workspaces already found through autodiscovery", () => {
+test("fleet discovery uses seed spelling only for a matching fresh project", () => {
   assert.deepEqual(
     mergeDiscoveredProjectRootsWithSeeds(
       ["\\mnt\\c\\Users\\User\\AgentsOfficeTower"],
       ["/mnt/c/Users/User/AgentsOfficeTower"]
     ),
-    ["\\mnt\\c\\Users\\User\\AgentsOfficeTower"]
+    ["/mnt/c/Users/User/AgentsOfficeTower"]
   );
+});
+
+test("fleet mode starts empty while explicit project mode remains pinned", () => {
+  const seed = [{ root: "/seed/project", label: "project" }];
+  assert.deepEqual(new FleetLiveService(seed, false).getCurrentProjects(), []);
+  assert.deepEqual(new FleetLiveService(seed, true).getCurrentProjects(), seed);
+});
+
+test("empty fleet discovery still respects the project refresh cadence", () => {
+  const lastRefreshAt = 10_000;
+  assert.equal(shouldRefreshProjectSet(lastRefreshAt, false, lastRefreshAt + PROJECT_SET_REFRESH_INTERVAL_MS - 1), false);
+  assert.equal(shouldRefreshProjectSet(lastRefreshAt, false, lastRefreshAt + PROJECT_SET_REFRESH_INTERVAL_MS), true);
+  assert.equal(shouldRefreshProjectSet(0, false, lastRefreshAt), true);
+  assert.equal(shouldRefreshProjectSet(lastRefreshAt, true, lastRefreshAt + 1), true);
 });
 
 test("fleet discovery sorts Claude Co-work-only projects after normal workspaces", () => {

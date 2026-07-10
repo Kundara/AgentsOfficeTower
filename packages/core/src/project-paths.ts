@@ -15,6 +15,8 @@ export interface DiscoveredProject {
   sourceKinds?: string[];
 }
 
+const DISCOVERED_PROJECT_EPOCH_MILLISECONDS_THRESHOLD = 100_000_000_000;
+
 const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
 const MIN_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 100;
 const MAX_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 400;
@@ -256,6 +258,71 @@ export function codexProjectDiscoveryThreadLimit(projectLimit: number): number {
   );
 }
 
+export function normalizeDiscoveredProjectUpdatedAt(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return Math.floor(
+    value >= DISCOVERED_PROJECT_EPOCH_MILLISECONDS_THRESHOLD
+      ? value / 1000
+      : value
+  );
+}
+
+function discoveredProjectSourceKinds(project: DiscoveredProject): string[] {
+  const kinds = [
+    ...(Array.isArray(project.sourceKinds) ? project.sourceKinds : []),
+    project.sourceKind
+  ].filter((kind): kind is string => typeof kind === "string" && kind.trim().length > 0);
+  return Array.from(new Set(kinds.length > 0 ? kinds : ["unknown"]));
+}
+
+export function mergeDiscoveredProjectLists(
+  discoveredProjectLists: DiscoveredProject[][],
+  limit: number
+): DiscoveredProject[] {
+  const merged = new Map<string, DiscoveredProject>();
+
+  for (const rawProject of discoveredProjectLists.flat()) {
+    const identityKey = projectPathIdentityKey(rawProject.root);
+    if (!identityKey || isTransientProjectRoot(rawProject.root)) {
+      continue;
+    }
+
+    const project = {
+      ...rawProject,
+      updatedAt: normalizeDiscoveredProjectUpdatedAt(rawProject.updatedAt)
+    };
+    const existing = merged.get(identityKey);
+    if (existing) {
+      if (project.count > 0) {
+        existing.updatedAt = existing.count > 0
+          ? Math.max(existing.updatedAt, project.updatedAt)
+          : project.updatedAt;
+      } else if (existing.count === 0) {
+        existing.updatedAt = Math.max(existing.updatedAt, project.updatedAt);
+      }
+      existing.count += project.count;
+      existing.sourceKinds = Array.from(new Set([
+        ...discoveredProjectSourceKinds(existing),
+        ...discoveredProjectSourceKinds(project)
+      ]));
+      existing.sourceKind = existing.sourceKinds[0];
+      continue;
+    }
+
+    const sourceKinds = discoveredProjectSourceKinds(project);
+    merged.set(identityKey, { ...project, sourceKind: sourceKinds[0], sourceKinds });
+  }
+
+  return [...merged.values()]
+    .sort((left, right) => {
+      const activityTier = Number(right.count > 0) - Number(left.count > 0);
+      return activityTier !== 0 ? activityTier : right.updatedAt - left.updatedAt;
+    })
+    .slice(0, limit);
+}
+
 export async function discoverCodexConfiguredProjects(
   limit = 200,
   configPath = CODEX_CONFIG_PATH
@@ -339,16 +406,7 @@ export async function discoverCodexProjects(limit = 20): Promise<DiscoveredProje
 }
 
 export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]> {
-  const merged = new Map<string, DiscoveredProject>();
   const { PROJECT_ADAPTERS } = await import("./adapters");
-
-  const projectSourceKinds = (project: DiscoveredProject): string[] => {
-    const kinds = [
-      ...(Array.isArray(project.sourceKinds) ? project.sourceKinds : []),
-      project.sourceKind
-    ].filter((kind): kind is string => typeof kind === "string" && kind.trim().length > 0);
-    return Array.from(new Set(kinds.length > 0 ? kinds : ["unknown"]));
-  };
 
   const withDiscoveryTimeout = (
     promise: Promise<DiscoveredProject[]>
@@ -368,31 +426,5 @@ export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]>
       .map((adapter) => withDiscoveryTimeout(adapter.discoverProjects!(limit)))
   ]);
 
-  for (const project of discoveredProjectLists.flat()) {
-    const identityKey = projectPathIdentityKey(project.root);
-    if (!identityKey || isTransientProjectRoot(project.root)) {
-      continue;
-    }
-
-    const existing = merged.get(identityKey);
-    if (existing) {
-      if (project.count > 0 || existing.count === 0) {
-        existing.updatedAt = Math.max(existing.updatedAt, project.updatedAt);
-      }
-      existing.count += project.count;
-      existing.sourceKinds = Array.from(new Set([
-        ...projectSourceKinds(existing),
-        ...projectSourceKinds(project)
-      ]));
-      existing.sourceKind = existing.sourceKinds[0];
-      continue;
-    }
-
-    const sourceKinds = projectSourceKinds(project);
-    merged.set(identityKey, { ...project, sourceKind: sourceKinds[0], sourceKinds });
-  }
-
-  return [...merged.values()]
-    .sort((left, right) => right.updatedAt - left.updatedAt)
-    .slice(0, limit);
+  return mergeDiscoveredProjectLists(discoveredProjectLists, limit);
 }

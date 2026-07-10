@@ -17,6 +17,7 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 - **CLI built in**: inspect snapshots, watch terminal views, launch the web server, or query the running tower from scripts.
 - **Repo-packaged skills**: Codex skills help agents run the tower CLI and coordinate with local or team workload data.
 - **Shared rooms**: sync active agents across machines with PartyKit-backed rooms and explicit per-project sharing controls.
+- **Weekly fleet cleanup**: fleet mode automatically hides local projects with no agent or session-log activity in the last seven days; explicit project views remain pinned, and current shared-peer activity can temporarily restore a remote-only floor.
 - **Same model everywhere**: browser, terminal, and VS Code surfaces render the same normalized snapshot.
 - **Subtle scene intelligence**: viewport-level hover cards, command toasts, and hot-file cues stay subordinate to the map, while the scrollable Sessions index keeps `Needs You`, every active session, and a globally capped recent list readable across desktop and narrow layouts.
 

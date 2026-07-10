@@ -11,6 +11,8 @@ const {
   extractCodexConfiguredProjectRoots,
   humanizeProjectLabel,
   isCodexChatProjectRoot,
+  mergeDiscoveredProjectLists,
+  normalizeDiscoveredProjectUpdatedAt,
   projectLabelFromRoot,
   sameProjectPath
 } = require("../dist/project-paths.js");
@@ -19,6 +21,54 @@ test("project discovery scans a wider thread window than the requested project c
   assert.equal(codexProjectDiscoveryThreadLimit(1), 100);
   assert.equal(codexProjectDiscoveryThreadLimit(10), 200);
   assert.equal(codexProjectDiscoveryThreadLimit(50), 400);
+});
+
+test("project discovery normalizes provider timestamps to epoch seconds", () => {
+  assert.equal(normalizeDiscoveredProjectUpdatedAt(1_774_694_400), 1_774_694_400);
+  assert.equal(normalizeDiscoveredProjectUpdatedAt(1_774_694_400_987), 1_774_694_400);
+  assert.equal(normalizeDiscoveredProjectUpdatedAt(Number.NaN), 0);
+});
+
+test("project discovery freshness comes only from agent and log sources", () => {
+  const merged = mergeDiscoveredProjectLists(
+    [
+      [{ root: "/work/forgotten", label: "Forgotten", updatedAt: 1_774_694_400, count: 0, sourceKind: "configured" }],
+      [{ root: "/work/forgotten", label: "Forgotten", updatedAt: 1_700_000_000_000, count: 1, sourceKind: "claude" }],
+      [{ root: "/work/current", label: "Current", updatedAt: 1_774_694_300_000, count: 1, sourceKind: "openclaw" }]
+    ],
+    10
+  );
+
+  assert.deepEqual(
+    merged.map((project) => ({ root: project.root, updatedAt: project.updatedAt, count: project.count })),
+    [
+      { root: "/work/current", updatedAt: 1_774_694_300, count: 1 },
+      { root: "/work/forgotten", updatedAt: 1_700_000_000, count: 1 }
+    ]
+  );
+});
+
+test("configured roots cannot crowd an active project out of the discovery limit", () => {
+  const configured = Array.from({ length: 200 }, (_, index) => ({
+    root: `/work/configured-${index}`,
+    label: `Configured ${index}`,
+    updatedAt: 1_800_000_000 + index,
+    count: 0,
+    sourceKind: "configured"
+  }));
+  const active = {
+    root: "/work/active",
+    label: "Active",
+    updatedAt: 1_774_694_300,
+    count: 1,
+    sourceKind: "codex"
+  };
+
+  const merged = mergeDiscoveredProjectLists([configured, [active]], 200);
+
+  assert.equal(merged.length, 200);
+  assert.equal(merged[0].root, active.root);
+  assert.ok(merged.some((project) => project.root === active.root));
 });
 
 test("humanizeProjectLabel adds spaces across camel and acronym boundaries", () => {

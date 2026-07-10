@@ -314,11 +314,15 @@ test("multiplayer merge cools stale remote ongoing agents before seating", () =>
 
   assert.match(
     multiplayerSource,
-    /function isStaleSharedOngoingAgent\(agent\) \{[\s\S]*agent\.isOngoing !== true[\s\S]*Date\.now\(\) - updatedAt > RESTING_DORMANT_MS;/
+    /function isStaleSharedOngoingAgent\(agent\) \{[\s\S]*agent\.isOngoing !== true[\s\S]*return !isFreshSharedTimestamp\(agent\.updatedAt\);/
   );
   assert.match(
     multiplayerSource,
-    /const staleOngoing = isStaleSharedOngoingAgent\(agent\);[\s\S]*isCurrent: staleOngoing \? false : agent\.isCurrent,[\s\S]*isOngoing: staleOngoing \? false : agent\.isOngoing,[\s\S]*state: staleOngoing \? "idle" : agent\.state,[\s\S]*activityEvent: !staleOngoing && agent\.activityEvent[\s\S]*needsUser: !staleOngoing && agent\.needsUser/
+    /const staleOngoing = isStaleSharedOngoingAgent\(agent\);[\s\S]*isCurrent: staleOngoing \? false : agent\.isCurrent,[\s\S]*isOngoing: staleOngoing \? false : agent\.isOngoing,[\s\S]*state: staleOngoing \? "idle" : agent\.state,[\s\S]*activityEvent: !staleOngoing && agent\.activityEvent[\s\S]*needsUser: null,/
+  );
+  assert.match(
+    multiplayerSource,
+    /function isActiveSharedAgent\(agent\) \{[\s\S]*if \(isStaleSharedOngoingAgent\(agent\)\) \{[\s\S]*return false;[\s\S]*if \(agent\.isCurrent === true \|\| agent\.needsUser\)/
   );
 });
 
@@ -967,15 +971,30 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("function isSnapshotSharedWithRoom(snapshot) {"));
   assert.ok(multiplayerSource.includes("function sharedRepoIdentityForSnapshot(snapshot) {"));
   assert.ok(multiplayerSource.includes("function indexSharedSnapshotsByWorkspaceKey(snapshots) {"));
+  assert.ok(multiplayerSource.includes("function indexSharedSnapshotByWorkspaceKey(snapshotsByKey, snapshot) {"));
   assert.ok(multiplayerSource.includes("if (!snapshotsByKey.has(key)) {"));
   assert.ok(multiplayerSource.includes("function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {"));
   assert.ok(multiplayerSource.includes("const remoteRepoIdentity = sharedRepoIdentityForSnapshot(remoteSnapshot);"));
   assert.ok(multiplayerSource.includes('? ["git-repo:" + remoteRepoIdentity]'));
   assert.ok(multiplayerSource.includes('.filter((key) => key.startsWith("workspace:"));'));
   assert.ok(multiplayerSource.includes("function snapshotActiveSharedAgents(snapshot) {"));
-  assert.ok(multiplayerSource.includes("if (!localSnapshot) {"));
+  assert.ok(multiplayerSource.includes("function createSharedRemoteOnlySnapshot(remoteSnapshot) {"));
+  assert.ok(multiplayerSource.includes("sharedRemoteOnly: true,"));
+  assert.ok(multiplayerSource.includes('rooms: [{ id: "root", name: projectLabel, path: ".", x: 0, y: 0, width: 24, height: 16, children: [] }]'));
+  assert.ok(multiplayerSource.includes("needsUser: null,"));
+  assert.ok(multiplayerSource.includes("age >= -MULTIPLAYER_CLOCK_SKEW_MS && age <= RESTING_DORMANT_MS"));
+  assert.ok(multiplayerSource.includes("function normalizeRemoteSharedSnapshot(snapshot) {"));
+  assert.ok(multiplayerSource.includes("appearance: { id: appearanceId },"));
+  assert.ok(multiplayerSource.includes("latestMessage: sanitizeSharedText(agent.latestMessage, 4000) || null,"));
+  assert.ok(multiplayerSource.includes("provenance,"));
+  assert.ok(multiplayerSource.includes("if (!id || !Number.isFinite(Date.parse(createdAt))) {"));
+  assert.ok(multiplayerSource.includes("command: sanitizeSharedText(event.command, 4000) || null,"));
+  assert.ok(multiplayerSource.includes("fileType,"));
+  assert.ok(multiplayerSource.includes("lastChangedAt: Number.isFinite(Date.parse(change.lastChangedAt || \"\"))"));
+  assert.ok(multiplayerSource.includes("mergedFleet.projects.push(localSnapshot);"));
+  assert.ok(multiplayerSource.includes("indexSharedSnapshotByWorkspaceKey(localProjectsByKey, localSnapshot);"));
   assert.ok(!multiplayerSource.includes("if (!localSnapshot || !isSnapshotSharedWithRoom(localSnapshot)) {"));
-  assert.ok(multiplayerSource.includes("const localSnapshot = matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot);"));
+  assert.ok(multiplayerSource.includes("let localSnapshot = matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot);"));
   assert.ok(multiplayerSource.includes("function multiplayerLiveStatusDetail(room, host, peerCount) {"));
   assert.ok(multiplayerSource.includes('" - no shared active matching projects"'));
   assert.ok(multiplayerSource.includes("const remoteAgents = snapshotActiveSharedAgents(remoteSnapshot);"));
@@ -983,7 +1002,6 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("cloned.agents = snapshotActiveSharedAgents(cloned).map((agent) => ({"));
   assert.ok(!multiplayerSource.includes("MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS"));
   assert.ok(!multiplayerSource.includes("function cooledRemoteProjectSnapshot(entry) {"));
-  assert.ok(!multiplayerSource.includes("ensureRemoteSharedBucket"));
   assert.ok(multiplayerSource.includes("function mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer)"));
   assert.ok(multiplayerSource.includes("function mergeSharedActivity(localSnapshot, remoteSnapshot, peer)"));
   assert.ok(multiplayerSource.includes("const users = uniqueSharedList([...(change && Array.isArray(change.users) ? change.users : []), peer.peerLabel]);"));
@@ -1031,6 +1049,11 @@ test("workspace floors show multiplayer participants and expose a shared toggle"
   assert.ok(uiSource.includes('target.textContent = !enabled ? "Shared On" : "Shared";'));
   assert.ok(styles.includes(".tower-floor-participants {"));
   assert.ok(styles.includes(".tower-floor-share.active {"));
+});
+
+test("remote-only shared floors stay read-only and hide local customization", () => {
+  const customizationSource = readRuntimeSource("scene-customization-source.ts");
+  assert.ok(customizationSource.includes('snapshot.sceneKind === "street-cafe" || !snapshotHasLocalProject(snapshot)'));
 });
 
 test("runtime source exposes hat preview controls and hat-attached avatar rendering", () => {

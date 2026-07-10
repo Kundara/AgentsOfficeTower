@@ -13,6 +13,7 @@ import {
   loadClaudeHomeAccountAgents,
   loadRoamingHermesSnapshotData,
   loadRoamingOpenClawSnapshotData,
+  normalizeDiscoveredProjectUpdatedAt,
   projectPathIdentityKey,
   ProjectLiveMonitor,
   respondToClaudeHookInputRequest,
@@ -36,6 +37,7 @@ import {
 } from "./web-cli-query";
 
 export const DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+export const PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
 const HERMES_FLOATING_AGENT_LIMIT = 12;
 const OPENCLAW_FLOATING_AGENT_LIMIT = 12;
 
@@ -47,9 +49,19 @@ export function filterFreshDiscoveredProjects(
   const cutoffMs = nowMs - freshnessWindowMs;
   return projects.filter(
     (project) => project.count > 0
-      && Number.isFinite(project.updatedAt)
-      && (project.updatedAt * 1000) >= cutoffMs
+      && (normalizeDiscoveredProjectUpdatedAt(project.updatedAt) * 1000) >= cutoffMs
   );
+}
+
+export function shouldRefreshProjectSet(
+  lastRefreshAt: number,
+  force = false,
+  now = Date.now(),
+  refreshIntervalMs = PROJECT_SET_REFRESH_INTERVAL_MS
+): boolean {
+  return force
+    || lastRefreshAt <= 0
+    || now - lastRefreshAt >= refreshIntervalMs;
 }
 
 export function mergeDiscoveredProjectRootsWithSeeds(
@@ -58,8 +70,17 @@ export function mergeDiscoveredProjectRootsWithSeeds(
 ): string[] {
   const roots: string[] = [];
   const seen = new Set<string>();
+  const preferredSeedRoots = new Map(
+    seedRoots
+      .map((root) => [projectPathIdentityKey(root), root] as const)
+      .filter((entry): entry is [string, string] => Boolean(entry[0]))
+  );
 
-  for (const root of [...discoveredRoots, ...seedRoots]) {
+  for (const discoveredRoot of discoveredRoots) {
+    const discoveredIdentityKey = projectPathIdentityKey(discoveredRoot);
+    const root = discoveredIdentityKey
+      ? preferredSeedRoots.get(discoveredIdentityKey) ?? discoveredRoot
+      : discoveredRoot;
     const identityKey = projectPathIdentityKey(root);
     if (!identityKey || seen.has(identityKey)) {
       continue;
@@ -109,14 +130,13 @@ export function sortProjectRootsWithCoworkLast(
 
 export class FleetLiveService {
   private static readonly PROJECT_DISCOVERY_LIMIT = 200;
-  private static readonly PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
   private static readonly PROJECT_DISCOVERY_RETENTION_MS = 2 * 60 * 1000;
   private static readonly CLOUD_REFRESH_INTERVAL_MS = 30000;
   private static readonly CLOUD_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
   private static readonly ACCOUNT_AGENT_REFRESH_INTERVAL_MS = 4000;
   private readonly monitors = new Map<string, ProjectLiveMonitor>();
   private readonly clients = new Set<ServerResponse>();
-  private projects: ProjectDescriptor[] = [];
+  private projects: ProjectDescriptor[];
   private fleet: FleetResponse | null = null;
   private accountAgents: DashboardAgent[] = [];
   private lastAccountAgentRefreshAt = 0;
@@ -132,10 +152,11 @@ export class FleetLiveService {
   constructor(
     private readonly seedProjects: ProjectDescriptor[],
     private readonly explicitProjects: boolean
-  ) {}
+  ) {
+    this.projects = explicitProjects ? [...seedProjects] : [];
+  }
 
   async start(): Promise<void> {
-    this.projects = [...this.seedProjects];
     this.fleet = buildFleetResponse(this.projects, new Map(), this.accountAgents);
     this.cloudTimer = setInterval(() => {
       void this.refreshSharedCloudTasks();
@@ -195,7 +216,7 @@ export class FleetLiveService {
   }
 
   getCurrentProjects(): ProjectDescriptor[] {
-    return [...(this.projects.length > 0 ? this.projects : this.seedProjects)];
+    return [...this.projects];
   }
 
   async getProjects(): Promise<ProjectDescriptor[]> {
@@ -443,8 +464,7 @@ export class FleetLiveService {
   }
 
   private async ensureProjectSet(force = false): Promise<void> {
-    const stale = Date.now() - this.lastProjectSetRefreshAt >= FleetLiveService.PROJECT_SET_REFRESH_INTERVAL_MS;
-    if (!force && this.projects.length > 0 && !stale) {
+    if (!shouldRefreshProjectSet(this.lastProjectSetRefreshAt, force)) {
       return;
     }
     await this.refreshProjectSet();

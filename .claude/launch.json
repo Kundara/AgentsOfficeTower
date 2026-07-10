@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start", "--", "--port", "4972"],
       "port": 4972
+    },
+    {
+      "name": "agents-office-web-alt",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start", "--", "--port", "4975"],
+      "port": 4975
     }
   ]
 }

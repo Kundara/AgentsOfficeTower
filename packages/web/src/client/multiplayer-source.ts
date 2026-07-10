@@ -12,6 +12,7 @@ export const MULTIPLAYER_SCRIPT = `
       const MULTIPLAYER_BROADCAST_DEBOUNCE_MS = 700;
       const WEB_CLI_TEAM_FLEET_SYNC_DEBOUNCE_MS = 1000;
       const MULTIPLAYER_NICKNAME_MAX_LENGTH = 12;
+      const MULTIPLAYER_CLOCK_SKEW_MS = 5 * 60 * 1000;
       const MULTIPLAYER_ACTIVE_AGENT_STATES = new Set([
         "editing",
         "running",
@@ -30,6 +31,170 @@ export const MULTIPLAYER_SCRIPT = `
 
       function sanitizeMultiplayerNickname(value) {
         return sanitizeMultiplayerField(value).slice(0, MULTIPLAYER_NICKNAME_MAX_LENGTH);
+      }
+
+      function sanitizeSharedText(value, maxLength = 512) {
+        return sanitizeMultiplayerField(value).slice(0, maxLength);
+      }
+
+      function isFreshSharedTimestamp(value) {
+        const timestamp = Date.parse(typeof value === "string" ? value : "");
+        const age = Date.now() - timestamp;
+        return Number.isFinite(timestamp) && age >= -MULTIPLAYER_CLOCK_SKEW_MS && age <= RESTING_DORMANT_MS;
+      }
+
+      function normalizeRemoteSharedAgent(agent, index) {
+        if (!agent || typeof agent !== "object") {
+          return null;
+        }
+        const id = sanitizeSharedText(agent.id || agent.threadId || agent.taskId, 256);
+        if (!id) {
+          return null;
+        }
+        const paths = Array.isArray(agent.paths)
+          ? agent.paths.map((path) => sanitizeSharedText(path, 2048)).filter(Boolean).slice(0, 64)
+          : [];
+        const appearanceId = sanitizeSharedText(agent.appearance && agent.appearance.id, 128) || "shared-" + index;
+        const source = sanitizeSharedText(agent.source, 80) || "shared";
+        const requestedProvenance = sanitizeSharedText(agent.provenance, 80).toLowerCase();
+        const provenance = ["codex", "claude", "cursor", "openclaw", "hermes", "cloud", "user", "shared"].includes(requestedProvenance)
+          ? requestedProvenance
+          : "shared";
+        const confidence = agent.confidence === "inferred" ? "inferred" : "typed";
+        return {
+          id,
+          threadId: sanitizeSharedText(agent.threadId, 256) || null,
+          parentThreadId: sanitizeSharedText(agent.parentThreadId, 256) || null,
+          taskId: sanitizeSharedText(agent.taskId, 256) || null,
+          name: sanitizeSharedText(agent.name, 160) || "Shared agent",
+          label: sanitizeSharedText(agent.label || agent.name, 160) || "Shared agent",
+          role: sanitizeSharedText(agent.role, 80) || "agent",
+          source,
+          provenance,
+          confidence,
+          state: sanitizeSharedText(agent.state, 80) || "idle",
+          status: sanitizeSharedText(agent.status, 80) || null,
+          statusText: sanitizeSharedText(agent.statusText, 160) || null,
+          detail: sanitizeSharedText(agent.detail, 2000) || null,
+          latestMessage: sanitizeSharedText(agent.latestMessage, 4000) || null,
+          liveSubscription: agent.liveSubscription === "subscribed" ? "subscribed" : "readOnly",
+          isCurrent: agent.isCurrent === true,
+          isOngoing: agent.isOngoing === true,
+          updatedAt: sanitizeSharedText(agent.updatedAt, 64),
+          startedAt: sanitizeSharedText(agent.startedAt, 64) || null,
+          stoppedAt: sanitizeSharedText(agent.stoppedAt, 64) || null,
+          cwd: sanitizeSharedText(agent.cwd, 2048) || null,
+          paths,
+          roomId: sanitizeSharedText(agent.roomId, 256) || null,
+          appearance: { id: appearanceId },
+          hatId: sanitizeSharedText(agent.hatId, 128) || null,
+          needsUser: agent.needsUser ? { kind: sanitizeSharedText(agent.needsUser.kind, 80) || "input" } : null,
+          goal: agent.goal && typeof agent.goal === "object" ? { status: sanitizeSharedText(agent.goal.status, 80) || null } : null,
+          git: agent.git && typeof agent.git === "object"
+            ? { originUrl: sanitizeSharedText(agent.git.originUrl, 2048) || null }
+            : null,
+          activityEvent: null
+        };
+      }
+
+      function normalizeRemoteSharedEvent(event) {
+        if (!event || typeof event !== "object") {
+          return null;
+        }
+        const id = sanitizeSharedText(event.id, 256);
+        const createdAt = sanitizeSharedText(event.createdAt, 64);
+        if (!id || !Number.isFinite(Date.parse(createdAt))) {
+          return null;
+        }
+        return {
+          id,
+          kind: sanitizeSharedText(event.kind, 80) || "activity",
+          type: sanitizeSharedText(event.type, 80) || null,
+          createdAt,
+          threadId: sanitizeSharedText(event.threadId, 256) || null,
+          taskId: sanitizeSharedText(event.taskId, 256) || null,
+          agentId: sanitizeSharedText(event.agentId, 256) || null,
+          method: sanitizeSharedText(event.method, 160) || null,
+          phase: sanitizeSharedText(event.phase, 80) || null,
+          title: sanitizeSharedText(event.title, 1000) || null,
+          detail: sanitizeSharedText(event.detail, 2000) || null,
+          summary: sanitizeSharedText(event.summary, 1000) || null,
+          message: sanitizeSharedText(event.message, 1000) || null,
+          command: sanitizeSharedText(event.command, 4000) || null,
+          reason: sanitizeSharedText(event.reason, 1000) || null,
+          itemId: sanitizeSharedText(event.itemId, 256) || null,
+          itemType: sanitizeSharedText(event.itemType, 80) || null,
+          status: sanitizeSharedText(event.status, 80) || null,
+          path: sanitizeSharedText(event.path, 2048) || null,
+          cwd: sanitizeSharedText(event.cwd, 2048) || null,
+          grantRoot: sanitizeSharedText(event.grantRoot, 2048) || null
+        };
+      }
+
+      function normalizeRemoteSharedHotChange(change) {
+        if (!change || typeof change !== "object") {
+          return null;
+        }
+        const path = sanitizeSharedText(change.path, 2048);
+        if (!path) {
+          return null;
+        }
+        const fileType = ["script", "doc", "media"].includes(change.fileType) ? change.fileType : "script";
+        const provenance = ["codex", "claude", "cursor", "openclaw", "hermes", "cloud", "shared"].includes(change.provenance)
+          ? change.provenance
+          : "shared";
+        return {
+          path,
+          score: Number.isFinite(Number(change.score)) ? Number(change.score) : 0,
+          heat: Math.max(0, Math.min(100, Number.isFinite(Number(change.heat)) ? Number(change.heat) : 0)),
+          fileType,
+          label: sanitizeSharedText(change.label, 512) || path.split(/[\\\\/]/).filter(Boolean).pop() || path,
+          lastChangedAt: Number.isFinite(Date.parse(change.lastChangedAt || "")) ? change.lastChangedAt : null,
+          provenance,
+          confidence: change.confidence === "inferred" ? "inferred" : "typed",
+          branch: sanitizeSharedText(change.branch, 256) || null,
+          branches: uniqueSharedList(change.branches).slice(0, 32),
+          users: uniqueSharedList(change.users).slice(0, 32),
+          agents: uniqueSharedList(change.agents).slice(0, 32)
+        };
+      }
+
+      function normalizeRemoteSharedSnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
+          return null;
+        }
+        const projectRoot = sanitizeSharedText(snapshot.projectRoot, 2048);
+        if (!projectRoot) {
+          return null;
+        }
+        const agents = (Array.isArray(snapshot.agents) ? snapshot.agents : [])
+          .slice(0, 256)
+          .map((agent, index) => normalizeRemoteSharedAgent(agent, index))
+          .filter(Boolean);
+        const events = (Array.isArray(snapshot.events) ? snapshot.events : [])
+          .slice(0, 512)
+          .map((event) => normalizeRemoteSharedEvent(event))
+          .filter(Boolean);
+        const hotChanges = (snapshot.activity && Array.isArray(snapshot.activity.hotChanges) ? snapshot.activity.hotChanges : [])
+          .slice(0, 64)
+          .map((change) => normalizeRemoteSharedHotChange(change))
+          .filter(Boolean);
+        return {
+          projectRoot,
+          projectLabel: sanitizeSharedText(snapshot.projectLabel, 160) || projectRoot.split(/[\\\\/]/).filter(Boolean).pop() || "Shared project",
+          projectIdentity: {
+            repoUrl: sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.repoUrl, 2048) || null
+          },
+          generatedAt: Number.isFinite(Date.parse(snapshot.generatedAt || "")) ? snapshot.generatedAt : new Date().toISOString(),
+          agents,
+          events,
+          activity: {
+            generatedAt: new Date().toISOString(),
+            hotChanges,
+            hotTools: [],
+            runningCommands: []
+          }
+        };
       }
 
       function hasMultiplayerCredentials(settings) {
@@ -218,13 +383,17 @@ export const MULTIPLAYER_SCRIPT = `
       function indexSharedSnapshotsByWorkspaceKey(snapshots) {
         const snapshotsByKey = new Map();
         for (const snapshot of Array.isArray(snapshots) ? snapshots : []) {
-          for (const key of snapshotWorkspaceKeys(snapshot)) {
-            if (!snapshotsByKey.has(key)) {
-              snapshotsByKey.set(key, snapshot);
-            }
-          }
+          indexSharedSnapshotByWorkspaceKey(snapshotsByKey, snapshot);
         }
         return snapshotsByKey;
+      }
+
+      function indexSharedSnapshotByWorkspaceKey(snapshotsByKey, snapshot) {
+        for (const key of snapshotWorkspaceKeys(snapshot)) {
+          if (!snapshotsByKey.has(key)) {
+            snapshotsByKey.set(key, snapshot);
+          }
+        }
       }
 
       function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {
@@ -234,7 +403,14 @@ export const MULTIPLAYER_SCRIPT = `
           : snapshotWorkspaceKeys(remoteSnapshot).filter((key) => key.startsWith("workspace:"));
         for (const key of candidateKeys) {
           const localSnapshot = localProjectsByKey.get(key);
-          if (localSnapshot) {
+          if (
+            localSnapshot
+            && (
+              localSnapshot.sharedRemoteOnly !== true
+              || Boolean(remoteRepoIdentity)
+              || normalizeSharedPathCandidate(localSnapshot.projectRoot) === normalizeSharedPathCandidate(remoteSnapshot.projectRoot)
+            )
+          ) {
             return localSnapshot;
           }
         }
@@ -393,14 +569,21 @@ export const MULTIPLAYER_SCRIPT = `
         if (!agent || typeof agent !== "object") {
           return false;
         }
-        if (agent.isCurrent === true || agent.isOngoing === true || agent.needsUser) {
+        if (isStaleSharedOngoingAgent(agent)) {
+          return false;
+        }
+        if (agent.isCurrent === true || agent.needsUser) {
+          return isFreshSharedTimestamp(agent.updatedAt);
+        }
+        if (agent.isOngoing === true) {
           return true;
         }
         const state = String(agent.state || "").toLowerCase();
         if (MULTIPLAYER_ACTIVE_AGENT_STATES.has(state)) {
-          return true;
+          return isFreshSharedTimestamp(agent.updatedAt);
         }
-        return String(agent.statusText || "").toLowerCase() === "active"
+        return isFreshSharedTimestamp(agent.updatedAt)
+          && String(agent.statusText || "").toLowerCase() === "active"
           && state !== "idle"
           && state !== "done";
       }
@@ -555,8 +738,7 @@ export const MULTIPLAYER_SCRIPT = `
         if (!agent || agent.isOngoing !== true) {
           return false;
         }
-        const updatedAt = Date.parse(agent.updatedAt || "");
-        return !Number.isFinite(updatedAt) || Date.now() - updatedAt > RESTING_DORMANT_MS;
+        return !isFreshSharedTimestamp(agent.updatedAt);
       }
 
       function idleStatusTextForStaleSharedAgent(agent) {
@@ -590,13 +772,7 @@ export const MULTIPLAYER_SCRIPT = `
               path: remapSharedPath(remoteSnapshot.projectRoot, localSnapshot.projectRoot, agent.activityEvent.path)
             }
             : null,
-          needsUser: !staleOngoing && agent.needsUser
-            ? {
-              ...agent.needsUser,
-              cwd: remapSharedPath(remoteSnapshot.projectRoot, localSnapshot.projectRoot, agent.needsUser.cwd) || undefined,
-              grantRoot: remapSharedPath(remoteSnapshot.projectRoot, localSnapshot.projectRoot, agent.needsUser.grantRoot) || undefined
-            }
-            : null,
+          needsUser: null,
           network: {
             transport: "partykit",
             peerId: peer.peerId,
@@ -686,6 +862,57 @@ export const MULTIPLAYER_SCRIPT = `
         return keys;
       }
 
+      function createSharedRemoteOnlySnapshot(remoteSnapshot) {
+        const projectRoot = sanitizeMultiplayerField(remoteSnapshot && remoteSnapshot.projectRoot).slice(0, 2048);
+        if (!projectRoot) {
+          return null;
+        }
+        const projectLabel = sanitizeMultiplayerField(snapshotWorkspaceName(remoteSnapshot)).slice(0, 160) || "Shared project";
+        const remoteIdentity = remoteSnapshot && remoteSnapshot.projectIdentity && typeof remoteSnapshot.projectIdentity === "object" && !Array.isArray(remoteSnapshot.projectIdentity)
+          ? remoteSnapshot.projectIdentity
+          : null;
+        const repoUrl = sharedRepoIdentityForSnapshot(remoteSnapshot) || null;
+        const generatedAtValue = sanitizeMultiplayerField(remoteSnapshot && remoteSnapshot.generatedAt);
+        const generatedAt = Number.isFinite(Date.parse(generatedAtValue))
+          ? generatedAtValue
+          : new Date().toISOString();
+        return {
+          projectRoot,
+          projectLabel,
+          projectIdentity: remoteIdentity || repoUrl
+            ? {
+              key: null,
+              source: repoUrl ? "git" : "unknown",
+              gitRoot: projectRoot,
+              commonGitDir: null,
+              repoUrl,
+              repoName: sanitizeMultiplayerField(remoteIdentity && remoteIdentity.repoName).slice(0, 160) || null,
+              branch: sanitizeMultiplayerField(remoteIdentity && remoteIdentity.branch).slice(0, 240) || null,
+              worktreeName: sanitizeMultiplayerField(remoteIdentity && remoteIdentity.worktreeName).slice(0, 160) || null
+            }
+            : null,
+          generatedAt,
+          rooms: {
+            version: 1,
+            generated: true,
+            filePath: "",
+            rooms: [{ id: "root", name: projectLabel, path: ".", x: 0, y: 0, width: 24, height: 16, children: [] }]
+          },
+          agents: [],
+          cloudTasks: [],
+          events: [],
+          notes: [],
+          sharedParticipantLabels: [],
+          sharedRemoteOnly: true,
+          activity: {
+            generatedAt,
+            hotChanges: [],
+            hotTools: [],
+            runningCommands: []
+          }
+        };
+      }
+
       function buildSharedFleet(localFleet) {
         if (!localFleet) {
           return null;
@@ -700,13 +927,18 @@ export const MULTIPLAYER_SCRIPT = `
           }
           sharedPeerCount += 1;
           for (const remoteSnapshot of peer.projects) {
-            const localSnapshot = matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot);
-            if (!localSnapshot) {
-              continue;
-            }
             const remoteAgents = snapshotActiveSharedAgents(remoteSnapshot);
             if (remoteAgents.length === 0) {
               continue;
+            }
+            let localSnapshot = matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot);
+            if (!localSnapshot) {
+              localSnapshot = createSharedRemoteOnlySnapshot(remoteSnapshot);
+              if (!localSnapshot) {
+                continue;
+              }
+              mergedFleet.projects.push(localSnapshot);
+              indexSharedSnapshotByWorkspaceKey(localProjectsByKey, localSnapshot);
             }
             const localAgentIdentityKeys = collectSharedAgentIdentityKeys(localSnapshot.agents);
             const mergedAgents = remoteAgents
@@ -905,6 +1137,9 @@ export const MULTIPLAYER_SCRIPT = `
           peerLabel,
           receivedAt: Date.now(),
           projects: payload.projects
+            .slice(0, 64)
+            .map((snapshot) => normalizeRemoteSharedSnapshot(snapshot))
+            .filter(Boolean)
         });
         applyFleet(state.localFleet);
         if (firstPayloadFromPeer) {

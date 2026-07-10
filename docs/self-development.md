@@ -122,7 +122,7 @@ A good iteration improves at least one of these:
 - verify tiny same-slot refresh deltas do not trigger visible rerouting or seat jitter
 - verify the Settings hat picker applies immediately to all local agents without showing file names, and that the first slot cleanly renders as `no hat`
 - verify shared-room peers keep their own selected hats after fleet merge instead of inheriting the local viewer's hat choice
-- verify shared-room projects default to not shared, inactive shared projects are not broadcast, and switching a project off hides it from other connected clients without a remote-only cooldown
+- verify shared-room projects default to not shared, inactive shared projects are not broadcast, active peer work can temporarily restore a weekly-hidden project as a remote-only floor, and switching a project off removes that floor without an additional project cooldown
 - verify the browser session panel exposes the durable approval/input "needs you" queue
 - verify typed `tool/requestUserInput` queue prompts keep `Send` disabled until every required question has an answer, then resolve cleanly back to app-server
 - verify clicking a local Codex agent in the map opens a read-only thread history card with no reply, resume, launch, or copy controls, and closes cleanly on outside click / `Escape`

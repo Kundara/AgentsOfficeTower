@@ -378,12 +378,17 @@ export async function getClaudeSdkSessionRecords(input: {
   }
 
   try {
+    // The SDK slices [offset, offset + limit) from the START of the transcript,
+    // so passing limit directly would freeze long sessions at their oldest
+    // messages. Fetch the full chain and keep the newest records instead.
     const messages = await sdk.getSessionMessages(input.sessionId, {
       dir: input.dir,
-      ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
       offset: input.offset
     });
-    return messages.map((entry) => normalizeClaudeSdkMessage(entry, {
+    const limited = typeof input.limit === "number" && input.limit > 0
+      ? messages.slice(-input.limit)
+      : messages;
+    return limited.map((entry) => normalizeClaudeSdkMessage(entry, {
       cwd: input.cwd,
       gitBranch: input.gitBranch
     }));

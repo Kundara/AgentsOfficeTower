@@ -7,6 +7,8 @@ export {
   discoverProjects,
   extractCodexConfiguredProjectRoots,
   filterThreadsForProject,
+  mergeDiscoveredProjectLists,
+  normalizeDiscoveredProjectUpdatedAt,
   projectLabelFromRoot,
   sameProjectPath
 } from "../project-paths";

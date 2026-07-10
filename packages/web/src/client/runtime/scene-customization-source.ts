@@ -71,7 +71,7 @@ export const CLIENT_RUNTIME_SCENE_CUSTOMIZATION_SOURCE = `
       }
 
       function renderFloorCustomization(snapshot) {
-        if (!snapshot || snapshot.sceneKind === "street-cafe") {
+        if (!snapshot || snapshot.sceneKind === "street-cafe" || !snapshotHasLocalProject(snapshot)) {
           return { button: "", panel: "" };
         }
         const paletteKey = scenePaletteKey(snapshot);
