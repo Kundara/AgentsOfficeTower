@@ -1154,7 +1154,8 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
             const enabled = target.getAttribute("aria-pressed") === "true";
             target.setAttribute("aria-pressed", enabled ? "false" : "true");
             target.classList.toggle("active", !enabled);
-            target.title = !enabled ? "Shared with the room" : "Not shared with the room";
+            target.textContent = !enabled ? "Shared On" : "Shared";
+            target.title = !enabled ? "Publishing activity to connected peers" : "Not publishing activity to connected peers";
             setProjectRootsSharedWithRoom(projectRoots, !enabled);
           } catch {}
           return;

@@ -355,7 +355,9 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         const agentsById = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
         const countedFamilies = new Map();
         for (const agent of snapshot.agents) {
-          if (!isBusyAgent(agent)) {
+          const cloud = agent.source === "cloud" || agent.state === "cloud";
+          const live = !cloud && isLiveSceneAgent(agent);
+          if (!live && !(cloud && isBusyAgent(agent))) {
             continue;
           }
           let familyAgent = agent;
@@ -371,18 +373,18 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           const familyKey = familyAgent.id || agent.id;
           const existing = countedFamilies.get(familyKey) || { cloud: false, blocked: false, waiting: false, active: false };
           countedFamilies.set(familyKey, {
-            cloud: existing.cloud || agent.source === "cloud" || agent.state === "cloud",
+            cloud: existing.cloud || cloud,
             blocked: existing.blocked || agent.state === "blocked",
             waiting: existing.waiting || agent.state === "waiting",
-            active: existing.active || (agent.state !== "done" && agent.state !== "idle" && agent.state !== "cloud")
+            active: existing.active || live
           });
         }
         for (const family of countedFamilies.values()) {
           counters.total += 1;
+          if (family.active) counters.active += 1;
           if (family.blocked) counters.blocked += 1;
-          else if (family.waiting) counters.waiting += 1;
-          else if (family.cloud) counters.cloud += 1;
-          else if (family.active) counters.active += 1;
+          if (family.waiting) counters.waiting += 1;
+          if (family.cloud) counters.cloud += 1;
         }
         return counters;
       }

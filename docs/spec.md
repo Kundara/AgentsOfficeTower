@@ -366,7 +366,9 @@ Worktree identity rules:
 - Local project share preferences should be persisted client-side per project root and default to not shared until the user turns a floor on.
 - Toggling a floor's `Shared` state should update the button immediately in place and must not rebuild or blank the office floor shell.
 - The browser should broadcast only local project roots whose `Shared` floor toggle is on and whose snapshot has active agents.
-- Remote workspace activity should merge only into locally matching workspaces whose local `Shared` floor toggle is also on; shared-room data must not create standalone remote-only floors.
+- Remote workspace activity should merge into locally matching workspaces regardless of the receiver's local `Shared` toggle; the toggle controls outbound publishing, and shared-room data must not create standalone remote-only floors.
+- A newly observed peer payload should trigger one debounced local fleet reply so late joiners receive already-published activity without waiting for the next unrelated fleet refresh; replies must not form a broadcast loop.
+- Shared workspace matching should prefer Git repository identity whenever the sender provides it and use normalized workspace names only when repository identity is unavailable, preventing unrelated same-named projects from merging.
 - Remote snapshots without active agents should stay hidden instead of creating or preserving a room/floor.
 - Each floor header should list the active participant nicknames currently visible in that workspace.
 - Remote shared-room agents should preserve peer labeling and shared-room context so they remain visibly distinct from local sessions.

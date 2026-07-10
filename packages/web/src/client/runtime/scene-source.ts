@@ -651,7 +651,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             focusMode: options.focusMode === true
           });
         const shareToggleHtml = !streetCafe && shouldRenderProjectShareToggle(snapshot)
-          ? \`<button class="tower-floor-share\${projectShareEnabledForSnapshot(snapshot) ? " active" : ""}" data-action="toggle-project-share" data-project-roots="\${escapeHtml(JSON.stringify(projectShareToggleRoots(snapshot)))}" aria-pressed="\${projectShareEnabledForSnapshot(snapshot) ? "true" : "false"}" title="\${escapeHtml(projectShareEnabledForSnapshot(snapshot) ? "Shared with the room" : "Not shared with the room")}" type="button">Shared</button>\`
+          ? \`<button class="tower-floor-share\${projectShareEnabledForSnapshot(snapshot) ? " active" : ""}" data-action="toggle-project-share" data-project-roots="\${escapeHtml(JSON.stringify(projectShareToggleRoots(snapshot)))}" aria-pressed="\${projectShareEnabledForSnapshot(snapshot) ? "true" : "false"}" title="\${escapeHtml(projectShareEnabledForSnapshot(snapshot) ? "Publishing activity to connected peers" : "Not publishing activity to connected peers")}" type="button">\${projectShareEnabledForSnapshot(snapshot) ? "Shared On" : "Shared"}</button>\`
           : "";
         const actionHtml = options.action
           ? \`<button class="tower-floor-open" data-action="\${escapeHtml(options.action.type)}"\${options.action.projectRoot ? \` data-project-root="\${escapeHtml(options.action.projectRoot)}"\` : ""}>\${escapeHtml(options.action.label)}</button>\`
