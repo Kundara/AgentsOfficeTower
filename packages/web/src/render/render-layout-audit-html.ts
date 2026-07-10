@@ -15,6 +15,7 @@ const LAYOUT_SCENARIOS: LayoutScenario[] = [
   { slug: "boss-vertical", label: "Layout A · 6 Bosses", bossCount: 6, childrenPerBoss: 2, soloWorkerCount: 0 },
   { slug: "mixed", label: "Layout B · 2 Bosses + Desks", bossCount: 2, childrenPerBoss: 2, soloWorkerCount: 5 },
   { slug: "desks-only", label: "Layout C · Desks Only", bossCount: 0, childrenPerBoss: 0, soloWorkerCount: 8 },
+  { slug: "big-team", label: "Layout E · Big Team", bossCount: 1, childrenPerBoss: 14, soloWorkerCount: 2 },
   { slug: "quiet", label: "Layout D · Quiet Floor", bossCount: 0, childrenPerBoss: 0, soloWorkerCount: 0 }
 ];
 

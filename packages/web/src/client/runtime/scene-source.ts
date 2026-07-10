@@ -734,15 +734,19 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             && !offDeskAgentIds.has(agent.id)
           );
           const officeCount = seatedAgents.filter((agent) => isBossOfficeCandidate(snapshot, agent)).length;
-          const deskAgentCount = seatedAgents.length - officeCount;
           const bossInsetRows = layoutConfig.bossOfficeTopRow - layoutConfig.deskTopRow;
           const bossRows = officeCount > 0
             ? bossInsetRows + officeCount * layoutConfig.bossOfficeHeightTiles
             : 0;
-          const podCount = Math.ceil(deskAgentCount / Math.max(1, layoutConfig.deskPodCapacity));
-          const deskRows = podCount > 0
-            ? Math.min(podCount, layoutConfig.cubiclesPerColumn * layoutConfig.cubicleRows) * layoutConfig.podHeightTiles
-            : 0;
+          const capDeskGroups = buildDeskAgentGroups(
+            snapshot,
+            seatedAgents.filter((agent) => !isBossOfficeCandidate(snapshot, agent)),
+            layoutConfig.deskPodCapacity
+          );
+          const deskRows = Math.min(
+            12,
+            groupedDeskRowsDemand(layoutConfig, deskGroupPodCounts(capDeskGroups, layoutConfig.deskPodCapacity))
+          );
           const contentRows = Math.max(6, bossRows, deskRows);
           return Math.max(10, layoutConfig.deskTopRow + contentRows + 1);
         })();
@@ -978,8 +982,25 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             ? occupants
             : occupants.filter((agent) => !isBossOfficeCandidate(snapshot, agent));
           const officeAssignments = assignAgentsToOfficeSlots(snapshot, officeAgents, buildBossOfficeSlots(layoutConfig, officeAgents.length));
-          const deskSlots = buildDeskSlots(layoutConfig, roomPixelWidth, Math.ceil(deskAgents.length / 2), officeAssignments.length > 0);
-          const deskAssignments = assignAgentsToDeskSlots(snapshot, deskAgents, deskSlots);
+          const deskGroups = buildDeskAgentGroups(snapshot, deskAgents, layoutConfig.deskPodCapacity);
+          const deskContentRows = Math.max(layoutConfig.podHeightTiles, room.height - layoutConfig.deskTopRow - 1);
+          const deskSlots = buildGroupedDeskSlots(
+            layoutConfig,
+            roomPixelWidth,
+            deskGroupPodCounts(deskGroups, layoutConfig.deskPodCapacity),
+            deskContentRows,
+            officeAssignments.length > 0
+          );
+          const deskSlotById = new Map(deskSlots.map((slot) => [slot.id, slot]));
+          const deskAssignments = [];
+          deskGroups.forEach((group) => {
+            for (let podIndex = 0, cursor = 0; cursor < group.agents.length; podIndex += 1, cursor += layoutConfig.deskPodCapacity) {
+              const slot = deskSlotById.get(\`pod-\${group.key}-\${podIndex}\`);
+              if (slot) {
+                deskAssignments.push({ slot, agents: group.agents.slice(cursor, cursor + layoutConfig.deskPodCapacity) });
+              }
+            }
+          });
           expandRoomVisualWidth(
             roomModel,
             deskSlots.reduce((rightEdge, slot) => Math.max(rightEdge, slot.x + slot.width + tile), roomPixelWidth)

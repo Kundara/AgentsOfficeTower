@@ -1121,14 +1121,14 @@ test("workspace focus reuses compact scene geometry and grid-snapped desk starts
   );
 });
 
-test("workspace desk columns keep a two-tile gap between workstation pods", () => {
+test("workspace desk columns keep a one-tile gap between workstation pods", () => {
   const sceneConfigSource = readFileSync(
     join(__dirname, "../src/scene-config.ts"),
     "utf8"
   ).replace(/\r\n/g, "\n");
   const sceneGridSource = readClientSource("scene-grid-source.ts");
 
-  assert.match(sceneConfigSource, /deskColumnGapTiles: 2,/);
+  assert.match(sceneConfigSource, /deskColumnGapTiles: 1,/);
   assert.ok(sceneGridSource.includes("const columnX = deskStartX + columnIndex * (config.podWidth + config.deskColumnGap);"));
 });
 

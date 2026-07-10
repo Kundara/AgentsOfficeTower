@@ -118,6 +118,118 @@ export const SCENE_GRID_SCRIPT = `
         return slots;
       }
 
+      function deskSlotStartColumn(config, roomPixelWidth, hasBossLane) {
+        return Math.max(
+          Math.round((roomPixelWidth * config.deskStartRatio) / config.tileSize),
+          hasBossLane
+            ? Math.ceil((config.bossLaneX + config.bossLaneWidth + config.bossOfficeGapToDesk) / config.tileSize)
+            : 0
+        );
+      }
+
+      const DESK_GROUP_MAX_TOUCHING_PODS = 6;
+      const DESK_GROUP_PASSAGE_TILES = 1;
+
+      function buildDeskAgentGroups(snapshot, agents, podCapacity) {
+        const capacity = Math.max(1, Number(podCapacity) || 1);
+        const sorted = [...agents].sort((left, right) => compareAgentsForDeskLayout(snapshot, left, right));
+        const groups = [];
+        const groupsByParent = new Map();
+        sorted.forEach((agent) => {
+          if (agent.parentThreadId) {
+            const parentKey = "boss" + stableHash(String(agent.parentThreadId));
+            let group = groupsByParent.get(parentKey);
+            if (!group) {
+              group = { key: parentKey, agents: [] };
+              groupsByParent.set(parentKey, group);
+              groups.push(group);
+            }
+            group.agents.push(agent);
+            return;
+          }
+          const last = groups.length > 0 ? groups[groups.length - 1] : null;
+          if (last && last.solo === true && last.agents.length < capacity) {
+            last.agents.push(agent);
+            return;
+          }
+          groups.push({ key: "solo" + stableHash(String(agent.id)), solo: true, agents: [agent] });
+        });
+        return groups;
+      }
+
+      function deskGroupPodCounts(groups, podCapacity) {
+        const capacity = Math.max(1, Number(podCapacity) || 1);
+        return groups.map((group) => ({
+          key: group.key,
+          podCount: Math.max(1, Math.ceil(group.agents.length / capacity))
+        }));
+      }
+
+      function buildGroupedDeskSlots(config, roomPixelWidth, groups, maxContentRowTiles, hasBossLane) {
+        const podRows = config.podHeightTiles;
+        const columnRows = Math.max(podRows, Number(maxContentRowTiles) || podRows);
+        const deskStartX = deskSlotStartColumn(config, roomPixelWidth, hasBossLane === true) * config.tileSize;
+        const slots = [];
+        let column = 0;
+        let rowCursor = 0;
+        let touchingRun = 0;
+        let order = 0;
+        groups.forEach((group) => {
+          if (rowCursor > 0) {
+            rowCursor += DESK_GROUP_PASSAGE_TILES;
+            touchingRun = 0;
+          }
+          for (let podIndex = 0; podIndex < group.podCount; podIndex += 1) {
+            if (touchingRun >= DESK_GROUP_MAX_TOUCHING_PODS) {
+              rowCursor += DESK_GROUP_PASSAGE_TILES;
+              touchingRun = 0;
+            }
+            if (rowCursor + podRows > columnRows) {
+              column += 1;
+              rowCursor = 0;
+              touchingRun = 0;
+            }
+            slots.push({
+              id: \`pod-\${group.key}-\${podIndex}\`,
+              kind: "desk",
+              capacity: config.deskPodCapacity,
+              order,
+              groupKey: group.key,
+              cubicleId: \`cubicle-\${group.key}\`,
+              x: deskStartX + column * (config.podWidth + config.deskColumnGap),
+              y: config.deskTopY + rowCursor * config.tileSize,
+              width: config.podWidth,
+              height: podRows * config.tileSize
+            });
+            order += 1;
+            rowCursor += podRows;
+            touchingRun += 1;
+          }
+        });
+        return slots;
+      }
+
+      function groupedDeskRowsDemand(config, groups) {
+        const podRows = config.podHeightTiles;
+        let rows = 0;
+        let touchingRun = 0;
+        groups.forEach((group) => {
+          if (rows > 0) {
+            rows += DESK_GROUP_PASSAGE_TILES;
+            touchingRun = 0;
+          }
+          for (let podIndex = 0; podIndex < group.podCount; podIndex += 1) {
+            if (touchingRun >= DESK_GROUP_MAX_TOUCHING_PODS) {
+              rows += DESK_GROUP_PASSAGE_TILES;
+              touchingRun = 0;
+            }
+            rows += podRows;
+            touchingRun += 1;
+          }
+        });
+        return rows;
+      }
+
       function compileTileObject(model, roomById, object) {
         const room = roomById.get(object.roomId);
         if (!room) {
