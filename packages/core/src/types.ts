@@ -321,6 +321,12 @@ export interface DashboardAgent {
   detail: string;
   cwd: string | null;
   sourceProjectRoot?: string | null;
+  /** Account-level conversations do not belong to a discovered project monitor. */
+  accountObserved?: boolean;
+  /** Stable upstream identity used to avoid duplicating one conversation across views. */
+  conversationKey?: string | null;
+  /** Product-level distinction used by the Chat Cafe without guessing from titles. */
+  interactionMode?: "chat" | "work";
   roomId: string | null;
   appearance: AppearanceProfile;
   hatId?: string | null;

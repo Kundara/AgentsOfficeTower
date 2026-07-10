@@ -597,7 +597,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const counts = countsForSnapshot(snapshot);
         const compact = options.compact === true;
         const streetCafe = snapshot.sceneKind === "street-cafe";
-        const titleAttr = escapeHtml(streetCafe ? "Combined Chat, Claude Home work, and typed Codex Work sessions" : snapshot.projectRoot);
+        const titleAttr = escapeHtml(streetCafe ? "Chat Café. Codex Quick Chat appears after you choose Add to task." : snapshot.projectRoot);
         const projectTitle = streetCafe ? "Chat Café" : projectLabel(snapshot.projectRoot);
         const participantLabels = sharedParticipantLabelsForSnapshot(snapshot);
         const participantHtml = participantLabels.length > 0
@@ -611,7 +611,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           ? \`<div class="tower-floor-title\${remoteOnlyTitleClass}" title="\${titleAttr}"><span class="tower-floor-title-project">\${escapeHtml(projectTitle)}</span>\${participantHtml}<span class="tower-floor-title-worktree"><img class="worktree-inline-icon tower-floor-worktree-icon" src="\${escapeHtml(worktreeIconUrl())}" alt="" aria-hidden="true" /><span>\${escapeHtml(worktreeName)}</span></span></div>\`
           : \`<div class="tower-floor-title\${remoteOnlyTitleClass}" title="\${titleAttr}"><span class="tower-floor-title-project">\${escapeHtml(projectTitle)}</span>\${participantHtml}</div>\`;
         const summary = streetCafe
-          ? \`Chat · Home · Work · \${counts.active} live\`
+          ? \`Chat · Home · Work · \${counts.active} live · Quick Chat: Add to task\`
           : state.view === "map"
           ? \`\${counts.active} live · \${counts.waiting} waiting · \${counts.blocked} blocked\`
           : \`\${counts.total} agents · \${counts.active} active · \${counts.waiting} waiting · \${counts.blocked} blocked · \${counts.cloud} cloud\`;

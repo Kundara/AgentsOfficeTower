@@ -139,6 +139,8 @@ A good iteration improves at least one of these:
 - verify hook-backed Claude `agent_id` rows override matching inferred workflow/subagent rows instead of duplicating the child
 - verify Claude Agent View background jobs under `~/.claude/jobs/*/state.json` appear as read-only `claude:background` agents and workspace floors without requiring project hooks
 - verify locally materialized Claude Home work projects under the legacy `local-agent-mode-sessions` store appear as workspace floors with read-only Claude agents and recent detected-file activity
+- verify a sanitized `product:cowork-remote` Claude Desktop watch-cache fixture and a real existing remote Home-work session each appear exactly once in Chat Café and Sessions, remain read-only/private, and age out of false live state without retaining prompts or messages
+- verify Codex Quick Chat creates no synthetic row before **Add to task**, then the converted Codex task appears exactly once through the supported app-server inventory
 - verify Claude Code dynamic workflow / `ultracode` runs with a real `/workflows` sample and that local child transcripts/journals match the inferred child rows; if full phase/token progress is needed, prototype an OpenTelemetry collector instead of expanding transcript scraping
 - verify OpenClaw gateway sessions appear on desks only when the configured agent workspace equals a known project root or sits under it
 - verify unmatched active OpenClaw harness/orchestrator sessions appear as `openclaw:roaming` avatars in the fixed left-side sky layer, stay out of room/rec placement, and animate desk/sky or cross-floor handoffs without duplicate agents

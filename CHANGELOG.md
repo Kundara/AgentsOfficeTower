@@ -9,6 +9,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added a private rootless account-agent lane and bounded Claude Desktop HTTP-cache observer for recent `product:cowork-remote` Home work metadata, rendering inferred read-only Claude agents in Chat Café and Sessions without extracting, retaining, or exposing credentials or prompt/message bodies, and without calling private endpoints.
 - Added browser-local per-workspace scene customization beside Shared/Focus, with Floor, Wall, and Board color inputs, bounded derived shades, live Pixi preview, reset, and persistence across merged or split worktree views.
 - Added a permanent street-level Chat Café floor that combines canonical projectless Codex Chat and locally materialized Claude Home work sessions, reserves support for an explicit typed Codex Work mode, preserves real source roots for thread actions, and renders pavement, storefronts, tables, chairs, café fixtures, and occupied navigation-aware workstations.
 - Added derived in-product sprites from Gherwit's free 16×16 CAFE and CITY tilesets, with license/attribution notes and without bundling the original source sheets or archives.
@@ -43,6 +44,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Clarified the Chat Café integration boundary: Codex Quick Chat appears only after **Add to task**, ordinary ChatGPT/Claude chat histories are not synthesized, and remote Claude Home work cache misses mean unobserved rather than empty.
 - Redesigned the Sessions panel as one responsive, independently scrollable workload index with pinned Needs You, Active, and Recent sections, visible state chips, wrapped two-line content, accessible headings/list semantics, keyboard focus, and actions below metadata instead of squeezing titles.
 - Changed All-workspaces session selection to retain every live row while applying the 10-row recent limit globally after cross-project sorting instead of independently per project.
 - Changed macOS Codex app-server resolution to recognize the runtime bundled inside `ChatGPT.app` and prefer it alongside the standalone Codex app before PATH, keeping Agents Office on the same local protocol build as the desktop when available.

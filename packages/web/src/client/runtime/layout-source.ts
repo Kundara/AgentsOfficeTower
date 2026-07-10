@@ -626,7 +626,31 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         };
       }
 
-      function partitionStreetCafeProjects(projects) {
+      function cloneAccountAgentForStreetCafe(agent) {
+        return {
+          ...agent,
+          id: String(agent.id || agent.conversationKey || "account-session"),
+          parentThreadId: null,
+          roomId: "street-cafe",
+          sourceProjectRoot: null,
+          sourceAgentId: agent.sourceAgentId || agent.id,
+          accountObserved: true
+        };
+      }
+
+      function streetCafeConversationKey(agent) {
+        const conversationKey = String(agent && agent.conversationKey || "").trim();
+        if (conversationKey) {
+          return "conversation::" + conversationKey;
+        }
+        return [
+          agent && agent.sourceProjectRoot,
+          agent && (agent.threadId || agent.sourceAgentId || agent.id),
+          agent && agent.sourceKind
+        ].join("::");
+      }
+
+      function partitionStreetCafeProjects(projects, accountAgents = []) {
         const sourceEntries = [];
         const workspaceProjects = [];
         projects.forEach((snapshot) => {
@@ -641,12 +665,12 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         });
 
         const seenAgents = new Set();
-        const streetAgents = sourceEntries.flatMap(({ snapshot, agents }) => {
+        const projectStreetAgents = sourceEntries.flatMap(({ snapshot, agents }) => {
           const movedIds = new Set(agents.map((agent) => agent.id));
           return agents
             .map((agent) => cloneAgentForStreetCafe(snapshot, agent, movedIds))
             .filter((agent) => {
-              const key = [agent.sourceProjectRoot, agent.threadId || agent.sourceAgentId, agent.sourceKind].join("::");
+              const key = streetCafeConversationKey(agent);
               if (seenAgents.has(key)) {
                 return false;
               }
@@ -654,6 +678,17 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
               return true;
             });
         });
+        const accountStreetAgents = (Array.isArray(accountAgents) ? accountAgents : [])
+          .map(cloneAccountAgentForStreetCafe)
+          .filter((agent) => {
+            const key = streetCafeConversationKey(agent);
+            if (seenAgents.has(key)) {
+              return false;
+            }
+            seenAgents.add(key);
+            return true;
+          });
+        const streetAgents = [...projectStreetAgents, ...accountStreetAgents];
         const contributingRoots = Array.from(new Set(sourceEntries.flatMap(({ snapshot, agents }) => [
           snapshot.projectRoot,
           ...(snapshot.mergedProjectRoots || []),
@@ -691,7 +726,7 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
             runningCommands: []
           },
           notes: streetAgents.length === 0
-            ? ["ChatGPT and personal Claude Home Recent chats are account history that their supported local APIs do not expose. Opened projectless Codex Chat sessions and locally materialized Claude Home work sessions appear here when available."]
+            ? ["Claude remote Home work appears here when the desktop cache makes it available. Codex Quick Chat is separate from Codex tasks; choose Add to task to make that conversation visible in the Café."]
             : []
         };
         return { workspaceProjects, cafeSnapshot };
@@ -919,11 +954,25 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         ].join("::");
       }
 
+      function accountAgentSemanticToken(agent) {
+        return [
+          sceneAgentToken(agent),
+          agent.conversationKey || "",
+          agent.label || "",
+          agent.detail || "",
+          agent.statusText || "",
+          agent.updatedAt || "",
+          agent.isOngoing ? "1" : "0"
+        ].join(":");
+      }
+
       function fleetSemanticToken(fleet) {
-        if (!fleet || !Array.isArray(fleet.projects)) {
+        if (!fleet) {
           return "";
         }
-        return fleet.projects.map(projectSemanticToken).join("||");
+        const projectTokens = (Array.isArray(fleet.projects) ? fleet.projects : []).map(projectSemanticToken);
+        const accountAgentTokens = (Array.isArray(fleet.accountAgents) ? fleet.accountAgents : []).map(accountAgentSemanticToken);
+        return [...projectTokens, "account-agents", ...accountAgentTokens].join("||");
       }
 
       function viewSnapshot(snapshot, recentLeadLimit = SCENE_RECENT_LEAD_LIMIT, allProjects = null) {

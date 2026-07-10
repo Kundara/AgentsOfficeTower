@@ -4,6 +4,12 @@
 
 - [Codex App Server](https://developers.openai.com/codex/app-server)
   Primary local integration surface for threads, turns, items, approvals, and live notifications.
+- [Codex app-server API overview](https://learn.chatgpt.com/docs/app-server#api-overview)
+  Current Codex desktop integration contract; it enumerates Codex tasks/threads rather than ChatGPT Quick Chat account history.
+- [Projects, chats, and tasks](https://learn.chatgpt.com/docs/projects#start-a-chat)
+  Official product guidance for the Quick Chat **Add to task** bridge used before a conversation can enter the Codex task inventory.
+- [Codex glossary](https://learn.chatgpt.com/docs/glossary)
+  Official distinction among chats, tasks, projects, and related Codex surfaces.
 - [Codex app-server README and generated schema guidance](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
   Official source-repo reference for `codex app-server generate-ts`, server-initiated approval/input requests, MCP elicitations, and permission request payloads.
 - [Codex App Server events](https://developers.openai.com/codex/app-server#events)

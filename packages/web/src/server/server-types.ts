@@ -1,4 +1,4 @@
-import type { DashboardSnapshot } from "@codex-agents-office/core";
+import type { DashboardAgent, DashboardSnapshot } from "@codex-agents-office/core";
 import type { AppearanceSettings } from "@codex-agents-office/core";
 import type { CursorIntegrationSettings } from "@codex-agents-office/core";
 import type { MultiplayerSettings } from "@codex-agents-office/core";
@@ -11,6 +11,8 @@ export interface ProjectDescriptor {
 export interface FleetResponse {
   generatedAt: string;
   projects: DashboardSnapshot[];
+  /** Private, rootless account sessions rendered locally without joining project snapshots. */
+  accountAgents: DashboardAgent[];
 }
 
 export interface MultiplayerStatus {

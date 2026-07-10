@@ -11,6 +11,9 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
       }
 
       function sessionDomKey(snapshot, agent) {
+        if (agent && agent.conversationKey) {
+          return JSON.stringify(["conversation", agent.conversationKey]);
+        }
         return JSON.stringify([
           agent.sourceProjectRoot || snapshot.projectRoot || "",
           agent.threadId || agent.sourceAgentId || agent.id || ""
@@ -25,7 +28,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
         const replyAction = replyProjectRoot
           ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
           : "";
-        const appearanceAction = agent.network
+        const appearanceAction = agent.network || agent.accountObserved === true || !appearanceProjectRoot
           ? ""
           : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
         const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
@@ -948,7 +951,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
         const rawProjects = visibleProjects(fleet);
         const floorProjects = mergeWorktreeProjects(rawProjects);
         const selectableProjects = state.globalSceneSettings?.splitWorktrees ? rawProjects : floorProjects;
-        const street = partitionStreetCafeProjects(floorProjects);
+        const street = partitionStreetCafeProjects(floorProjects, fleet.accountAgents);
         const selectedSnapshot = currentSnapshot(selectableProjects);
         if (
           selectedSnapshot
@@ -961,7 +964,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
         const towerProjects=state.selected === "all" ? [...street.workspaceProjects, street.cafeSnapshot] : selectableProjects;
         updateRecentLeadReservations(towerProjects);
         const displayedProjects = towerProjects.map((project) => viewSnapshot(project, SCENE_RECENT_LEAD_LIMIT));
-        const sessions=(state.selected === "all" ? floorProjects : towerProjects).map((project) => viewSessionSnapshot(project, SESSION_RECENT_LEAD_LIMIT));
+        const sessions=(state.selected === "all" ? [...street.workspaceProjects, street.cafeSnapshot] : towerProjects).map((project) => viewSessionSnapshot(project, SESSION_RECENT_LEAD_LIMIT));
         const snapshot = selectedSnapshot
           ? viewSnapshot(selectedSnapshot, SCENE_RECENT_LEAD_LIMIT, selectableProjects)
           : null;

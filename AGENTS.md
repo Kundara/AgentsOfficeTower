@@ -166,6 +166,7 @@ node packages/web/dist/server.js --port 4181
   Keep one toast per agent, append new command lines at the bottom, and cap the bubble at 3 visible lines.
 - The session panel should keep the durable approval/input "Needs You" queue visible when those states exist.
 - The session panel should present pinned Needs You, then every live session, then at most 10 recent sessions across the selected scope. Its own scroll region must keep the final row reachable and preserve scroll/focus during live refresh; cards must wrap instead of clipping at narrow widths, 200% zoom, and maximum text scale.
+- Private rootless account agents such as observed Claude Home remote work should render exactly once in Chat Café and Sessions, remain read-only, and never enter project snapshots or shared multiplayer payloads. Codex Quick Chat must not be synthesized before the user chooses Add to task.
 - Hover details should expose the useful live state:
   - name
   - role

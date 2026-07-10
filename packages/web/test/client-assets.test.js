@@ -967,6 +967,15 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("hatId: localHatId"));
   assert.ok(multiplayerSource.includes("deviceId: currentMultiplayerDeviceId(),"));
   assert.ok(multiplayerSource.includes("payload.deviceId === currentMultiplayerDeviceId()"));
+  assert.ok(multiplayerSource.includes("accountAgents: Array.isArray(mergedFleet.accountAgents) ? mergedFleet.accountAgents : []"));
+  assert.match(
+    multiplayerSource,
+    /const payloadFleet = hasSharedData\n\s+\? \{\n\s+generatedAt:[\s\S]*?projects: Array\.isArray\(fleet\.projects\) \? fleet\.projects : \[\]\n\s+\}/
+  );
+  assert.match(
+    multiplayerSource,
+    /return \{\n\s+type: "fleet-sync",[\s\S]*?projects: sharedProjects\n\s+\};/
+  );
   assert.ok(uiSource.includes('applyIntegrationSettingsResponse(await postJson("/api/settings/integrations", {'));
   assert.ok(uiSource.includes('multiplayerHostInput.addEventListener("input", () => {'));
   assert.ok(uiSource.includes('multiplayerSaveButton.addEventListener("click", () => {'));
@@ -1843,20 +1852,36 @@ test("tower all-view combines chat and cowork sessions into a dedicated street c
   assert.ok(settingsSource.includes('const STREET_CAFE_PROJECT_ROOT = "__agents-office-street-cafe__";'));
   assert.ok(settingsSource.includes('label: "Chat Café"'));
   assert.ok(settingsSource.includes('return \\`\\${agent.sourceProjectRoot || projectRoot}::\\${agent.sourceAgentId || agent.id}\\`;'));
-  assert.ok(layoutSource.includes("function partitionStreetCafeProjects(projects) {"));
+  assert.ok(layoutSource.includes("function partitionStreetCafeProjects(projects, accountAgents = []) {"));
   assert.ok(layoutSource.includes("isCodexChatProjectRootForStreetCafe(snapshot && snapshot.projectRoot)"));
   assert.ok(layoutSource.includes('String(agent.sourceKind || "").startsWith("claude:cowork")'));
   assert.ok(layoutSource.includes('return agent.interactionMode === "work";'));
+  assert.ok(layoutSource.includes("function cloneAccountAgentForStreetCafe(agent) {"));
+  assert.ok(layoutSource.includes("accountObserved: true"));
+  assert.ok(layoutSource.includes('return "conversation::" + conversationKey;'));
+  assert.ok(layoutSource.includes("const accountStreetAgents = (Array.isArray(accountAgents) ? accountAgents : [])"));
+  assert.ok(layoutSource.includes("const streetAgents = [...projectStreetAgents, ...accountStreetAgents];"));
   assert.ok(layoutSource.includes('sourceProjectRoot,'));
-  assert.ok(layoutSource.includes("ChatGPT and personal Claude Home Recent chats are account history that their supported local APIs do not expose."));
+  assert.ok(layoutSource.includes("Claude remote Home work appears here when the desktop cache makes it available."));
+  assert.ok(layoutSource.includes("Codex Quick Chat is separate from Codex tasks; choose Add to task"));
   assert.ok(layoutSource.includes("notes: streetAgents.length === 0"));
   assert.ok(layoutSource.includes('...(snapshot.mergedProjectRoots || [])'));
   assert.ok(layoutSource.includes('agents.map((agent) => agent.sourceProjectRoot).filter(Boolean)'));
   assert.ok(layoutSource.includes('roomId: "street-cafe"'));
+  assert.ok(layoutSource.includes("function accountAgentSemanticToken(agent) {"));
+  assert.ok(layoutSource.includes('agent.conversationKey || "",'));
+  assert.ok(layoutSource.includes('agent.label || "",'));
+  assert.ok(layoutSource.includes('agent.detail || "",'));
+  assert.ok(layoutSource.includes('agent.updatedAt || "",'));
+  assert.ok(layoutSource.includes(".map(accountAgentSemanticToken);"));
   assert.ok(uiSource.includes("[...street.workspaceProjects, street.cafeSnapshot]"));
+  assert.ok(uiSource.includes("partitionStreetCafeProjects(floorProjects, fleet.accountAgents)"));
+  assert.ok(uiSource.includes('return JSON.stringify(["conversation", agent.conversationKey]);'));
+  assert.ok(uiSource.includes("agent.network || agent.accountObserved === true || !appearanceProjectRoot"));
+  assert.ok(uiSource.includes('const sessions=(state.selected === "all" ? [...street.workspaceProjects, street.cafeSnapshot] : towerProjects)'));
   assert.ok(sceneSource.includes('snapshot.sceneKind === "street-cafe"'));
-  assert.ok(sceneSource.includes("Combined Chat, Claude Home work, and typed Codex Work sessions"));
-  assert.ok(sceneSource.includes("Chat · Home · Work"));
+  assert.ok(sceneSource.includes("Codex Quick Chat appears after you choose Add to task."));
+  assert.ok(sceneSource.includes("Quick Chat: Add to task"));
   assert.ok(sceneSource.includes("const floorMarker = streetCafe"));
   assert.ok(sceneSource.includes('? "G"'));
   assert.ok(sceneSource.includes('pixelOffice.cafe.table'));

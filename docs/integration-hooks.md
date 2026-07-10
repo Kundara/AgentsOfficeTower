@@ -656,7 +656,15 @@ How Agents Office uses it:
 
 The supported Agent SDK `listSessions()` / `getSessionMessages()` inventory is a local Claude Code session surface backed by `~/.claude/projects`; it is not the personal Claude Home Recent chats list. Agent SDK rows therefore remain on their Code project floors. Claude Desktop's separate `claude-code-sessions` store also belongs to Code and is intentionally not ingested or reclassified as Home by Agents Office.
 
-Personal Free, Pro, and Max Home chats currently have no supported live conversation-list API for a local observer. The authenticated Claude renderer uses private consumer endpoints and in-process state, but Agents Office does not call those undocumented endpoints or extract browser cookies/cache. The supported `claude://claude.ai/chat/<conversation-id>` deep link can open a conversation only after some supported provider has supplied its id; it cannot enumerate chats.
+Personal Free, Pro, and Max Home chats currently have no supported live conversation-list API for a local observer. The supported `claude://claude.ai/chat/<conversation-id>` deep link can open a conversation only after some supported provider has supplied its id; it cannot enumerate chats.
+
+Claude's unified Home surface also hosts remote work sessions. Agents Office has a deliberately narrow, version-sensitive observer for those work rows: it scans a bounded number of fresh Claude Desktop Chromium HTTP-cache entries whose cache key is the Home-work watch feed, parses bounded `added` / `changed` / `removed` response events, and accepts only records with an exact `product:cowork-remote` tag and `anthropic_cloud` environment. It retains the `cse_*` id, optional title, timestamps, model, origin, tags, selected-folder labels, and coarse post-turn state. It never reads past the public cache-key prefix into its query/cursor token; it never extracts, retains, or exposes cookies, Local Storage, Session Storage, IndexedDB drafts, prompts, messages, status-detail summaries, or arbitrary event fields; and it never calls the private endpoint. These rows are inferred, read-only, rootless account agents and remain machine-private.
+
+This exception does not turn the desktop cache into a general chat-history adapter. Ordinary Home chats are rejected, and a cache miss means "not observed" rather than "no chats." A Claude Desktop cache-format or product-tag change may temporarily hide remote work until the adapter is updated.
+
+### Codex Quick Chat boundary
+
+The Codex app-server exposes Codex tasks/threads, not the separate ChatGPT Quick Chat sidebar inventory. Agents Office therefore never fabricates Quick Chat agents or scrapes ChatGPT app credentials/storage. Choosing **Add to task** is the supported product bridge: after conversion, the resulting Codex task enters the normal app-server inventory and appears once in Chat Café and Sessions.
 
 Anthropic's Enterprise Compliance API can list organization chat metadata with a Compliance Access Key and `read:compliance_user_data`; an optional `user_ids[]` filter can narrow the organization-wide result. It is an administrative eDiscovery surface, not a Max/Desktop session API, and Cowork/Home work activity is outside that chat export. It is documented here as a future opt-in provider boundary, not used by the current local adapter.
 
