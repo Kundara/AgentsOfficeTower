@@ -34,6 +34,18 @@ It should show:
 - subtle in-scene motion and placement cues rather than a detached dashboard
 - transient above-head turn badges for recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events
 
+### Sessions panel
+
+The Sessions panel is a secondary workload index, not a second scene or an unbounded transcript dump.
+
+- Its hierarchy is `Needs You`, then `Active`, then `Recent`. `Needs You` is present and pinned only when actionable approval/input requests exist. `Active` contains every live or ongoing session in the selected scope. `Recent` contains eligible non-live rows newest-first.
+- The panel admits all live rows and at most 10 recent rows globally for the current scope. In All view that is one cross-workspace cap, not 10 rows per project. Needs You rows do not consume the recent cap.
+- A finished subagent may remain in Recent only for its normal 12-second readability grace, then disappears. `isOngoing` and durable wait state win over stale display text when deciding whether a row is Active; `thread/closed`, transport unload, or a non-final completed turn do not move ongoing work to Recent.
+- The header uses a real heading and concise visible counts such as `N active · M recent`; it must not depend on a clipped prose sentence to communicate scope. Each card exposes title, visible state text, project/source context when needed, and labelled actions. Color alone must not communicate state.
+- The session collection uses list semantics and owns its vertical scroll. Needs You remains reachable while ordinary rows scroll; the final row is reachable; page scroll is not trapped; live refresh preserves the list's scroll position and current keyboard focus.
+- At a 360px panel width, viewport widths around 390px, 640px, 1100px, and 1440px, browser zoom at 200%, and `--ui-text-scale: 2`, cards grow to their content, metadata and actions wrap, no title or state text is vertically clipped, no horizontal page overflow is introduced, and narrow layouts place Sessions after the scene without a nested-scroll dead end.
+- A focusable session card must have an accessible scene-cluster focus purpose. The panel is labelled by its heading, the collection is labelled as a list, cards are list items, state remains visible text, action groups are labelled, and focus-visible styling is preserved.
+
 For typed `tool/requestUserInput` waits, queue submit should stay disabled until every required question is answered, while optional prompts may stay blank and be omitted from the app-server `answers` payload.
 For hook-backed Claude elicitation forms, queue submit should require only the fields marked required by the Claude-requested schema.
 
@@ -113,7 +125,9 @@ Delegated-work normalization:
 - Shared delegated-work activity should produce `DashboardEvent.kind = "subagent"` so browser toasts, scene cues, session history, and future source adapters do not need separate per-provider event families for the same concept.
 - Local Claude workflow/subagent transcripts, matching `*.meta.json`, and workflow `journal.jsonl` records should create inferred `parentThreadId` child rows under the lead Claude session, even when no hook sidecar exists.
 - Claude hook `agent_id` and Agent Teams `leadSessionId` should create or upgrade real `parentThreadId` child rows where available; hook-backed rows should win over matching inferred workflow/subagent rows, while transcript-only delegation should still keep Claude provenance/confidence and source-specific detail text visible because that path has weaker correlation.
-- Claude Desktop Co-work sessions should remain read-only Claude agents. They can seed workspace floors and file-change activity, but they must not imply Codex-style reply, resume, or subagent control.
+- Locally materialized Claude Home work sessions should remain read-only Claude agents. They can seed workspace floors and file-change activity, but they must not imply Codex-style reply, resume, or subagent control; the legacy `claude:cowork` source kind stays compatible.
+- Claude Agent SDK `listSessions()` / `getSessionMessages()` rows are Claude Code sessions and remain on Code project floors. Only local Home work records materialized in the legacy `local-agent-mode-sessions` store may become read-only `claude:cowork:*` rows.
+- Personal Free, Pro, and Max Claude Home Recent chats have no supported live local listing API and must not be inferred from `claude-code-sessions`, cookies, local/session storage, prompt drafts, or message bodies. A narrow local-only exception may observe sanitized remote Home-work session metadata already stored in Claude Desktop's bounded Chromium HTTP response cache: only `cse_*` ids, title, timestamps, model, origin, coarse state, and exact `product:cowork-remote` classification are retained. The adapter must not read the watch cursor/query token, call the private endpoint, retain message/event bodies, or represent ordinary chats. Enterprise Compliance chat metadata remains an explicit future opt-in administrative provider.
 
 Recent typed turn lifecycle handling:
 
@@ -218,6 +232,11 @@ Current browser settings surfaces are:
 
 ### Scene layout and tiles
 
+- In fleet view, workspace floors should read as one straight architectural cutaway: a full-width rectangular crown/roof with sparse pixel HVAC, vent, and aerial details; continuous facade edges; and one rectangular foundation instead of offset cards or projecting slabs.
+- The shared backdrop should use the restored bright blue parallax sky. Normal workspace interiors should use the saturated blue staggered-brick floor palette with restrained separator lines and derived low-contrast seams rather than a bright cyan grid.
+- Floor joins must stay flush across the tower. Gold rail dots, bright projecting separators, and partial-width roof caps are not part of the visual language.
+- The lowest all-workspaces level is labelled `Chat Café` and reads as a street-level pixel-art café with pavement, storefronts, tables/workstations, chairs, plants, shelving, and coffee fixtures.
+- The Chat Café header should keep a compact, persistent `Quick Chat: Add to task` hint even when Claude Home or other Café agents are present; the integration boundary must not disappear with the empty state.
 - The office floor should use a tile grid as its primary layout system.
 - Scene sprite metadata and room-interaction definitions should load from startup-read config files instead of being hard-coded inside the browser runtime strings.
 - Rooms from the saved per-project `rooms.xml` define the outer floor bounds; internal furniture/layout is then placed on a tile grid inside those room bounds.
@@ -282,6 +301,14 @@ Global user settings should currently include:
 
 - text scale for toasts, hover cards, and browser-office text
 
+Per-workspace appearance settings should include:
+
+- a `Customize` control beside each normal workspace floor's `Shared` and `Focus` controls; the synthetic Chat Café keeps its authored palette and does not expose this control
+- editable Floor, Wall, and Board base colors, stored browser-locally by repository identity so merged and split worktree views share one appearance
+- bounded darker and lighter ramps derived from the three stored base colors instead of separately persisted shade fields
+- live scene preview while a color is changed, plus explicit Reset and Close actions
+- keyboard behavior that moves focus into the first color input when opened, returns focus to the Customize trigger when closed, and supports `Escape` without losing the active floor context
+
 Diagnostic browser controls may also exist for development visibility, such as a debug tile overlay toggle, but they should not redefine the stable layout contract.
 
 Global text scale rules:
@@ -300,8 +327,13 @@ Global text scale rules:
 - When worktrees are split into separate floors, a worktree floor title should use the worktree name with a distinct bright-blue worktree badge/icon treatment.
 - Fleet startup should include configured Codex workspaces from `~/.codex/config.toml` when available, not only workspaces that already emitted recent local thread activity.
 - Fleet mode should hide autodiscovered workspaces once their last session timestamp is more than 7 days old.
-- Claude Desktop Co-work spaces should become workspace floors from `local-agent-mode-sessions` when their saved folder roots are still present locally.
-- Claude Desktop Co-work-only floors should sort after normal workspaces so primary coding projects stay first in the tower.
+- Fallback Codex rollout discovery must inspect bounded session metadata before loading whole JSONL histories, reject non-subagent and nonmatching-project files early, share in-flight metadata/full reads across fleet monitors, and cap concurrent full-file parsing. Each project monitor coalesces overlapping startup, interval, and notification discovery triggers into one active scan plus at most one queued rerun.
+- A uniquely titled projectless Codex Chat task whose normal cwd is under `~/Documents/Codex/<date>/<slug>` must normalize to the single canonical `~/Documents/Codex` Chat root within one live refresh. It appears exactly once as its own agent at a Chat Café table and exactly once in Sessions, retains the real thread id/title/state, and never creates a dated or slug-specific floor.
+- While that Chat task is active it belongs to Active and remains seated. After a final answer it keeps the normal roughly 3-second lead cooldown, then becomes Recent/off-desk according to the shared placement policy. Clicking it opens read-only history unless the exact app-server connection owns reply authority.
+- A normal repository merely named `Chat` must not enter Chat Café. ChatGPT account sidebar history, Codex Quick Chat before **Add to task**, and ordinary personal Claude Home Recent chats must not be synthesized when their supported local APIs do not expose them.
+- Claude Home work spaces should become workspace floors from the legacy `local-agent-mode-sessions` store when their saved folder roots are still present locally.
+- A recent Claude Home remote-work session classified by the desktop cache as `product:cowork-remote` should appear exactly once as a rootless, inferred, read-only Claude agent in Chat Café and Sessions. It must never join a project snapshot or multiplayer payload, expose reply/resume actions, retain prompt/message content, or remain falsely active after its cached activity becomes stale.
+- Claude Home-work-only floors should sort after normal workspaces so primary coding projects stay first in the tower.
 - Claude workflow/subagent children should be seated under the owning lead session discovered for that project floor, not promoted into separate floors from their transcript paths alone.
 - Hermes-discovered workspaces should come only from a live Hermes process cwd or the latest current root of a fresh hook session; durable DB history, broad hook path sweeps, and exact transient roots such as `/tmp` must not create floors.
 - Hermes hook-backed project relation should persist through 20 rootless hook actions; after more than 20 actions without a known project root, the same Hermes session should become projectless until a new project-bearing path or cwd appears.
@@ -371,7 +403,7 @@ Worktree identity rules:
 - Space between related-work cubicle groups should stay tighter than space between major desk columns.
 - The current internal defaults are:
   `space between cubicle groups = 1 tile`
-  `space between columns = 4 tiles`
+  `space between columns = 3 tiles`
 - A single occupied two-seat pod should keep the live workstation anchored to a real seat cell on the grid instead of recentring within the whole pod footprint.
 - The two seat cells inside a pod should be tile-aligned halves of that pod footprint so the workstation and avatar read as part of the same pixel grid as the surrounding room furniture.
 - By default, the first occupied seat in a two-seat pod should use the left seat cell, and a newly added second seat should grow in the right seat cell.
@@ -496,6 +528,9 @@ Current-workload rules:
 - Rate limits from the cloud surface should degrade into a human-readable note plus backoff, not repeated raw per-project failure spam.
 
 ## Internal doc map
+
+- [agent-workflows.md](./agent-workflows.md)
+  GPT-5.6 Codex configuration, roles, delegation, permission boundaries, skills, and workflow validation.
 
 - [architecture.md](./architecture.md)
   System design and module ownership.

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agents-office-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start", "--", "--port", "4972"],
+      "port": 4972
+    }
+  ]
+}

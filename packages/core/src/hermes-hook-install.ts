@@ -298,6 +298,17 @@ function removePluginFromList(lines: string[], listIndex: number): void {
   }
 }
 
+function removeMalformedPluginRootEntries(lines: string[], pluginsIndex: number): void {
+  const endIndex = pluginsBlockEndIndex(lines, pluginsIndex);
+  for (let index = pluginsIndex + 1; index < endIndex; index += 1) {
+    const line = lines[index];
+    if (new RegExp(`^\\s{2}-\\s*${HERMES_PLUGIN_NAME}\\s*$`).test(line)) {
+      lines.splice(index, 1);
+      index -= 1;
+    }
+  }
+}
+
 function enablePluginInConfig(raw: string): string {
   const lines = raw.split(/\r?\n/);
   const pluginsIndex = lines.findIndex((line) => /^plugins:\s*$/.test(line));
@@ -305,6 +316,7 @@ function enablePluginInConfig(raw: string): string {
     return `${raw.replace(/\s*$/, "")}\n\nplugins:\n  enabled:\n    - ${HERMES_PLUGIN_NAME}\n`;
   }
 
+  removeMalformedPluginRootEntries(lines, pluginsIndex);
   removePluginFromList(lines, pluginListIndex(lines, pluginsIndex, "disabled"));
 
   const enabledIndex = pluginListIndex(lines, pluginsIndex, "enabled");

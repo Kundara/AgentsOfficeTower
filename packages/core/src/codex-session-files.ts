@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,30 @@ import type { CodexThread, CodexTurn, ThreadItem } from "./types";
 const DEFAULT_MAX_SESSION_FILES = 240;
 const DEFAULT_SESSION_LOOKBACK_DAYS = 2;
 const SESSION_FILE_RECENCY_MS = 24 * 60 * 60 * 1000;
+const SESSION_META_PREFIX_BYTES = 64 * 1024;
+const SESSION_META_CACHE_LIMIT = 512;
+const SESSION_META_READ_CONCURRENCY = 12;
+const SESSION_FULL_READ_CONCURRENCY = 3;
+
+type RecentSessionFile = {
+  filePath: string;
+  mtimeMs: number;
+  size: number;
+};
+
+type SessionMetaProbe =
+  | { kind: "known"; cwd: string | null; isSubagent: boolean }
+  | { kind: "unknown" };
+
+type SessionMetaCacheEntry = {
+  signature: string;
+  promise: Promise<SessionMetaProbe>;
+};
+
+const sessionMetaCache = new Map<string, SessionMetaCacheEntry>();
+const fullSessionReadInFlight = new Map<string, Promise<CodexThread | null>>();
+const fullSessionReadWaiters: Array<() => void> = [];
+let activeFullSessionReads = 0;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
@@ -44,7 +68,7 @@ async function listRecentSessionFiles(input: {
   maxFiles?: number;
   lookbackDays?: number;
   sessionDirectories?: string[];
-}): Promise<string[]> {
+}): Promise<RecentSessionFile[]> {
   const nowMs = (input.now ?? new Date()).getTime();
   const directories = input.sessionDirectories ?? sessionDateDirectories(input.now, input.lookbackDays);
   const files = (
@@ -60,7 +84,7 @@ async function listRecentSessionFiles(input: {
               if (nowMs - entryStat.mtimeMs > SESSION_FILE_RECENCY_MS) {
                 return null;
               }
-              return { filePath, mtimeMs: entryStat.mtimeMs };
+              return { filePath, mtimeMs: entryStat.mtimeMs, size: entryStat.size };
             } catch {
               return null;
             }
@@ -69,12 +93,151 @@ async function listRecentSessionFiles(input: {
         return [];
       }
     }))
-  ).flat().filter((entry): entry is { filePath: string; mtimeMs: number } => Boolean(entry));
+  ).flat().filter((entry): entry is RecentSessionFile => Boolean(entry));
 
   return files
     .sort((left, right) => right.mtimeMs - left.mtimeMs)
-    .slice(0, input.maxFiles ?? DEFAULT_MAX_SESSION_FILES)
-    .map((entry) => entry.filePath);
+    .slice(0, input.maxFiles ?? DEFAULT_MAX_SESSION_FILES);
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (values.length === 0) {
+    return [];
+  }
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(values.length, Math.max(1, concurrency)) },
+    async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(values[index], index);
+      }
+    }
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+function sessionFileSignature(file: RecentSessionFile): string {
+  return `${file.mtimeMs}:${file.size}`;
+}
+
+function fullSessionReadKey(file: RecentSessionFile): string {
+  return `${file.filePath}\u0000${sessionFileSignature(file)}`;
+}
+
+function pruneSessionMetaCache(): void {
+  while (sessionMetaCache.size > SESSION_META_CACHE_LIMIT) {
+    const oldestKey = sessionMetaCache.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      return;
+    }
+    sessionMetaCache.delete(oldestKey);
+  }
+}
+
+async function readSessionMetaPrefix(file: RecentSessionFile): Promise<SessionMetaProbe> {
+  const handle = await open(file.filePath, "r");
+  try {
+    const length = Math.min(file.size, SESSION_META_PREFIX_BYTES);
+    if (length <= 0) {
+      return { kind: "unknown" };
+    }
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    const prefix = buffer.subarray(0, bytesRead).toString("utf8").replace(/^\uFEFF/, "");
+    const newlineIndex = prefix.search(/\r?\n/);
+    if (newlineIndex < 0 && file.size > bytesRead) {
+      return { kind: "unknown" };
+    }
+    const firstLine = (newlineIndex >= 0 ? prefix.slice(0, newlineIndex) : prefix).trim();
+    const entry = parseJsonLine(firstLine);
+    const payload = asRecord(entry?.payload);
+    if (!entry || entry.type !== "session_meta" || !payload) {
+      return { kind: "unknown" };
+    }
+    return {
+      kind: "known",
+      cwd: asString(payload.cwd),
+      isSubagent: sessionSourceIsSubagent(payload.source, asString(payload.thread_source))
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function getSessionMetaProbe(file: RecentSessionFile): Promise<SessionMetaProbe> {
+  const signature = sessionFileSignature(file);
+  const cached = sessionMetaCache.get(file.filePath);
+  if (cached?.signature === signature) {
+    sessionMetaCache.delete(file.filePath);
+    sessionMetaCache.set(file.filePath, cached);
+    return cached.promise;
+  }
+
+  const promise = readSessionMetaPrefix(file).catch((): SessionMetaProbe => ({ kind: "unknown" }));
+  sessionMetaCache.set(file.filePath, { signature, promise });
+  pruneSessionMetaCache();
+  return promise;
+}
+
+async function acquireFullSessionReadSlot(): Promise<void> {
+  if (activeFullSessionReads < SESSION_FULL_READ_CONCURRENCY) {
+    activeFullSessionReads += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => fullSessionReadWaiters.push(resolve));
+}
+
+function releaseFullSessionReadSlot(): void {
+  const next = fullSessionReadWaiters.shift();
+  if (next) {
+    // Transfer the occupied slot directly to the next reader.
+    next();
+    return;
+  }
+  activeFullSessionReads = Math.max(0, activeFullSessionReads - 1);
+}
+
+async function readAndParseSessionFile(file: RecentSessionFile): Promise<CodexThread | null> {
+  const key = fullSessionReadKey(file);
+  const existing = fullSessionReadInFlight.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = (async () => {
+    await acquireFullSessionReadSlot();
+    try {
+      const contents = await readFile(file.filePath, "utf8");
+      const thread = parseCodexSessionThreadFromJsonl(file.filePath, contents, file.mtimeMs);
+      if (thread) {
+        sessionMetaCache.set(file.filePath, {
+          signature: sessionFileSignature(file),
+          promise: Promise.resolve({ kind: "known", cwd: thread.cwd, isSubagent: true })
+        });
+        pruneSessionMetaCache();
+      }
+      return thread;
+    } catch {
+      return null;
+    } finally {
+      releaseFullSessionReadSlot();
+    }
+  })();
+  fullSessionReadInFlight.set(key, promise);
+  void promise.finally(() => {
+    if (fullSessionReadInFlight.get(key) === promise) {
+      fullSessionReadInFlight.delete(key);
+    }
+  });
+  return promise;
 }
 
 function parseJsonLine(line: string): Record<string, unknown> | null {
@@ -396,21 +559,35 @@ export async function discoverCodexSessionThreads(input: {
     maxFiles: input.maxFiles,
     sessionDirectories: input.sessionDirectories
   });
-  const threads = await Promise.all(sessionFiles.map(async (filePath) => {
-    try {
-      const [contents, entryStat] = await Promise.all([
-        readFile(filePath, "utf8"),
-        stat(filePath)
-      ]);
-      return parseCodexSessionThreadFromJsonl(filePath, contents, entryStat.mtimeMs);
-    } catch {
-      return null;
-    }
-  }));
-
   const canonicalProjectRoot = canonicalizeProjectPath(input.projectRoot);
+  if (!canonicalProjectRoot) {
+    return [];
+  }
+
+  const probes = await mapWithConcurrency(
+    sessionFiles,
+    SESSION_META_READ_CONCURRENCY,
+    async (file) => ({ file, probe: await getSessionMetaProbe(file) })
+  );
+  const candidates = probes
+    .filter(({ probe }) => {
+      if (probe.kind === "unknown") {
+        // Older or partially-written session files still get a compatibility
+        // parse, but only through the bounded global full-read queue.
+        return true;
+      }
+      return probe.isSubagent
+        && Boolean(probe.cwd && sameProjectPath(probe.cwd, canonicalProjectRoot));
+    })
+    .map(({ file }) => file);
+  const threads = await mapWithConcurrency(
+    candidates,
+    SESSION_FULL_READ_CONCURRENCY,
+    readAndParseSessionFile
+  );
+
   return threads
     .filter((thread): thread is CodexThread => Boolean(thread))
-    .filter((thread) => Boolean(canonicalProjectRoot && sameProjectPath(thread.cwd, canonicalProjectRoot)))
+    .filter((thread) => sameProjectPath(thread.cwd, canonicalProjectRoot))
     .sort((left, right) => right.updatedAt - left.updatedAt);
 }

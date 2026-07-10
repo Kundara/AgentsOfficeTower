@@ -14,7 +14,7 @@ The detailed hook inventory now lives in [docs/integration-hooks.md](./integrati
 
    Official docs describe `thread/start`, `thread/list`, `thread/read`, and a live notification stream for `turn/*`, `item/*`, approvals, command execution, and file changes. That makes it the best local integration surface for CLI, IDE, and app-originated threads.
 
-   In this codebase, that still means we need a runnable Codex executable. We prefer `codex` on `PATH`, allow `CODEX_CLI_PATH` overrides, fall back on native Windows to `wsl.exe --exec codex` when the CLI is only installed inside WSL, fall back to the macOS app bundle binary when present, and on Windows can extract the Store app's packaged `codex.exe` into a local cache and run that copy. When both native/WSL CLI and app runtimes exist, CLI still decides unless the override is set.
+   In this codebase, that still means we need a runnable Codex executable. We honor `CODEX_CLI_PATH` first; on macOS we then prefer the Codex runtime bundled with `ChatGPT.app` or `Codex.app` before `codex` on `PATH`. On native Windows we can extract the Store app's packaged `codex.exe` into a local cache before PATH and WSL fallbacks.
 
    The app-server protocol is version-specific, so this repo also includes `npm run check:codex-protocol`. That check regenerates the installed `codex app-server generate-ts --experimental` bindings into a temporary directory and compares the server notification/request method set against the reviewed allowlist.
 
@@ -141,6 +141,7 @@ Sources:
   - fleet view across multiple configured project roots
   - fleet mode only keeps autodiscovered workspaces whose session timestamps are no older than 7 days; config-only roots without recent sessions do not stay visible just because the workspace metadata is newer
   - fleet map renders as a continuous tower of workspace floors instead of a stack of separate cards
+  - the lowest all-workspaces level is a synthetic `street-cafe` scene: canonical projectless Codex roots and locally materialized Claude Home work agents are removed from duplicate workspace floors, then combined with private rootless `FleetResponse.accountAgents` at café-table workstations. Stable `conversationKey` identities prevent double rendering. Account agents never enter project snapshots or shared-room payloads; explicit `interactionMode: "work"` joins the floor without guessing from broad transport labels such as `vscode`, CLI, exec, or app-server-owned work
   - Git-linked worktrees merge onto one repo floor by default, with a global split toggle available when one floor per worktree is more useful
   - deep-linkable single-project room view through `?project=<abs-path>`
   - explicit CLI project roots stay pinned to those roots instead of being replaced by auto-discovered workspace lists
@@ -170,6 +171,8 @@ Sources:
 - newly visible subagents use the same room-door entry path as other arrivals; parent/child relationship lines communicate delegation on boss hover for any visible lead/subagent pair, including single-child leads that stay in ordinary workstation layout
 - session panel includes a durable cross-project "needs you" queue for approval/input waits
   these entries now come from typed request hooks, not from regexes over session detail
+  - the panel is one scoped workload index with pinned Needs You, then Active, then Recent; all live rows are retained while Recent is capped globally at 10 across All view rather than independently per project
+  - the panel shell owns a labelled scroll region, concise live/recent counts, visible state pills, responsive wrapping, and focus-preserving refresh so long titles, maximum text scale, and narrow viewports do not clip rows
   - session cards expose provenance/confidence so Codex-native, Claude transcript, Claude hook-backed, and Cursor API-backed state stay distinguishable
   - snapshot-only rendering through `?screenshot=1`
   - session-card hover/focus dims unrelated agents so the visible thread cluster for that session stands out in the map
@@ -180,10 +183,11 @@ Sources:
   - agent-anchored file-change notifications for current agents, showing filename-first copy and available `+/-` line deltas
 - shared fleet-only sky backdrop with parallax pixel-cloud layers behind the tower, while individual rooms no longer paint their own cloud mural
 - projectless Hermes orchestrators render in that sky as fixed screen-space avatars on the left edge, so they stay outside the building and ignore vertical tower scroll until they regain a workspace desk
-- Hermes identity handoff is screen-space when it crosses floor ownership: the fixed layer animates desk-to-sky, sky-to-desk, and known-floor-to-known-floor transfer ghosts from measured DOM hit rects while the Pixi room scenes keep owning settled desk avatars
+- Hermes identity handoff is screen-space when it crosses floor ownership: the fixed layer animates desk-to-sky, sky-to-desk, and known-floor-to-known-floor transfer ghosts from measured DOM hit rects while the Pixi room scenes keep owning settled desk avatars. Roaming slots persist across membership churn, flight translation and bank are independent, distance controls flight duration, and a slower low-amplitude drift owns the idle pose.
 - hover/session detail surfaces for longer text instead of large scene overlays, while local Codex agents can now open a compact right-edge floor chat panel for recent typed history without routing through the session panel first
 - scene hover cards for agents and hot-stuff cells render through a fixed body-level HTML overlay anchored to the Pixi hit target, so they stay above the horizontally scrollable scene host and are clamped to the viewport instead of being clipped by the floor panel
 - when a scene-native thread card is open, map hover tooltips are suppressed until the card closes so the reply/history surface does not fight for the same space; resting agents stage slightly left/down while their chat is open, and successful sends create a short desk-work intent until official live state catches up
+- fallback-only Codex subagent recovery probes the bounded first-line `session_meta` before reading a rollout body, shares capped metadata/in-flight reads across fleet monitors, limits whole-file parsing to three concurrent files, and coalesces each monitor's overlapping four-second/event discovery triggers so large global rollout history cannot multiply once per project into an OOM
 - the scene chat panel is reconciled by stable thread/message keys instead of being recreated on every fleet refresh, so live text updates do not replay the panel slide-in; only newly appended message bubbles get the short bottom-stack animation, and a bottom-scrolled history stays pinned to the newest content
 - browser map layout now derives from a tile-grid settings model instead of renderer-local pixel literals
 - internal scene settings define prefab geometry and spacing such as tile size, boss-booth size, desk-pod span, top-band depth, cubicle-group spacing, column spacing, and rec-strip depth
@@ -193,7 +197,7 @@ Sources:
 - global browser settings currently expose text scale plus a persisted worktree split toggle; text scale still applies to hover/toast/map text without changing room or prefab geometry
 - the retained browser map path now uses a persistent Pixi scene host plus HTML anchor overlays for toast positioning, so map updates can mutate scene entities without replacing the scene shell
 - the primary room wall includes a compact scene-native hot-stuff board between the left wall and doorway, built from decayed `activity.hotChanges`; the CLI `gist` command exposes that same hot-change summary alongside active-agent last-message and last-file-change hints for light state sync before deeper reads
-- routed avatar movement in the Pixi scene now uses a lightweight grid pathfinder against room occupancy instead of direct straight-line scene tweens
+- routed avatar movement in the Pixi scene uses room-occupancy navigation for every grounded move, including small same-seat layout adjustments. EasyStar remains the primary solver, an internal four-neighbor solver is the deterministic fallback, and an unreachable target holds the exact current pose instead of drawing a direct line through blocked cells.
 - floor-depth sorting in the Pixi scene now uses explicit logical rows: moving agents sort from their current foot-tile row, while workstation shells and seated avatars sort from the workstation footprint row, so overlap follows the same "lower floor cell stays in front" rule during pass-bys
 - exit ghosts now persist across scene refreshes until their doorway walk and fade complete, and room changes split into a doorway exit in the old room plus a doorway entry in the destination room instead of retargeting one live sprite across rooms
 - rec-area idle behavior is scene-config-driven: seated flip cadence, provider-trip rarity, resting walk speed, held-item base size, and global held-item scale all come from `packages/web/src/config/scene-definitions.json`
@@ -221,7 +225,7 @@ The web package now separates transport, lifecycle, rendering, and client delive
 - `packages/core/src/utils`
   Holds small reusable JSON/text helpers extracted from the older source-specific modules.
 
-Snapshot assembly now happens in one place through `SnapshotAssembler`, which merges cached adapter snapshots, applies room mapping once, and evaluates workload currentness against the snapshot start time so slow secondary adapters do not incorrectly evict freshly finished local work.
+Snapshot assembly happens in one place through `SnapshotAssembler`, which merges cached adapter snapshots, applies room mapping once, and evaluates workload currentness against the snapshot request time so slow secondary adapters do not incorrectly evict freshly finished local work. Each `ProjectLiveMonitor` owns a long-lived `ProjectSnapshotCoordinator`: secondary sources warm once, refresh on the controlled interval or an explicit refresh, and serve cached snapshots to event-driven local rebuilds. Refresh and assembly pumps serialize overlapping work, discard superseded assemblies, and publish only the newest queued monitor state. One-shot snapshot APIs use the same coordinator boundary with a short-lived lifecycle. Static adapter refreshes also use monotonic generations so an older async loader cannot replace newer cached state.
 
 - `packages/web/src/server/server.ts`
   Starts the HTTP server, wires shutdown, binds before fleet warmup, and delegates everything else.
@@ -237,22 +241,25 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
   Implements the bounded read-only query contract for `web query`: repo matching, local/team source selection, `recent`/`last` commands, agent/event filters, result projection, and shared-data guards.
 - `packages/web/src/render/render-html.ts`
   Builds the HTML shell and injects the browser assets.
-- `packages/web/src/client/index.ts`
-  Bundled browser entrypoint that loads the external client assets and starts the generated browser runtime module against server-injected bootstrap config.
-- `packages/web/src/client/app-runtime.ts`
-  Generated browser runtime module emitted at build time from the focused runtime section sources so the shipped client no longer relies on `new Function(...)` evaluation.
-- `packages/web/src/client/runtime-source.ts`
-  Thin browser runtime composition entry that still mirrors the focused runtime section order while the generated `app-runtime.ts` output is the actual shipped browser module.
+- `packages/web/scripts/build-client.mjs`
+  Assembles the focused runtime sections into an in-memory TypeScript entry and passes it directly to esbuild, so the shipped client does not rely on runtime evaluation or a tracked generated monolith.
+- `packages/web/scripts/generate-runtime-module.mjs`
+  Uses the TypeScript parser to read literal runtime-section exports without executing source code, then returns the assembled module to the build.
 - `packages/web/src/client/runtime`
   Holds focused runtime sections so browser behavior can be edited by concern instead of by patch order or by one giant client script.
+  Pure browser logic moves into ordinary typed modules imported by the esbuild entry. `latest-typed-message-event.ts` keeps assistant-message filtering independent of runtime-section declaration order, `event-presentation.ts` owns notification/icon/history classification, and `horizontal-wheel.ts` owns scroll-target and overflow geometry. These modules have direct behavioral tests instead of source-order assertions.
   Current ownership is:
   - `settings-source.ts`: persisted scene settings, furniture overrides, hat catalog helpers, and browser-side settings state bootstrap.
   - `layout-source.ts`: DOM wiring, fleet/workspace selection state, settings UI sync including the hat preview cycler, summary helpers, role grouping, and display-text normalization.
   - `seating-source.ts`: current-workload workstation policy, local grace windows, and rec-room eligibility.
   - `render-source.ts`: cubicle/workstation visual models, notification copy shaping, and display-path formatting.
-  - `scene-source.ts`: room-to-scene model assembly, Pixi renderer lifecycle, retained scene orchestration, and hat asset preloading.
-  - `navigation-source.ts`: navigation grid, avatar routing, per-avatar Pixi node creation including hats, scene hit-target focus, terminal/fleet summaries, and the durable "Needs You" queue.
-  - `ui-source.ts`: browser render loop, DOM patching, fleet ingestion, and session-card rendering.
+  - `scene-source.ts`: room-to-scene model assembly and retained scene orchestration; `scene-renderer-source.ts` owns Pixi renderer lifecycle, asset loading, and primitive helpers.
+  - `cafe-scene-source.ts`: the synthetic Chat Café scene and its authored street-level furniture/storefront model.
+  - `scene-customization-source.ts` plus the typed `scene-palette.ts`: browser-local Floor/Wall/Board controls, persistence keys, bounded derived ramps, and live palette preview.
+  - `navigation-source.ts`: navigation grid integration, avatar routing, per-avatar Pixi node creation including hats, and scene hit-target focus.
+  - `navigation-pathing-source.ts`, `navigation-overlays-source.ts`, `floating-orchestrator-source.ts`, `office-scene-lifecycle-source.ts`, and `furniture-interaction-source.ts`: ordered pathing, overlays, roaming transfers, retained lifecycle, and furniture behavior around the Pixi motion core.
+  - `attention-panel-source.ts`: terminal/fleet summaries and the durable `Needs You` queue.
+  - `ui-source.ts`: browser render loop, DOM patching, fleet ingestion, and session-card rendering; the typed `session-focus.ts` preserves card/composer focus and selection across live list rebuilds.
 - `packages/web/src/client/multiplayer-source.ts`
   Holds the browser-side PartyKit room sync overlay, shared-room draft/input behavior, explicit per-project share preferences, active-agent remote fleet merge helpers, and the debounced same-origin post of the already-coordinated shared-room fleet back to the local server for `scope=team` CLI reads.
 - `packages/party`
@@ -260,7 +267,7 @@ Snapshot assembly now happens in one place through `SnapshotAssembler`, which me
 - `packages/web/src/client/toast-source.ts`
   Holds browser-side toast queueing, stacking, timing, preview, and DOM rendering so notification behavior does not stay embedded in the main renderer script.
 - `packages/web/src/client/styles.css`
-  Holds the browser CSS that now builds into `/client/app.css`.
+  Holds the main browser CSS; toast/notification styling lives in `notifications.css`. Esbuild combines both into `/client/app.css`.
 - `packages/web/src/http-helpers.ts`
   Centralizes JSON/body helpers and static/project-file response handling.
 
@@ -380,8 +387,8 @@ The active office view currently favors an open station language over enclosed c
 - workstation slots are pinned to a fixed floor grid instead of being repacked when new agents appear
 - workstation slot ownership should be sticky across incremental scene updates; a scene rerender or non-positional refresh must not discard prior slot memory
 - desk columns start around one-fifth of the room width, leaving room for a compact stacked boss-office column on the left when needed
-- each workstation column now uses a single visible cubicle stack with 3 tightly stacked workstation rows so active desks stay inside a standard room height
-- role grouping prefers to keep the same agent types inside the same visible workstation stack before spilling into a new column
+- desk pods are two tiles tall and laid out by lead group: pods whose occupants share the same boss stack touching vertically (up to six pods per run before a one-tile passage), while unrelated pods and paired solo sessions keep a one-tile passage between them; desk columns are one tile apart and pods flow into a new column when the run exceeds the floor's content rows
+- compact fleet floors size themselves to seating demand: height is wall depth plus max(boss column, first desk column, two-boss/two-desk-row minimum) plus one walkway row, clamped to the configured room height (16 rows) as the maximum; quiet floors clip their unused bottom and the host tweens height changes (~240ms) instead of snapping
 - a single occupied two-seat pod stays anchored to a real seat cell instead of collapsing to a centered pseudo-seat
 - the first occupied seat in a pod defaults to the left seat cell, and a second occupied seat expands into the right seat cell without shifting the first workstation
 - newly occupied seats use a short retro blink reveal so the workstation appears before the worker settles
@@ -391,7 +398,7 @@ The active office view currently favors an open station language over enclosed c
 - lead-session arrivals and all departures use the center-top room entrance as the path anchor; newly visible subagents start from their parent agent's current scene position before walking to their assigned workstation
 - ordinary refreshes now reuse a settled same-slot target when the layout delta is only a tiny no-op drift, so polling does not look like an unnecessary seat shuffle
 - finished subagents now keep a longer readable desk cooldown before they walk back out through that doorway instead of vanishing immediately
-- lead sessions with active subagents move into a dedicated left-side boss-office column; the column starts one floor tile below the floor start and uses contiguous 3-tile-tall office slots so four bosses can stack in a standard room while still reading as offices instead of rounded placeholder frames
+- lead sessions with active subagents move into a dedicated left-side boss-office column; the column starts one floor tile below the floor start and uses contiguous 2-tile-tall office slots so six bosses can stack in a standard room, and booth boxes sort by foot depth so each booth's back wall occludes the boss above it like a wall separator
 - hovering a boss reveals arrow lines to the related spawned subagents whether that lead is in a boss office or in an ordinary workstation with one visible child
 - chairs and seated reach points sit slightly outward from the desk so the monitor relationship reads cleanly
 - workstation computers currently use the single complete desk cut, avoiding the broken narrow pseudo-monitor asset
@@ -403,7 +410,10 @@ The active office view currently favors an open station language over enclosed c
 - the rec strip combines vending, counter, doors, clock, plants, sofa, and shelf props inside the same scene
 - a selected workspace with no local or recent agents may temporarily reuse the 4 most recent resting lead sessions from other tracked workspaces as rec-room stand-ins, so a freshly opened floor is not completely empty before its first local thread appears
 - long task titles stay in hover cards and the session panel instead of being drawn over the map
-- the floor is restored to the blue office-strip language from the reference art, including an upper wall-side walkway for rec facilities
+- workspace floors use the restored saturated blue staggered-brick palette with low-contrast derived seams; the street-level Chat Café uses warm interior tiles, a pavement band, storefronts, permanent tables/chairs, and Gherwit café fixtures while retaining the same navigation and depth model
+- normal workspace floors expose a browser-local Floor/Wall/Board customizer; only the three base colors are stored, while bounded lighter/darker variants are derived at render time and the palette key follows repository identity across merged or split worktree views
+- the Chat Café accepts canonical projectless Codex roots, locally materialized Claude Home work sessions, and explicit typed Work sessions; ordinary `vscode`, CLI, exec, app-server-owned work, and subagents remain on their project floors because the transport source is not a reliable Chat classifier
+- the local Codex app-server inventory does not expose the separate ChatGPT account-level Recent chats list, and the Claude Agent SDK lists Code sessions rather than personal Home conversations; the café never fabricates or scrapes either sidebar history
 - layout constants are now expressed as internal tile-grid settings instead of only pixel literals, so boss-office footprints, desk columns, rec-strip depth, and inter-cubicle spacing all derive from a single floor grid
 - global viewer settings are separate from internal scene settings; the first user-facing control is text scale, clamped from `0.75x` to `2.00x`, while prefab sizing and spacing stay internal
 - the current browser renderer is Pixi-first for the office map, with HTML retained only for overlays, controls, anchored hover cards, and fallback terminal output
@@ -418,14 +428,16 @@ Claude support uses a deliberately weaker contract than Codex:
 
 - project discovery merges Codex-discovered roots with roots inferred from `~/.claude/projects`
 - Codex fleet startup also seeds workspace discovery from configured roots in `~/.codex/config.toml`, so trusted Codex projects can appear before their first visible thread update
-- when the Anthropic Agent SDK is available, Claude project discovery prefers `listSessions()` and per-session `cwd` metadata before falling back to raw directory scanning
+- when the Anthropic Agent SDK is available, Claude Code project discovery prefers `listSessions()` and per-session `cwd` metadata before falling back to raw directory scanning; this inventory does not represent Claude Home account chats
 - Claude project discovery also reads fresh Agent Teams config under `~/.claude/teams`, using teammate `worktreePath` / `cwd` values as cowork project floors
 - Claude project discovery also reads Agent View background job state under `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json`, maps `<project>/.claude/worktrees/*` jobs back onto the owning project floor, and renders matching jobs as read-only `claude:background` agents with `claude attach <job>` resume commands
-- Claude project discovery also reads Claude Desktop Co-work app data under `local-agent-mode-sessions`, using `spaces.json` folders and per-session `userSelectedFolders` as Co-work project floors
+- Claude project discovery also reads locally materialized Claude Home work data under the legacy `local-agent-mode-sessions` store, using `spaces.json` folders and per-session `userSelectedFolders` as Home work project floors
+- fleet publishing separately reads a bounded set of fresh Claude Desktop HTTP-cache watch responses and retains only sanitized `product:cowork-remote` session metadata as private, rootless `accountAgents`; this observer never loads the watch query/cursor token, calls the endpoint, reads cookies/storage, or retains messages
 - the snapshot builder can include recent Claude sessions for matching project roots
 - recent Claude session messages can now be read through the supported Agent SDK `getSessionMessages()` API before falling back to raw JSONL transcript sampling
-- Claude lead sessions, Agent Teams rows, workflow subagents, Co-work rows, and Agent View background jobs attach inferred `DashboardAgent.goal` metadata from session titles, prompts, job names, teammate prompts, or child descriptions so adapter-level consumers can correlate goal context without treating Claude as Codex-typed
-- Claude Desktop Co-work sessions are exposed as read-only Claude agents for matching project roots, with recent file detections surfaced as file-change activity when available
+- Claude lead sessions, Agent Teams rows, workflow subagents, Home work rows, and Agent View background jobs attach inferred `DashboardAgent.goal` metadata from session titles, prompts, job names, teammate prompts, or child descriptions so adapter-level consumers can correlate goal context without treating Claude as Codex-typed
+- locally materialized Claude Home work sessions are exposed as read-only Claude agents for matching project roots, with recent file detections surfaced as file-change activity when available; `claude:cowork` remains their backward-compatible internal source kind
+- remote Claude Home work metadata is exposed as inferred, read-only `claude:cowork-remote:*` account agents in Chat Café and Sessions only; stale cached activity is demoted from live state and the lane is excluded from multiplayer
 - transcript-only Claude session state is still inferred from recent tool uses such as read, edit, bash, and task delegation when no typed hook signal exists
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl` can be produced either by a Claude Code hook script or by the exported Agent SDK sidecar bridge, and they upgrade Claude sessions to typed permission, tool, subagent, and stop state
 - Claude Agent/Task tool calls plus `TaskCreated`, `SubagentStart`, and `SubagentStop` hook records normalize to the same delegated-work activity family as Codex collab-agent items

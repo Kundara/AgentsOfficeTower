@@ -125,6 +125,29 @@ test("Hermes plugin install re-enables the bridge when config disabled it", asyn
   assert.doesNotMatch(config, /disabled:[\s\S]*-\s+codex-agents-office/);
 });
 
+test("Hermes plugin install removes legacy malformed root plugin entry", async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "codex-agents-office-hermes-malformed-"));
+  const hermesHome = join(tempRoot, "hermes-home");
+  const hookDir = join(tempRoot, "hooks");
+  mkdirSync(hermesHome, { recursive: true });
+  writeFileSync(join(hermesHome, "config.yaml"), [
+    "plugins:",
+    "  enabled:",
+    "    - existing-plugin",
+    "  - codex-agents-office",
+    "model:",
+    "  provider: test",
+    ""
+  ].join("\n"));
+
+  const result = await installHermesAgentsOfficePlugin({ hermesHome, hookDir });
+  const config = readFileSync(result.configPath, "utf8");
+
+  assert.match(config, /enabled:\n\s+- codex-agents-office\n\s+- existing-plugin/);
+  assert.doesNotMatch(config, /^\s{2}-\s+codex-agents-office$/m);
+  assert.match(config, /model:\n\s+provider: test/);
+});
+
 test("Hermes user prompt remains active planning while recent", () => {
   const summary = summarizeHermesSessionForTest({
     session: session({

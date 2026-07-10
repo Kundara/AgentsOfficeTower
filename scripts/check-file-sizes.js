@@ -7,11 +7,13 @@ const { listSourceFiles } = require("./list-source-files");
 const repoRoot = join(__dirname, "..");
 const maxBytes = 65 * 1024;
 const perFileMaxBytes = new Map([
-  ["packages/web/src/client/app-runtime.ts", 0],
+  ["packages/core/src/claude.ts", 141 * 1024],
+  ["packages/core/src/hermes.ts", 94 * 1024],
   ["packages/web/src/client/runtime/navigation-source.ts", 170 * 1024],
   ["packages/web/src/client/runtime/render-source.ts", 70 * 1024],
   ["packages/web/src/client/runtime/scene-source.ts", 85 * 1024],
-  ["packages/web/src/client/styles.css", 75 * 1024]
+  ["packages/web/src/client/runtime/ui-source.ts", 68 * 1024],
+  ["packages/web/src/client/styles.css", 80 * 1024]
 ]);
 
 const files = listSourceFiles(

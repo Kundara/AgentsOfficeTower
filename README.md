@@ -9,21 +9,23 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 ## Highlights
 
 - **Live office map**: active agents sit at desks, blocked or waiting work is visible, and recent finished leads rest in the rec area.
-- **Fleet mode by default**: discovered Codex workspaces appear together, with projectless Codex desktop chats grouped on one `Chat` floor and optional focus on one project or worktree.
+- **Fleet mode by default**: discovered Codex workspaces appear together, with projectless Codex tasks, locally materialized Claude Home work, and recent remote Claude Home work metadata combined at tables on the street-level Chat Café floor. Codex Quick Chat becomes visible after **Add to task**; ordinary ChatGPT and Claude chat history remains outside the supported local session APIs.
+- **A real tower cutaway**: blue-brick workspace floors with restrained seams share a straight full-width crown, facade, and foundation above a pixel-art Chat Café; grounded avatars move through the navigation grid while only roaming Hermes/OpenClaw orchestrators fly outside the building.
+- **Per-workspace colors**: Customize beside Shared/Focus selects browser-local Floor, Wall, and Board base colors; bounded lighter/darker shades are derived automatically and persist across merged or split worktree views.
 - **Codex-first visibility**: local Codex app-server data, Codex CLI activity, typed goals, cloud tasks, subagents, approvals, input waits, and typed events share one model.
 - **Hermes and OpenClaw support**: Hermes sessions come from durable state, live process hints, and optional hook sidecars, while OpenClaw sessions come from its Gateway; projectless Hermes and unmatched OpenClaw orchestrators hover in the left-side sky outside the tower instead of creating fake floors.
 - **CLI built in**: inspect snapshots, watch terminal views, launch the web server, or query the running tower from scripts.
 - **Repo-packaged skills**: Codex skills help agents run the tower CLI and coordinate with local or team workload data.
 - **Shared rooms**: sync active agents across machines with PartyKit-backed rooms and explicit per-project sharing controls.
 - **Same model everywhere**: browser, terminal, and VS Code surfaces render the same normalized snapshot.
-- **Subtle scene intelligence**: viewport-level hover cards, session panels, command toasts, hot-file cues, and the `Needs You` queue surface detail without turning the map into a dashboard.
+- **Subtle scene intelligence**: viewport-level hover cards, command toasts, and hot-file cues stay subordinate to the map, while the scrollable Sessions index keeps `Needs You`, every active session, and a globally capped recent list readable across desktop and narrow layouts.
 
 ## Surfaces
 
 - Browser office view
 - Terminal `snapshot`, `watch`, and `web query`
 - VS Code activity-bar panel
-- Codex skills in `Skills/`
+- Repo-discovered Codex skills in `.agents/skills/`
 
 ## Supported Sources
 
@@ -31,7 +33,7 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 | --- | --- |
 | Codex local | Best support through `codex app-server`, CLI/runtime discovery, typed goals, typed events, approvals, inputs, and subagents |
 | Codex cloud | Cloud task list through `codex cloud list --json` |
-| Claude | Local logs, Agent SDK session reads, inferred workflow/subagent child rows from local `subagents` files, hook-backed typed sidecars, Agent Teams cowork floors, Agent View background jobs, and Claude Desktop Co-work project folders |
+| Claude | Local Claude Code logs, Agent SDK session reads, inferred workflow/subagent child rows from local `subagents` files, hook-backed typed sidecars, Agent Teams cowork floors, Agent View background jobs, locally materialized Claude Home work folders, and bounded read-only metadata for recent remote Home work sessions |
 | Cursor | Local hook sidecars, workspace/log inference, and Cursor cloud agents |
 | Hermes | Durable `state.db` sessions, profile stores, live process cwd/env hints, and optional hook bridge sidecars folded into the matching session |
 | OpenClaw | Gateway sessions and config surfaces, with unmatched orchestrators rendered as fixed sky agents |
@@ -57,6 +59,8 @@ npm start -- /abs/project/path --port 4181
 # Build and checks
 npm run build
 npm run typecheck
+npm run check:agent-workflows
+npm run check
 npm run check:codex-protocol
 
 # Terminal views
@@ -76,18 +80,26 @@ node packages/cli/dist/index.js demo preview --port 4181
 
 ## Skills
 
-This repo ships Codex skills for working with the tower from inside agent sessions:
+This repo ships auto-discovered Codex skills for working with the tower from inside agent sessions:
 
-- `Skills/agents-tower`: start, restart, verify, and query the local tower, including the lightweight `gist` state sync.
-- `Skills/agents-tower-coordination`: inspect local or team workload before editing, starting with `gist` before deeper `recent`/`last` queries to avoid duplicate work and file conflicts.
+- `.agents/skills/agents-tower`: start, restart, verify, and query the local tower, including the lightweight `gist` state sync.
+- `.agents/skills/agents-tower-coordination`: inspect local or team workload before editing, starting with `gist` before deeper `recent`/`last` queries to avoid duplicate work and file conflicts.
 
 They are designed for bounded visibility, not remote control. Skills can query tower state, but they do not approve requests, send replies, or mutate another agent's session.
 
+## Codex Workflow
+
+The trusted-project config pins lead and review work to `gpt-5.6-sol`, enables bounded multi-agent v2 collaboration, and registers read-only mapping, copy, and verification roles. The lead agent owns integration and final validation; workers stay one level deep and do not share edit scopes.
+
+See [docs/agent-workflows.md](docs/agent-workflows.md) for the model baseline, role-selection rules, delegation handoff, permission boundary, and validation commands.
+
 ## Optional Integrations
 
-- **Claude**: Claude sessions are read from the Agent SDK when available, then fall back to local project logs. Project-scoped hook sidecars can upgrade Claude sessions from inferred transcript state to typed state, including browser-answerable `PermissionRequest` / `Elicitation` waits and shared delegated-work events for Agent/Task and subagent hooks. Hook records with `agent_id` now appear as child agents under the lead Claude session, local workflow/subagent transcript and journal files can add inferred child rows without hooks, Agent Teams can add teammate child rows plus cowork/worktree floors, Claude Agent View background jobs from `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json` can appear as read-only `claude:background` agents with `claude attach <job>` resume commands, and Claude Desktop Co-work project folders can appear as read-only workspace floors. Claude rows also expose inferred normalized goal metadata from session titles, prompts, teammate prompts, job names, and child descriptions so API consumers can correlate goal context without treating Claude as a typed Codex goal source.
+- **Claude**: Claude Code sessions are read from the Agent SDK when available, then fall back to local project logs. Project-scoped hook sidecars can upgrade Claude Code sessions from inferred transcript state to typed state, including browser-answerable `PermissionRequest` / `Elicitation` waits, `MessageDisplay` assistant streaming, and shared delegated-work events for Agent/Task and subagent hooks. Hook records with `agent_id` appear as child agents under the lead Claude session, local workflow/subagent transcript and journal files can add inferred child rows without hooks, Agent Teams can add teammate child rows plus cowork/worktree floors, Claude Agent View background jobs from `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json` can appear as read-only `claude:background` agents with `claude attach <job>` resume commands, and locally materialized Claude Home work folders can appear as read-only workspace floors. Claude rows also expose inferred normalized goal metadata from session titles, prompts, teammate prompts, job names, and child descriptions so API consumers can correlate goal context without treating Claude as a typed Codex goal source.
 
-  Co-work support is intended to work across Windows, macOS, and Linux wherever Claude Desktop exposes the same local Co-work project data.
+  Claude's current UI calls this surface **Home**; the desktop bundle still uses `cowork` names internally, so Agents Office keeps `claude:cowork` as a compatibility source kind. The Agent SDK session inventory belongs to the separate Code surface and must not be reclassified as Home. Agents Office may parse bounded watch responses already present in Claude Desktop's local HTTP cache, but it only extracts the remote Home-work metadata allowlist; it never extracts, retains, or exposes cookies, storage tokens, messages, prompts, event cursors, or calls Claude's private endpoint. Ordinary personal Home chats still have no supported live listing API and are not synthesized.
+
+  Codex Quick Chat is likewise separate from the Codex app-server thread inventory. Use **Add to task** in Codex to turn that conversation into a supported task that can appear in the Chat Café.
   Dynamic workflows / `ultracode` can fan out many workflow-managed subagents. Agents Office discovers those children from local `subagents` transcripts, matching `*.meta.json`, and workflow `journal.jsonl` records under the Claude project session folder; hook sidecars still upgrade matching rows to typed confidence when available.
 
 - **Hermes**: install a user-level hook bridge:
@@ -119,7 +131,8 @@ The VS Code panel embeds the real office renderer by starting a local Agents Off
 
 ## Repo Layout
 
-- `Skills`: Codex skills for tower operations and coordination
+- `.agents/skills`: repo-discovered Codex skills for tower operations and coordination
+- `.codex`: GPT-5.6 project defaults and bounded specialist role definitions
 - `packages/core`: discovery, adapters, room parsing, workload policy, and snapshot assembly
 - `packages/web`: browser server, renderer, routes, and client bundle
 - `packages/cli`: `web`, `snapshot`, `watch`, `web query`, demo, and integration commands
@@ -132,6 +145,7 @@ The VS Code panel embeds the real office renderer by starting a local Agents Off
 - [docs/spec.md](docs/spec.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/integration-hooks.md](docs/integration-hooks.md)
+- [docs/agent-workflows.md](docs/agent-workflows.md)
 - [docs/self-development.md](docs/self-development.md)
 - [docs/references.md](docs/references.md)
 - [CHANGELOG.md](CHANGELOG.md)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agents Tower Coordination"
+  short_description: "Coordinate work with live tower context"
+  default_prompt: "Use $agents-tower-coordination to check for overlapping agent work before delegating or editing."

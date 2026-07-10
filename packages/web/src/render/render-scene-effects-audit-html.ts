@@ -21,6 +21,7 @@ function mockFleetResponse(): FleetResponse {
   const generatedAt = new Date().toISOString();
   return {
     generatedAt,
+    accountAgents: [],
     projects: [
       {
         projectRoot: AUDIT_PROJECT_ROOT,

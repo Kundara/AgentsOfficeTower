@@ -592,6 +592,146 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           });
       }
 
+      function isCodexChatProject(snapshot) {
+        return isCodexChatProjectRootForStreetCafe(snapshot && snapshot.projectRoot);
+      }
+
+      function isStreetCafeAgent(snapshot, agent) {
+        if (!agent) {
+          return false;
+        }
+        if (isCodexChatProject(snapshot)) {
+          return true;
+        }
+        if (String(agent.sourceKind || "").startsWith("claude:cowork")) {
+          return true;
+        }
+        return agent.interactionMode === "work";
+      }
+
+      function cloneAgentForStreetCafe(sourceSnapshot, agent, movedIds) {
+        const sourceProjectRoot = agent.sourceProjectRoot || sourceSnapshot.projectRoot;
+        const sourceAgentId = agent.sourceAgentId || agent.id;
+        const streetId = mergedAgentId(sourceProjectRoot, sourceAgentId);
+        const sourceParentId = agent.parentThreadId || null;
+        return {
+          ...agent,
+          id: streetId,
+          parentThreadId: sourceParentId && movedIds.has(sourceParentId)
+            ? mergedAgentId(sourceProjectRoot, sourceParentId)
+            : null,
+          roomId: "street-cafe",
+          sourceProjectRoot,
+          sourceAgentId
+        };
+      }
+
+      function cloneAccountAgentForStreetCafe(agent) {
+        return {
+          ...agent,
+          id: String(agent.id || agent.conversationKey || "account-session"),
+          parentThreadId: null,
+          roomId: "street-cafe",
+          sourceProjectRoot: null,
+          sourceAgentId: agent.sourceAgentId || agent.id,
+          accountObserved: true
+        };
+      }
+
+      function streetCafeConversationKey(agent) {
+        const conversationKey = String(agent && agent.conversationKey || "").trim();
+        if (conversationKey) {
+          return "conversation::" + conversationKey;
+        }
+        return [
+          agent && agent.sourceProjectRoot,
+          agent && (agent.threadId || agent.sourceAgentId || agent.id),
+          agent && agent.sourceKind
+        ].join("::");
+      }
+
+      function partitionStreetCafeProjects(projects, accountAgents = []) {
+        const sourceEntries = [];
+        const workspaceProjects = [];
+        projects.forEach((snapshot) => {
+          const movedAgents = snapshot.agents.filter((agent) => isStreetCafeAgent(snapshot, agent));
+          const remainingAgents = snapshot.agents.filter((agent) => !isStreetCafeAgent(snapshot, agent));
+          if (movedAgents.length > 0) {
+            sourceEntries.push({ snapshot, agents: movedAgents });
+          }
+          if (remainingAgents.length > 0 || (!isCodexChatProject(snapshot) && !isClaudeCoworkProject(snapshot))) {
+            workspaceProjects.push({ ...snapshot, agents: remainingAgents });
+          }
+        });
+
+        const seenAgents = new Set();
+        const projectStreetAgents = sourceEntries.flatMap(({ snapshot, agents }) => {
+          const movedIds = new Set(agents.map((agent) => agent.id));
+          return agents
+            .map((agent) => cloneAgentForStreetCafe(snapshot, agent, movedIds))
+            .filter((agent) => {
+              const key = streetCafeConversationKey(agent);
+              if (seenAgents.has(key)) {
+                return false;
+              }
+              seenAgents.add(key);
+              return true;
+            });
+        });
+        const accountStreetAgents = (Array.isArray(accountAgents) ? accountAgents : [])
+          .map(cloneAccountAgentForStreetCafe)
+          .filter((agent) => {
+            const key = streetCafeConversationKey(agent);
+            if (seenAgents.has(key)) {
+              return false;
+            }
+            seenAgents.add(key);
+            return true;
+          });
+        const streetAgents = [...projectStreetAgents, ...accountStreetAgents];
+        const contributingRoots = Array.from(new Set(sourceEntries.flatMap(({ snapshot, agents }) => [
+          snapshot.projectRoot,
+          ...(snapshot.mergedProjectRoots || []),
+          ...agents.map((agent) => agent.sourceProjectRoot).filter(Boolean)
+        ])));
+        const cafeSnapshot = {
+          projectRoot: STREET_CAFE_PROJECT_ROOT,
+          projectLabel: "Chat Café",
+          projectIdentity: null,
+          generatedAt: state.fleet && state.fleet.generatedAt ? state.fleet.generatedAt : new Date().toISOString(),
+          sceneKind: "street-cafe",
+          mergedProjectRoots: contributingRoots,
+          rooms: {
+            version: 1,
+            generated: true,
+            filePath: "",
+            rooms: [{
+              id: "street-cafe",
+              name: "Chat Café",
+              path: ".",
+              x: 0,
+              y: 0,
+              width: 24,
+              height: 16,
+              children: []
+            }]
+          },
+          agents: streetAgents,
+          cloudTasks: [],
+          events: sourceEntries.flatMap(({ snapshot }) => Array.isArray(snapshot.events) ? snapshot.events : []),
+          activity: {
+            generatedAt: state.fleet && state.fleet.generatedAt ? state.fleet.generatedAt : new Date().toISOString(),
+            hotChanges: [],
+            hotTools: [],
+            runningCommands: []
+          },
+          notes: streetAgents.length === 0
+            ? ["Claude remote Home work appears here when the desktop cache makes it available. Codex Quick Chat is separate from Codex tasks; choose Add to task to make that conversation visible in the Café."]
+            : []
+        };
+        return { workspaceProjects, cafeSnapshot };
+      }
+
       function isBusyAgent(agent) {
         return agent.isCurrent === true || agent.isOngoing === true || isRuntimeActiveLocalAgent(agent);
       }
@@ -613,12 +753,6 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           "waiting",
           "blocked"
         ].includes(String(state || "").toLowerCase());
-      }
-
-      function isFinishedLeadForRec(agent) {
-        return isRecentLeadCandidate(agent)
-          && !shouldSeatAtWorkstation(agent)
-          && (agent.state === "waiting" || agent.state === "idle" || agent.state === "done");
       }
 
       function isRecentLeadCandidate(agent) {
@@ -820,24 +954,25 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         ].join("::");
       }
 
-      function fleetSemanticToken(fleet) {
-        if (!fleet || !Array.isArray(fleet.projects)) {
-          return "";
-        }
-        return fleet.projects.map(projectSemanticToken).join("||");
+      function accountAgentSemanticToken(agent) {
+        return [
+          sceneAgentToken(agent),
+          agent.conversationKey || "",
+          agent.label || "",
+          agent.detail || "",
+          agent.statusText || "",
+          agent.updatedAt || "",
+          agent.isOngoing ? "1" : "0"
+        ].join(":");
       }
 
-      function isLiveSceneAgent(agent) {
-        if (!agent || agent.source === "cloud" || agent.source === "presence") {
-          return false;
+      function fleetSemanticToken(fleet) {
+        if (!fleet) {
+          return "";
         }
-        if (
-          (agent.source === "hermes" && agent.sourceKind === "hermes:roaming")
-          || (agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming")
-        ) {
-          return false;
-        }
-        return shouldSeatAtWorkstation(agent) || agent.isCurrent === true;
+        const projectTokens = (Array.isArray(fleet.projects) ? fleet.projects : []).map(projectSemanticToken);
+        const accountAgentTokens = (Array.isArray(fleet.accountAgents) ? fleet.accountAgents : []).map(accountAgentSemanticToken);
+        return [...projectTokens, "account-agents", ...accountAgentTokens].join("||");
       }
 
       function viewSnapshot(snapshot, recentLeadLimit = SCENE_RECENT_LEAD_LIMIT, allProjects = null) {
@@ -1444,98 +1579,4 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           .replaceAll('"', "&quot;");
       }
 
-      function relativeLocation(projectRoot, location) {
-        if (!location) return "";
-        if (/^https?:\\/\\//.test(location)) return location;
-        if (location === projectRoot) return ".";
-        if (location.startsWith(projectRoot + "/")) {
-          return location.slice(projectRoot.length + 1);
-        }
-        return location;
-      }
-
-      function wslToWindowsPath(location) {
-        const normalized = String(location || "").trim();
-        if (!normalized.startsWith("/mnt/") || normalized.length < 6) {
-          return normalized;
-        }
-        const drive = normalized[5];
-        const lowerDrive = drive.toLowerCase();
-        if (lowerDrive < "a" || lowerDrive > "z") {
-          return normalized;
-        }
-        const rest = normalized.startsWith("/mnt/" + drive + "/")
-          ? normalized.slice(7)
-          : normalized.length === 6
-            ? ""
-            : null;
-        if (rest === null) {
-          return normalized;
-        }
-        const restWindows = String(rest).replaceAll("/", "\\\\");
-        return restWindows ? drive.toUpperCase() + ":\\\\" + restWindows : drive.toUpperCase() + ":\\\\";
-      }
-
-      function stripDisplayMarkdown(value) {
-        return String(value || "")
-          .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, "$1")
-          .replace(/(^|[\\s(>])(\\*\\*|__)(\\S(?:[\\s\\S]*?\\S)?)\\2(?=[\\s).,!?:;]|$)/g, "$1$3")
-          .replace(/(^|[\\s(>])(\\*|_)(\\S(?:[\\s\\S]*?\\S)?)\\2(?=[\\s).,!?:;]|$)/g, "$1$3")
-          .split(String.fromCharCode(96)).join("")
-          .replace(/^#{1,6}\\s+/gm, "")
-          .replace(/[ \\t]+/g, " ")
-          .trim();
-      }
-
-      function replaceGoalCommandLabel(value) {
-        return String(value || "").replace(/(^|[\\s(\\x5B\\x7B<"'])\\/goal(?=$|[\\s)\\]\\x7D,.!?:;"'>])/g, "$1🎯");
-      }
-
-      function normalizeDisplayText(projectRoot, value) {
-        const normalized = String(value || "").trim();
-        if (!normalized) {
-          return "";
-        }
-        const displayText = replaceGoalCommandLabel(stripDisplayMarkdown(normalized));
-        if (!displayText) {
-          return "";
-        }
-        const isPathBoundary = (character) => {
-          if (!character) {
-            return true;
-          }
-          const code = character.charCodeAt(0);
-          return (
-            code === 32 || code === 9 || code === 10 || code === 13 ||
-            code === 34 || code === 39 || code === 40 || code === 41 ||
-            code === 44 || code === 58 || code === 59 || code === 60 ||
-            code === 62 || code === 63 || code === 91 || code === 92 ||
-            code === 93 || code === 123 || code === 124 || code === 125 ||
-            code === 33
-          );
-        };
-        let output = "";
-        let index = 0;
-        while (index < displayText.length) {
-          const next = displayText.indexOf("/mnt/", index);
-          if (next === -1) {
-            output += displayText.slice(index);
-            break;
-          }
-          const previousChar = next > 0 ? displayText[next - 1] : "";
-          if (!isPathBoundary(previousChar)) {
-            output += displayText.slice(index, next + 5);
-            index = next + 5;
-            continue;
-          }
-          let end = next + 5;
-          while (end < displayText.length && !isPathBoundary(displayText[end])) {
-            end += 1;
-          }
-          const candidate = displayText.slice(next, end);
-          const cleaned = cleanReportedPath(projectRoot, candidate);
-          output += displayText.slice(index, next) + (cleaned || wslToWindowsPath(candidate));
-          index = end;
-        }
-        return output;
-      }`;
+`;

@@ -3,7 +3,10 @@ import type {
   AgentProvenanceSource,
   DashboardAgent,
   DashboardEvent,
+  CommandProgressSummary,
   HotChangeSummary,
+  HotToolSummary,
+  RunningCommandSummary,
   WorkspaceActivitySnapshot
 } from "../types";
 
@@ -16,6 +19,10 @@ const HOT_CHANGE_HEAT_PER_SCORE = 2;
 const HOT_CHANGE_FALLBACK_SCORE = 2.5;
 const HOT_CHANGE_FALLBACK_HEAT = 6;
 const MAX_HOT_CHANGES_PER_TYPE = 3;
+const HOT_TOOL_WINDOW_MS = 20 * 60 * 1000;
+const MAX_HOT_TOOLS = 5;
+const COMMAND_QUIET_AFTER_MS = 15 * 1000;
+const RUNNING_COMMAND_WINDOW_MS = 5 * 60 * 1000;
 
 function parseTimeMs(value: string | null | undefined): number {
   const parsed = Date.parse(value ?? "");
@@ -240,6 +247,191 @@ function buildHotChanges(input: {
   return [...hotChanges, ...fallbackChanges];
 }
 
+function agentLabelForEvent(event: DashboardEvent, agentByThreadId: Map<string, DashboardAgent>): string | null {
+  return event.threadId ? cleanLabel(agentByThreadId.get(event.threadId)?.label) : null;
+}
+
+function buildHotTools(input: {
+  events: DashboardEvent[];
+  agentByThreadId: Map<string, DashboardAgent>;
+  now: number;
+}): HotToolSummary[] {
+  type ToolAccumulator = {
+    label: string;
+    itemType: string | null;
+    uses: Set<string>;
+    lastUsedAtMs: number;
+    agents: Set<string>;
+    provenance: AgentProvenanceSource;
+    confidence: AgentConfidence;
+  };
+
+  const tools = new Map<string, ToolAccumulator>();
+  for (const event of input.events) {
+    if (event.kind !== "tool") {
+      continue;
+    }
+    const createdAtMs = parseTimeMs(event.createdAt);
+    const eventAgeMs = ageMs(createdAtMs, input.now);
+    if (!Number.isFinite(eventAgeMs) || eventAgeMs > HOT_TOOL_WINDOW_MS) {
+      continue;
+    }
+    const label = cleanLabel(event.detail) ?? cleanLabel(event.title);
+    if (!label) {
+      continue;
+    }
+    const key = `${event.itemType ?? "tool"}\u0000${label}`;
+    const accumulator = tools.get(key) ?? {
+      label,
+      itemType: event.itemType ?? null,
+      uses: new Set<string>(),
+      lastUsedAtMs: createdAtMs,
+      agents: new Set<string>(),
+      provenance: event.source,
+      confidence: event.confidence
+    };
+    accumulator.uses.add(event.itemId ?? event.id);
+    accumulator.lastUsedAtMs = Math.max(accumulator.lastUsedAtMs, createdAtMs);
+    accumulator.confidence = combineConfidence(accumulator.confidence, event.confidence);
+    addUnique(accumulator.agents, agentLabelForEvent(event, input.agentByThreadId));
+    tools.set(key, accumulator);
+  }
+
+  return [...tools.values()]
+    .map((entry): HotToolSummary => {
+      const ageMinutes = ageMs(entry.lastUsedAtMs, input.now) / 60_000;
+      const score = entry.uses.size * 4 + Math.max(0, 6 - ageMinutes);
+      return {
+        label: entry.label,
+        heat: Math.min(100, Math.max(1, Math.round(score * 2))),
+        score: Math.round(score * 10) / 10,
+        useCount: entry.uses.size,
+        lastUsedAt: new Date(entry.lastUsedAtMs).toISOString(),
+        itemType: entry.itemType,
+        agents: [...entry.agents].slice(0, 4),
+        provenance: entry.provenance,
+        confidence: entry.confidence
+      };
+    })
+    .sort((left, right) => right.score - left.score || right.lastUsedAt.localeCompare(left.lastUsedAt))
+    .slice(0, MAX_HOT_TOOLS);
+}
+
+function commandProgress(detail: string | null): CommandProgressSummary | null {
+  if (!detail) {
+    return null;
+  }
+  const percentMatch = detail.match(/(?:^|\s)(100|\d{1,2}(?:\.\d+)?)\s*%/);
+  if (percentMatch) {
+    const percent = Math.max(0, Math.min(100, Number(percentMatch[1])));
+    return { percent, label: `${percent}%`, confidence: "high", source: "explicit-percent" };
+  }
+  const countMatch = detail.match(/(?:^|\s)(\d+)\s*\/\s*(\d+)(?:\s|$)/);
+  if (!countMatch) {
+    return null;
+  }
+  const completed = Number(countMatch[1]);
+  const total = Number(countMatch[2]);
+  if (!Number.isFinite(completed) || !Number.isFinite(total) || total <= 0 || completed > total) {
+    return null;
+  }
+  return {
+    percent: Math.round((completed / total) * 100),
+    label: `${completed}/${total}`,
+    confidence: "high",
+    source: "count"
+  };
+}
+
+function buildRunningCommands(input: {
+  events: DashboardEvent[];
+  agentByThreadId: Map<string, DashboardAgent>;
+  now: number;
+}): RunningCommandSummary[] {
+  type CommandAccumulator = {
+    id: string;
+    command: string;
+    cwd: string | null;
+    threadId: string | null;
+    agentLabel: string | null;
+    startedAtMs: number;
+    updatedAtMs: number;
+    completedAtMs: number | null;
+    lastOutput: string | null;
+    progress: CommandProgressSummary | null;
+    provenance: AgentProvenanceSource;
+    confidence: AgentConfidence;
+  };
+
+  const commands = new Map<string, CommandAccumulator>();
+  const orderedEvents = [...input.events].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  for (const event of orderedEvents) {
+    if (event.kind !== "command") {
+      continue;
+    }
+    const eventAtMs = parseTimeMs(event.createdAt);
+    if (!Number.isFinite(eventAtMs)) {
+      continue;
+    }
+    const id = event.itemId ?? event.id;
+    const existing = commands.get(id);
+    if (!existing) {
+      const command = cleanLabel(event.command) ?? cleanLabel(event.detail);
+      if (!command) {
+        continue;
+      }
+      commands.set(id, {
+        id,
+        command,
+        cwd: cleanLabel(event.cwd) ?? cleanLabel(event.path),
+        threadId: event.threadId,
+        agentLabel: agentLabelForEvent(event, input.agentByThreadId),
+        startedAtMs: eventAtMs,
+        updatedAtMs: eventAtMs,
+        completedAtMs: event.phase === "completed" || event.phase === "failed" || event.phase === "interrupted" ? eventAtMs : null,
+        lastOutput: null,
+        progress: commandProgress(event.detail),
+        provenance: event.source,
+        confidence: event.confidence
+      });
+      continue;
+    }
+    existing.updatedAtMs = Math.max(existing.updatedAtMs, eventAtMs);
+    existing.confidence = combineConfidence(existing.confidence, event.confidence);
+    if (event.phase === "completed" || event.phase === "failed" || event.phase === "interrupted") {
+      existing.completedAtMs = eventAtMs;
+    }
+    if (event.method.includes("output") || event.phase === "updated") {
+      existing.lastOutput = cleanLabel(event.detail) ?? existing.lastOutput;
+      existing.progress = commandProgress(event.detail) ?? existing.progress;
+    }
+  }
+
+  return [...commands.values()]
+    .filter((entry) => entry.completedAtMs === null && input.now - entry.updatedAtMs <= RUNNING_COMMAND_WINDOW_MS)
+    .map((entry): RunningCommandSummary => {
+      const quietForMs = Math.max(0, input.now - entry.updatedAtMs);
+      return {
+        id: entry.id,
+        command: entry.command,
+        cwd: entry.cwd,
+        threadId: entry.threadId,
+        agentLabel: entry.agentLabel,
+        status: quietForMs >= COMMAND_QUIET_AFTER_MS ? "quiet" : "running",
+        startedAt: new Date(entry.startedAtMs).toISOString(),
+        updatedAt: new Date(entry.updatedAtMs).toISOString(),
+        completedAt: null,
+        durationMs: Math.max(0, input.now - entry.startedAtMs),
+        quietForMs,
+        lastOutput: entry.lastOutput,
+        progress: entry.progress,
+        provenance: entry.provenance,
+        confidence: entry.confidence
+      };
+    })
+    .sort((left, right) => right.durationMs - left.durationMs);
+}
+
 export function buildWorkspaceActivitySnapshot(input: {
   events: DashboardEvent[];
   agents: DashboardAgent[];
@@ -265,8 +457,8 @@ export function buildWorkspaceActivitySnapshot(input: {
       changedPaths: input.changedPaths,
       projectBranch: input.projectBranch
     }),
-    hotTools: [],
-    runningCommands: []
+    hotTools: buildHotTools({ events: input.events, agentByThreadId, now }),
+    runningCommands: buildRunningCommands({ events: input.events, agentByThreadId, now })
   };
 }
 

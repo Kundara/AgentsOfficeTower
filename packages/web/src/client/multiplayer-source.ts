@@ -450,7 +450,10 @@ export const MULTIPLAYER_SCRIPT = `
         }
         const hasSharedData = fleetHasSharedData(fleet);
         const payloadFleet = hasSharedData
-          ? fleet
+          ? {
+            generatedAt: fleet.generatedAt || new Date().toISOString(),
+            projects: Array.isArray(fleet.projects) ? fleet.projects : []
+          }
           : { generatedAt: fleet.generatedAt || new Date().toISOString(), projects: [] };
         try {
           await fetch("/api/web-cli/team-fleet", {
@@ -730,7 +733,8 @@ export const MULTIPLAYER_SCRIPT = `
 
         return {
           generatedAt: localFleet.generatedAt,
-          projects: mergedFleet.projects
+          projects: mergedFleet.projects,
+          accountAgents: Array.isArray(mergedFleet.accountAgents) ? mergedFleet.accountAgents : []
         };
       }
 

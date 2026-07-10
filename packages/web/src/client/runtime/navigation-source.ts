@@ -1,1506 +1,5 @@
-export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservations = new Map();
-      const hermesFloatingNodes = new Map();
-      const pendingHermesAssignedTransfers = new Set();
-      let lastHermesAssignedScreenRects = new Map();
-      const HERMES_FLOATING_AGENT_LIMIT = 12;
-      const HERMES_FLOATING_TRANSITION_MS = 760;
-      const HERMES_FLOATING_TILT_SETTLE_MS = 520;
-      const HERMES_FLOATING_FINISHED_COOLDOWN_MS = 3000;
-      const HERMES_ASSIGNED_TRANSFER_SETTLE_MS = 90;
-      const HERMES_ASSIGNED_TRANSFER_MS = 1080;
+export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
       const WORKSTATION_REVEAL_BLINK_DURATION_MS = 280;
-      const OFFICE_MAP_HOVER_MARGIN_PX = 12;
-      let officeMapHoverLayer = null;
-      let officeMapHoverTarget = null;
-      let officeMapHoverKind = "";
-      let officeMapHoverPositionFrame = 0;
-      let officeMapHoverViewportListenersBound = false;
-
-      function reserveAgentTiles(model, roomById) {
-        const reservations = new Map();
-        const collect = (agent) => {
-          if (!agent || !(agent.key || agent.id)) {
-            return;
-          }
-          const room = roomById.get(agent.roomId);
-          const tilePoint = officeAvatarFootTile(room, model.tile, agent.x, agent.y, agent.width, agent.height);
-          if (!tilePoint) {
-            return;
-          }
-          const reservationKey = agent.key || agent.id;
-          const previousReservation = stableAgentTileReservations.get(reservationKey);
-          const reservation = previousReservation
-            && previousReservation.roomId === agent.roomId
-            && Math.abs(previousReservation.column - tilePoint.column) <= 1
-            && Math.abs(previousReservation.row - tilePoint.row) <= 1
-            ? previousReservation
-            : {
-              roomId: agent.roomId,
-              column: tilePoint.column,
-              row: tilePoint.row
-            };
-          reservations.set(reservationKey, reservation);
-          stableAgentTileReservations.set(reservationKey, reservation);
-        };
-        return reservations;
-      }
-
-      function officeAvatarPositionForTile(room, tileSize, tilePoint, width, height) {
-        return {
-          x: room.x + tilePoint.column * tileSize + Math.round((tileSize - width) / 2),
-          y: room.floorTop + (tilePoint.row + 1) * tileSize - height
-        };
-      }
-
-      function officeAvatarPositionForFacility(room, tileSize, serviceTile, width, height) {
-        const position = officeAvatarPositionForTile(room, tileSize, serviceTile, width, height);
-        const approachOffset = serviceTile && serviceTile.approachOffsetPx ? serviceTile.approachOffsetPx : null;
-        if (!approachOffset) {
-          return position;
-        }
-        return {
-          x: position.x + (Number.isFinite(approachOffset.x) ? Number(approachOffset.x) : 0),
-          y: position.y + (Number.isFinite(approachOffset.y) ? Number(approachOffset.y) : 0)
-        };
-      }
-
-      function roomDoorTile(room, tileSize) {
-        return {
-          column: Math.max(0, Math.min(Math.floor(room.width / tileSize) - 1, Math.floor(room.width / tileSize / 2))),
-          row: 0
-        };
-      }
-
-      function markNavigationRect(grid, startColumn, startRow, widthTiles, heightTiles) {
-        for (let row = startRow; row < startRow + heightTiles; row += 1) {
-          if (!grid[row]) {
-            continue;
-          }
-          for (let column = startColumn; column < startColumn + widthTiles; column += 1) {
-            if (grid[row][column] === undefined) {
-              continue;
-            }
-            grid[row][column] = 1;
-          }
-        }
-      }
-
-      function buildOfficeNavigation(model) {
-        const roomById = new Map(model.rooms.map((room) => [room.id, room]));
-        const navigation = new Map();
-        model.rooms.forEach((room) => {
-          const columns = Math.max(1, Math.round(room.width / model.tile));
-          const rows = Math.max(1, Math.round((room.height - room.wallHeight) / model.tile));
-          navigation.set(room.id, {
-            room,
-            columns,
-            rows,
-            grid: Array.from({ length: rows }, () => Array.from({ length: columns }, () => 0))
-          });
-        });
-
-        model.tileObjects.forEach((object) => {
-          if (!object || object.anchor === "wall") {
-            return;
-          }
-          const nav = navigation.get(object.roomId);
-          if (!nav) {
-            return;
-          }
-          markNavigationRect(nav.grid, object.column, Math.max(0, object.baseRow), Math.max(1, object.widthTiles), Math.max(1, object.heightTiles));
-        });
-
-        model.workstations.forEach((workstation) => {
-          const nav = navigation.get(workstation.roomId);
-          const room = roomById.get(workstation.roomId);
-          if (!nav || !room) {
-            return;
-          }
-          const column = Math.max(0, Math.floor((workstation.x - room.x) / model.tile));
-          const row = Math.max(0, Math.floor((workstation.y - room.floorTop) / model.tile));
-          markNavigationRect(nav.grid, column, row, Math.max(1, workstation.tileWidth || 1), Math.max(1, workstation.tileHeight || 1));
-        });
-
-        return navigation;
-      }
-
-      function cloneNavigation(nav) {
-        if (!nav) {
-          return null;
-        }
-        return {
-          ...nav,
-          grid: nav.grid.map((row) => row.slice())
-        };
-      }
-
-      function reserveAgentTiles(model, roomById) {
-        const reservations = new Map();
-        const collect = (agent) => {
-          if (!agent || !(agent.key || agent.id)) {
-            return;
-          }
-          const room = roomById.get(agent.roomId);
-          const tilePoint = officeAvatarFootTile(room, model.tile, agent.x, agent.y, agent.width, agent.height);
-          if (!tilePoint) {
-            return;
-          }
-          reservations.set(agent.key || agent.id, {
-            roomId: agent.roomId,
-            column: tilePoint.column,
-            row: tilePoint.row
-          });
-        };
-        model.desks.forEach((desk) => desk.agents.forEach(collect));
-        model.offices.forEach((office) => {
-          if (office.agent) {
-            collect(office.agent);
-          }
-        });
-        model.recAgents.forEach(collect);
-        return reservations;
-      }
-
-      function navigationForAgent(roomNavigation, reservations, roomId, agentKey) {
-        const baseNav = roomNavigation.get(roomId);
-        const nav = cloneNavigation(baseNav);
-        if (!nav) {
-          return null;
-        }
-        reservations.forEach((entry, key) => {
-          if (!entry || key === agentKey || entry.roomId !== roomId) {
-            return;
-          }
-          if (nav.grid[entry.row]?.[entry.column] !== undefined) {
-            nav.grid[entry.row][entry.column] = 1;
-          }
-        });
-        return nav;
-      }
-
-      function nearestWalkableTile(nav, desiredTile) {
-        if (!nav || !desiredTile) {
-          return null;
-        }
-        const inBounds = (column, row) => row >= 0 && row < nav.rows && column >= 0 && column < nav.columns;
-        const walkable = (column, row) => inBounds(column, row) && nav.grid[row][column] === 0;
-        if (walkable(desiredTile.column, desiredTile.row)) {
-          return desiredTile;
-        }
-        for (let radius = 1; radius <= Math.max(nav.columns, nav.rows); radius += 1) {
-          for (let row = desiredTile.row - radius; row <= desiredTile.row + radius; row += 1) {
-            for (let column = desiredTile.column - radius; column <= desiredTile.column + radius; column += 1) {
-              if (Math.abs(column - desiredTile.column) + Math.abs(row - desiredTile.row) > radius) {
-                continue;
-              }
-              if (walkable(column, row)) {
-                return { column, row };
-              }
-            }
-          }
-        }
-        return null;
-      }
-
-      function solveEasyStarPath(nav, startTile, endTile) {
-        const EasyStarConstructor = window.EasyStar && typeof window.EasyStar.js === "function"
-          ? window.EasyStar.js
-          : null;
-        if (!EasyStarConstructor || !nav || !startTile || !endTile) {
-          return null;
-        }
-        const pathfinder = new EasyStarConstructor();
-        const grid = nav.grid.map((row) => row.slice());
-        grid[startTile.row][startTile.column] = 0;
-        grid[endTile.row][endTile.column] = 0;
-        pathfinder.setGrid(grid);
-        pathfinder.setAcceptableTiles([0]);
-        pathfinder.setIterationsPerCalculation(Math.max(1000, nav.columns * nav.rows * 4));
-        let resolved = false;
-        let result = null;
-        pathfinder.findPath(startTile.column, startTile.row, endTile.column, endTile.row, (path) => {
-          result = Array.isArray(path) ? path : null;
-          resolved = true;
-        });
-        let guard = 0;
-        while (!resolved && guard < 128) {
-          pathfinder.calculate();
-          guard += 1;
-        }
-        return result;
-      }
-
-      function buildAgentPixelRoute(nav, startTile, endTile, room, tileSize, width, height, exactTarget) {
-        if (!nav || !startTile || !endTile || !room) {
-          return exactTarget ? [exactTarget] : [];
-        }
-        const tilePath = solveEasyStarPath(nav, startTile, endTile) || [startTile, endTile];
-        const route = tilePath.map((step) =>
-          officeAvatarPositionForTile(room, tileSize, { column: step.x ?? step.column, row: step.y ?? step.row }, width, height)
-        );
-        if (exactTarget) {
-          const last = route[route.length - 1];
-          if (!last || last.x !== exactTarget.x || last.y !== exactTarget.y) {
-            route.push({ x: exactTarget.x, y: exactTarget.y });
-          }
-        }
-        return route;
-      }
-
-      function syncAgentHitNodePosition(renderer, motionState) {
-        if (!renderer || !motionState || !motionState.anchorNode) {
-          return;
-        }
-        motionState.anchorNode.style.left = Math.round(motionState.currentX * renderer.scale) + "px";
-        motionState.anchorNode.style.top = Math.round(motionState.currentY * renderer.scale) + "px";
-        motionState.anchorNode.style.width = Math.max(8, Math.round(motionState.width * renderer.scale)) + "px";
-        motionState.anchorNode.style.height = Math.max(8, Math.round(motionState.height * renderer.scale)) + "px";
-        if (officeMapHoverTarget === motionState.anchorNode) {
-          scheduleOfficeMapHoverPosition();
-        }
-      }
-
-      function bindOfficeMapHoverViewportListeners() {
-        if (officeMapHoverViewportListenersBound) {
-          return;
-        }
-        officeMapHoverViewportListenersBound = true;
-        document.addEventListener("scroll", scheduleOfficeMapHoverPosition, {
-          capture: true,
-          passive: true
-        });
-        window.addEventListener("resize", scheduleOfficeMapHoverPosition, { passive: true });
-      }
-
-      function ensureOfficeMapHoverLayer() {
-        if (officeMapHoverLayer instanceof HTMLElement && officeMapHoverLayer.isConnected) {
-          return officeMapHoverLayer;
-        }
-        const existing = document.querySelector("[data-office-map-hover-layer]");
-        if (existing instanceof HTMLElement) {
-          officeMapHoverLayer = existing;
-        } else {
-          officeMapHoverLayer = document.createElement("div");
-          officeMapHoverLayer.className = "office-map-hover-layer";
-          officeMapHoverLayer.dataset.officeMapHoverLayer = "true";
-          document.body.appendChild(officeMapHoverLayer);
-        }
-        bindOfficeMapHoverViewportListeners();
-        return officeMapHoverLayer;
-      }
-
-      function officeMapHoverHtmlForTarget(target) {
-        return typeof target.__officeMapHoverHtml === "string" ? target.__officeMapHoverHtml : "";
-      }
-
-      function officeMapHoverKindForTarget(target) {
-        return typeof target.__officeMapHoverKind === "string" && target.__officeMapHoverKind
-          ? target.__officeMapHoverKind
-          : target.dataset.officeMapHoverKind || "";
-      }
-
-      function clampOfficeMapHoverPosition(value, min, max) {
-        const upper = Math.max(min, max);
-        return Math.max(min, Math.min(upper, value));
-      }
-
-      function positionOfficeMapHover() {
-        if (!(officeMapHoverLayer instanceof HTMLElement)) {
-          return;
-        }
-        const target = officeMapHoverTarget;
-        if (!(target instanceof HTMLElement) || !target.isConnected) {
-          hideOfficeMapHover();
-          return;
-        }
-        const card = officeMapHoverLayer.firstElementChild;
-        if (!(card instanceof HTMLElement)) {
-          hideOfficeMapHover();
-          return;
-        }
-        const targetRect = target.getBoundingClientRect();
-        if (targetRect.width <= 0 || targetRect.height <= 0) {
-          hideOfficeMapHover();
-          return;
-        }
-        const viewportWidth = Math.max(320, Math.round(window.innerWidth || document.documentElement.clientWidth || 0));
-        const viewportHeight = Math.max(240, Math.round(window.innerHeight || document.documentElement.clientHeight || 0));
-        const cardRect = card.getBoundingClientRect();
-        const cardWidth = Math.min(Math.max(1, cardRect.width), Math.max(1, viewportWidth - OFFICE_MAP_HOVER_MARGIN_PX * 2));
-        const cardHeight = Math.min(Math.max(1, cardRect.height), Math.max(1, viewportHeight - OFFICE_MAP_HOVER_MARGIN_PX * 2));
-        const kind = officeMapHoverKind || officeMapHoverKindForTarget(target);
-        const gap = kind === "hot" ? 26 : 8;
-        const preferredLeft = kind === "hot"
-          ? targetRect.left
-          : targetRect.left + targetRect.width / 2 - cardWidth / 2;
-        const left = clampOfficeMapHoverPosition(
-          Math.round(preferredLeft),
-          OFFICE_MAP_HOVER_MARGIN_PX,
-          viewportWidth - cardWidth - OFFICE_MAP_HOVER_MARGIN_PX
-        );
-        let top = Math.round(targetRect.top - cardHeight - gap);
-        let placement = "top";
-        if (top < OFFICE_MAP_HOVER_MARGIN_PX && targetRect.bottom + gap + cardHeight <= viewportHeight - OFFICE_MAP_HOVER_MARGIN_PX) {
-          top = Math.round(targetRect.bottom + gap);
-          placement = "bottom";
-        }
-        top = clampOfficeMapHoverPosition(
-          top,
-          OFFICE_MAP_HOVER_MARGIN_PX,
-          viewportHeight - cardHeight - OFFICE_MAP_HOVER_MARGIN_PX
-        );
-        setPixelStyleIfChanged(card, "left", left + "px");
-        setPixelStyleIfChanged(card, "top", top + "px");
-        card.dataset.hoverPlacement = placement;
-      }
-
-      function scheduleOfficeMapHoverPosition() {
-        if (!(officeMapHoverTarget instanceof HTMLElement)) {
-          return;
-        }
-        if (officeMapHoverPositionFrame) {
-          return;
-        }
-        officeMapHoverPositionFrame = window.requestAnimationFrame(() => {
-          officeMapHoverPositionFrame = 0;
-          positionOfficeMapHover();
-        });
-      }
-
-      function hideOfficeMapHover(target = null) {
-        if (target instanceof HTMLElement && officeMapHoverTarget !== target) {
-          return;
-        }
-        officeMapHoverTarget = null;
-        officeMapHoverKind = "";
-        if (officeMapHoverPositionFrame) {
-          window.cancelAnimationFrame(officeMapHoverPositionFrame);
-          officeMapHoverPositionFrame = 0;
-        }
-        if (officeMapHoverLayer instanceof HTMLElement) {
-          officeMapHoverLayer.classList.remove("is-visible");
-          officeMapHoverLayer.innerHTML = "";
-          delete officeMapHoverLayer.dataset.hoverKind;
-          delete officeMapHoverLayer.dataset.renderHtml;
-        }
-      }
-
-      function showOfficeMapHover(target, kind = "") {
-        if (!(target instanceof HTMLElement)) {
-          return;
-        }
-        const resolvedKind = kind || officeMapHoverKindForTarget(target);
-        if (resolvedKind === "hot") {
-          syncOfficeWallDashboardHeatNode(target);
-        }
-        const html = officeMapHoverHtmlForTarget(target);
-        if (!html) {
-          hideOfficeMapHover(target);
-          return;
-        }
-        const layer = ensureOfficeMapHoverLayer();
-        officeMapHoverTarget = target;
-        officeMapHoverKind = resolvedKind;
-        layer.dataset.hoverKind = resolvedKind;
-        if (layer.dataset.renderHtml !== html) {
-          layer.innerHTML = html;
-          layer.dataset.renderHtml = html;
-        }
-        layer.classList.add("is-visible");
-        positionOfficeMapHover();
-      }
-
-      function bindOfficeMapHoverNode(node) {
-        if (!(node instanceof HTMLElement) || node.dataset.officeMapHoverBound === "1") {
-          return;
-        }
-        node.dataset.officeMapHoverBound = "1";
-        node.addEventListener("mouseenter", () => showOfficeMapHover(node));
-        node.addEventListener("mousemove", scheduleOfficeMapHoverPosition);
-        node.addEventListener("mouseleave", () => hideOfficeMapHover(node));
-        node.addEventListener("focusin", () => showOfficeMapHover(node));
-        node.addEventListener("focusout", (event) => {
-          const relatedTarget = event.relatedTarget;
-          if (relatedTarget instanceof Node && node.contains(relatedTarget)) {
-            return;
-          }
-          hideOfficeMapHover(node);
-        });
-      }
-
-      function setOfficeMapHoverHtml(node, html, kind) {
-        if (!(node instanceof HTMLElement)) {
-          return;
-        }
-        const nextHtml = html || "";
-        node.__officeMapHoverHtml = nextHtml;
-        node.__officeMapHoverKind = nextHtml ? kind || "" : "";
-        setOfficeOverlayDataset(node, "officeMapHoverKind", node.__officeMapHoverKind);
-        bindOfficeMapHoverNode(node);
-        if (officeMapHoverTarget === node) {
-          if (nextHtml) {
-            showOfficeMapHover(node, node.__officeMapHoverKind);
-          } else {
-            hideOfficeMapHover(node);
-          }
-        }
-      }
-
-      function threadHistoryAtBottom(history) {
-        if (!(history instanceof HTMLElement)) {
-          return true;
-        }
-        return history.scrollHeight - history.scrollTop - history.clientHeight <= 12;
-      }
-
-      function scrollThreadHistoryToBottom(history) {
-        if (!(history instanceof HTMLElement)) {
-          return;
-        }
-        history.scrollTop = history.scrollHeight;
-        window.requestAnimationFrame(() => {
-          history.scrollTop = history.scrollHeight;
-        });
-      }
-
-      function renderWallDashboardHotHover(row) {
-        const label = String(row && row.label || "Hot file");
-        const path = String(row && (row.displayPath || row.path) || label);
-        const type = String(row && (row.column || row.kind) || "file");
-        const branches = Array.isArray(row && row.branches)
-          ? row.branches.filter((value) => typeof value === "string" && value.trim().length > 0)
-          : (row && row.branch ? [String(row.branch)] : []);
-        const users = Array.isArray(row && row.users)
-          ? row.users.filter((value) => typeof value === "string" && value.trim().length > 0)
-          : [];
-        const branchLabel = branches.length > 1 ? branches[0] + " +" + (branches.length - 1) : branches[0] || "";
-        const heat = wallDashboardHotHeat(row);
-        const heatWidth = Math.max(1, Math.min(100, heat));
-        const time = row && row.updatedAt ? formatUpdatedAt(row.updatedAt) : "recent";
-        const userText = users.length > 0 ? " · by " + users.join(", ") : "";
-        const branchHtml = branchLabel
-          ? '<span class="office-wall-hot-branch"><img class="worktree-inline-icon" src="' + escapeHtml(worktreeIconUrl()) + '" alt="" aria-hidden="true" /><span>' + escapeHtml(branchLabel) + '</span></span>'
-          : "";
-        const footerHtml = (path && path !== label) || branchHtml
-          ? '<div class="agent-hover-meta office-wall-hot-footer"><span class="office-wall-hot-path-text">' + escapeHtml(path && path !== label ? path : "") + '</span>' + branchHtml + '</div>'
-          : "";
-        return '<div class="agent-hover office-wall-hot-hover">'
-          + '<div class="agent-hover-title"><strong>' + escapeHtml(label) + '</strong></div>'
-          + '<div class="agent-hover-meta" data-wall-hot-meta>' + escapeHtml(type + " · heat " + heat + "% · " + time + userText) + '</div>'
-          + '<div class="office-wall-hot-heat-track"><span data-wall-hot-heat-fill style="width: ' + heatWidth + '%"></span></div>'
-          + footerHtml
-          + '</div>';
-      }
-
-      function wallDashboardHotHeatFromValues(score, generatedAtMs, fallbackHeat) {
-        const numericScore = Number(score);
-        const numericGeneratedAt = Number(generatedAtMs);
-        if (Number.isFinite(numericScore) && numericScore > 0 && Number.isFinite(numericGeneratedAt) && numericGeneratedAt > 0) {
-          const halfLifeMs = typeof OFFICE_WALL_HEAT_HALF_LIFE_MS === "number" ? OFFICE_WALL_HEAT_HALF_LIFE_MS : 3 * 60 * 1000;
-          const ageMs = Math.max(0, Date.now() - numericGeneratedAt);
-          const decay = Math.pow(0.5, ageMs / halfLifeMs);
-          return Math.round(Math.max(1, Math.min(100, numericScore * decay * 4)));
-        }
-        return Math.round(Math.max(1, Math.min(100, Number(fallbackHeat) || 0)));
-      }
-
-      function wallDashboardHotHeat(row) {
-        if (!row) {
-          return 0;
-        }
-        return wallDashboardHotHeatFromValues(row.score, row.generatedAtMs, row.heat);
-      }
-
-      function syncOfficeWallDashboardHeatNode(node) {
-        if (!(node instanceof HTMLElement)) {
-          return;
-        }
-        const heat = wallDashboardHotHeatFromValues(
-          node.dataset.wallHotScore,
-          node.dataset.wallHotGeneratedAt,
-          node.dataset.wallHotHeat
-        );
-        node.dataset.wallHotHeat = String(heat);
-        const updateHoverContent = (root) => {
-          if (!root || typeof root.querySelector !== "function") {
-            return;
-          }
-          const meta = root.querySelector("[data-wall-hot-meta]");
-          if (meta) {
-            const type = node.dataset.wallHotType || "file";
-            const updatedAt = node.dataset.wallHotUpdatedAt || "";
-            const time = updatedAt ? formatUpdatedAt(updatedAt) : "recent";
-            const users = node.dataset.wallHotUsers ? node.dataset.wallHotUsers.split(",").filter(Boolean) : [];
-            const userText = users.length > 0 ? " · by " + users.join(", ") : "";
-            meta.textContent = type + " · heat " + heat + "% · " + time + userText;
-          }
-          const fill = root.querySelector("[data-wall-hot-heat-fill]");
-          if (fill instanceof HTMLElement) {
-            fill.style.width = Math.max(1, Math.min(100, heat)) + "%";
-          }
-        };
-        if (node.__officeMapHoverHtml) {
-          const template = document.createElement("template");
-          template.innerHTML = node.__officeMapHoverHtml;
-          updateHoverContent(template.content);
-          node.__officeMapHoverHtml = template.innerHTML;
-        }
-        updateHoverContent(node);
-        if (officeMapHoverTarget === node && officeMapHoverLayer instanceof HTMLElement) {
-          updateHoverContent(officeMapHoverLayer);
-          officeMapHoverLayer.dataset.renderHtml = node.__officeMapHoverHtml || officeMapHoverLayer.innerHTML;
-          scheduleOfficeMapHoverPosition();
-        }
-      }
-
-      function syncOfficeWallDashboardHeat() {
-        document.querySelectorAll(".office-map-wall-hot-hit").forEach((node) => {
-          syncOfficeWallDashboardHeatNode(node);
-        });
-      }
-
-      function wallDashboardHotNodeKey(dashboard, row, itemIndex) {
-        const boardKey = String(dashboard && (dashboard.id || dashboard.roomId) || "wall-dashboard");
-        const rowKey = String((row && (row.path || row.label)) || itemIndex || "");
-        const columnKey = String(row && (row.column || row.kind) || "");
-        return boardKey + "::" + rowKey + "::" + columnKey;
-      }
-
-      function wallDashboardHotNodeRenderKey(row) {
-        return JSON.stringify([
-          String(row && row.label || "Hot file"),
-          String(row && (row.displayPath || row.path) || ""),
-          String(row && (row.column || row.kind) || "file"),
-          Array.isArray(row && row.branches) ? row.branches.join(",") : String(row && row.branch || ""),
-          Array.isArray(row && row.users) ? row.users.join(",") : ""
-        ]);
-      }
-
-      function syncWallDashboardHotNode(node, dashboard, row, itemIndex, scale, layout) {
-        const cellX = layout.gridX + layout.column * (layout.columnWidth + layout.columnGap);
-        const rowY = 5 + layout.index * layout.rowStep;
-        node.className = "office-map-wall-hot-hit";
-        node.dataset.wallHotKey = wallDashboardHotNodeKey(dashboard, row, itemIndex);
-        node.dataset.wallHotType = String(row.column || row.kind || "file");
-        node.dataset.wallHotScore = String(Number(row.score) || 0);
-        node.dataset.wallHotGeneratedAt = String(Number(row.generatedAtMs || dashboard.generatedAtMs) || 0);
-        node.dataset.wallHotHeat = String(wallDashboardHotHeat(row));
-        node.dataset.wallHotUpdatedAt = String(row.updatedAt || "");
-        node.dataset.wallHotUsers = Array.isArray(row.users) ? row.users.join(",") : "";
-        node.style.left = Math.round((dashboard.x + cellX) * scale) + "px";
-        node.style.top = Math.round((dashboard.y + rowY) * scale) + "px";
-        node.style.width = Math.max(12, Math.round(layout.columnWidth * scale)) + "px";
-        node.style.height = Math.max(8, Math.round(layout.cellHeight * scale)) + "px";
-        const renderKey = wallDashboardHotNodeRenderKey(row);
-        setOfficeMapHoverHtml(node, renderWallDashboardHotHover(row), "hot");
-        if (node.dataset.wallHotRenderKey !== renderKey) {
-          node.innerHTML = "";
-          node.dataset.renderHtml = "";
-          node.dataset.wallHotRenderKey = renderKey;
-        }
-        syncOfficeWallDashboardHeatNode(node);
-      }
-
-      function collectReusableOfficeOverlayNodes(layer, selector, datasetKey) {
-        const nodes = new Map();
-        Array.from(layer.querySelectorAll(selector)).forEach((node) => {
-          if (node instanceof HTMLElement && node.dataset[datasetKey]) {
-            nodes.set(node.dataset[datasetKey], node);
-          }
-        });
-        return nodes;
-      }
-
-      function officeOverlayNodeIsActive(node) {
-        return node instanceof HTMLElement && (node.matches(":hover") || node.matches(":focus-within"));
-      }
-
-      function flushPendingOfficeOverlayHtml(node) {
-        if (!(node instanceof HTMLElement) || officeOverlayNodeIsActive(node)) {
-          return;
-        }
-        const pendingHtml = node.dataset.pendingRenderHtml;
-        if (typeof pendingHtml !== "string") {
-          return;
-        }
-        node.innerHTML = pendingHtml;
-        node.dataset.renderHtml = pendingHtml;
-        delete node.dataset.pendingRenderHtml;
-        delete node.dataset.pendingRenderListener;
-      }
-
-      function setOfficeOverlayHtml(node, html) {
-        if (!(node instanceof HTMLElement)) {
-          return;
-        }
-        const nextHtml = String(html || "");
-        if (node.dataset.renderHtml === nextHtml) {
-          delete node.dataset.pendingRenderHtml;
-          return;
-        }
-        if (officeOverlayNodeIsActive(node)) {
-          node.dataset.pendingRenderHtml = nextHtml;
-          if (node.dataset.pendingRenderListener !== "1") {
-            node.dataset.pendingRenderListener = "1";
-            const flush = () => {
-              window.requestAnimationFrame(() => flushPendingOfficeOverlayHtml(node));
-            };
-            node.addEventListener("mouseleave", flush, { once: true });
-            node.addEventListener("focusout", flush, { once: true });
-          }
-          return;
-        }
-        node.innerHTML = nextHtml;
-        node.dataset.renderHtml = nextHtml;
-        delete node.dataset.pendingRenderHtml;
-        delete node.dataset.pendingRenderListener;
-      }
-
-      function setOfficeOverlayDataset(node, key, value) {
-        if (!(node instanceof HTMLElement)) {
-          return;
-        }
-        if (value === null || value === undefined || value === "") {
-          delete node.dataset[key];
-          return;
-        }
-        node.dataset[key] = String(value);
-      }
-
-      function syncAgentOverlayNode(node, anchor, scale) {
-        const classNames = ["office-map-agent-hit"];
-        if (anchor.threadOpen) {
-          classNames.push("is-thread-open");
-        }
-        node.className = classNames.join(" ");
-        node.dataset.agentKey = anchor.key;
-        node.dataset.focusAgent = "true";
-        setOfficeOverlayDataset(node, "threadId", anchor.threadId || "");
-        setOfficeOverlayDataset(node, "focusKey", anchor.focusKey || "");
-        setOfficeOverlayDataset(node, "focusKeys", Array.isArray(anchor.focusKeys) ? JSON.stringify(anchor.focusKeys) : "");
-        node.style.left = Math.round((anchor.left ?? anchor.x) * scale) + "px";
-        node.style.top = Math.round((anchor.top ?? anchor.y) * scale) + "px";
-        node.style.width = Math.max(8, Math.round((anchor.width ?? 0) * scale)) + "px";
-        node.style.height = Math.max(8, Math.round((anchor.height ?? 0) * scale)) + "px";
-        const triggerHtml = anchor.replyProjectRoot && anchor.threadId
-          ? '<button type="button" class="office-map-agent-trigger" data-action="open-agent-thread" data-project-root="' + escapeHtml(anchor.replyProjectRoot) + '" data-thread-id="' + escapeHtml(anchor.threadId) + '" aria-label="Open ' + escapeHtml(anchor.key) + ' chat"></button>'
-          : "";
-        setOfficeOverlayHtml(node, triggerHtml);
-        setOfficeMapHoverHtml(node, anchor.hoverHtml || "", "agent");
-        if (officeMapHoverTarget === node) {
-          scheduleOfficeMapHoverPosition();
-        }
-      }
-
-      function syncWorkstationOverlayNode(node, anchor, scale) {
-        node.className = "office-map-anchor";
-        node.dataset.workstationKey = anchor.key;
-        node.style.left = Math.round(anchor.x * scale) + "px";
-        node.style.top = Math.round(anchor.y * scale) + "px";
-        node.style.width = "";
-        node.style.height = "";
-      }
-
-      function syncFurnitureOverlayNode(node, item, model, scale) {
-        const room = model.rooms.find((entry) => entry.id === item.roomId);
-        node.className = "office-map-furniture-hit";
-        node.dataset.furnitureId = item.id;
-        node.dataset.roomId = item.roomId;
-        node.style.left = Math.round(item.column * model.tile * scale) + "px";
-        node.style.top = Math.round((room ? room.floorTop : 0) * scale) + "px";
-        node.style.width = Math.round(item.widthTiles * model.tile * scale) + "px";
-        node.style.height = Math.round(model.tile * scale) + "px";
-      }
-
-      function replacePanelSectionIfChanged(card, nextCard, selector) {
-        const current = card.querySelector(selector);
-        const next = nextCard.querySelector(selector);
-        if (!(current instanceof HTMLElement) || !(next instanceof HTMLElement)) {
-          return;
-        }
-        const nextHtml = next.innerHTML;
-        if (current.dataset.renderHtml !== nextHtml) {
-          current.innerHTML = nextHtml;
-          current.dataset.renderHtml = nextHtml;
-        }
-      }
-
-      function syncThreadHistory(history, nextHistory) {
-        if (!(history instanceof HTMLElement) || !(nextHistory instanceof HTMLElement)) {
-          return;
-        }
-        const wasAtBottom = threadHistoryAtBottom(history);
-        const nextNodes = Array.from(nextHistory.children).filter((node) => node instanceof HTMLElement);
-        const currentByKey = new Map(
-          Array.from(history.children)
-            .filter((node) => node instanceof HTMLElement)
-            .map((node) => [node.dataset.threadEntryKey || node.dataset.threadEmpty || node.outerHTML, node])
-        );
-        const nextKeys = new Set();
-        nextNodes.forEach((nextNode) => {
-          const key = nextNode.dataset.threadEntryKey || nextNode.dataset.threadEmpty || nextNode.outerHTML;
-          nextKeys.add(key);
-          const existing = currentByKey.get(key);
-          if (existing instanceof HTMLElement) {
-            const nextHtml = nextNode.innerHTML;
-            if (existing.dataset.renderHtml !== nextHtml) {
-              existing.className = nextNode.className;
-              existing.innerHTML = nextHtml;
-              existing.dataset.renderHtml = nextHtml;
-            } else if (existing.className !== nextNode.className) {
-              existing.className = nextNode.className;
-            }
-            history.appendChild(existing);
-            return;
-          }
-          const fresh = nextNode.cloneNode(true);
-          if (fresh instanceof HTMLElement) {
-            fresh.dataset.renderHtml = fresh.innerHTML;
-            if (fresh.dataset.threadEntryKey) {
-              fresh.classList.add("is-new");
-              fresh.addEventListener("animationend", () => fresh.classList.remove("is-new"), { once: true });
-            }
-            history.appendChild(fresh);
-          }
-        });
-        Array.from(history.children).forEach((node) => {
-          if (!(node instanceof HTMLElement)) {
-            return;
-          }
-          const key = node.dataset.threadEntryKey || node.dataset.threadEmpty || node.outerHTML;
-          if (!nextKeys.has(key)) {
-            node.remove();
-          }
-        });
-        if (wasAtBottom) {
-          scrollThreadHistoryToBottom(history);
-        }
-      }
-
-      function syncThreadPanel(renderer, model) {
-        if (!renderer.threadLayer) {
-          renderer.host.classList.toggle("has-thread-panel", Boolean(model.threadPanel));
-          return;
-        }
-        renderer.threadLayer.classList.toggle("has-thread-panel", Boolean(model.threadPanel));
-        renderer.host.classList.toggle("has-thread-panel", Boolean(model.threadPanel));
-        if (!model.threadPanel || !model.threadPanel.html) {
-          renderer.threadLayer.innerHTML = "";
-          return;
-        }
-        let slot = renderer.threadLayer.querySelector("[data-thread-panel-slot]");
-        const panelKey = model.threadPanel.key || "";
-        const panelState = model.threadPanel.state || "open";
-        if (!(slot instanceof HTMLElement) || slot.dataset.threadPanelKey !== panelKey) {
-          if (!(slot instanceof HTMLElement)) {
-            slot = document.createElement("div");
-            renderer.threadLayer.appendChild(slot);
-          }
-          slot.className = "office-map-thread-panel-slot";
-          slot.dataset.threadPanelSlot = panelState;
-          slot.dataset.threadPanelKey = panelKey;
-          slot.innerHTML = model.threadPanel.html;
-          scrollThreadHistoryToBottom(slot.querySelector(".office-map-thread-history"));
-          return;
-        }
-        slot.dataset.threadPanelSlot = panelState;
-        const template = document.createElement("template");
-        template.innerHTML = model.threadPanel.html;
-        const card = slot.querySelector("[data-agent-thread-card]");
-        const nextCard = template.content.querySelector("[data-agent-thread-card]");
-        if (!(card instanceof HTMLElement) || !(nextCard instanceof HTMLElement)) {
-          slot.innerHTML = model.threadPanel.html;
-          return;
-        }
-        if (card.className !== nextCard.className) {
-          card.className = nextCard.className;
-        }
-        replacePanelSectionIfChanged(card, nextCard, ".office-map-thread-card-header");
-        replacePanelSectionIfChanged(card, nextCard, ".office-map-thread-card-tag");
-        syncThreadHistory(card.querySelector(".office-map-thread-history"), nextCard.querySelector(".office-map-thread-history"));
-      }
-
-      function syncOfficeAnchors(renderer, model, scale) {
-        const layer = renderer.anchorLayer;
-        const reusableAgentNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-agent-hit", "agentKey");
-        const reusableWorkstationNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-anchor", "workstationKey");
-        const reusableFurnitureNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-furniture-hit", "furnitureId");
-        const reusableHotNodes = collectReusableOfficeOverlayNodes(layer, ".office-map-wall-hot-hit", "wallHotKey");
-        syncThreadPanel(renderer, model);
-        renderer.agentHitNodes = new Map();
-        const activeAgentKeys = new Set();
-        const activeWorkstationKeys = new Set();
-        model.anchors.forEach((anchor) => {
-          if (anchor.type === "agent") {
-            activeAgentKeys.add(anchor.key);
-            let node = reusableAgentNodes.get(anchor.key);
-            if (!(node instanceof HTMLElement)) {
-              node = document.createElement("div");
-              layer.appendChild(node);
-            }
-            syncAgentOverlayNode(node, anchor, scale);
-            renderer.agentHitNodes.set(anchor.key, node);
-          } else {
-            activeWorkstationKeys.add(anchor.key);
-            let node = reusableWorkstationNodes.get(anchor.key);
-            if (!(node instanceof HTMLElement)) {
-              node = document.createElement("div");
-              layer.appendChild(node);
-            }
-            syncWorkstationOverlayNode(node, anchor, scale);
-          }
-        });
-        const activeHotKeys = new Set();
-        (model.wallDashboards || []).forEach((dashboard) => {
-          if (!dashboard || !Number.isFinite(dashboard.width) || !Number.isFinite(dashboard.height)) {
-            return;
-          }
-          const width = Math.max(48, Math.round(dashboard.width));
-          const hotRows = (Array.isArray(dashboard.hotGrid) ? dashboard.hotGrid : [])
-            .filter((row) => row && row.label)
-            .slice(0, 9);
-          const gridInset = 3;
-          const columnGap = 3;
-          const cellHeight = 7;
-          const contentWidth = Math.max(24, width - gridInset * 2);
-          const maxCellWidth = Math.max(30, Math.floor(contentWidth / 2));
-          const columnCount = hotRows.length <= 1 ? 1 : hotRows.length <= 4 ? 2 : 3;
-          const columnWidth = Math.min(maxCellWidth, Math.max(24, Math.floor((contentWidth - columnGap * (columnCount - 1)) / columnCount)));
-          const gridWidth = columnCount * columnWidth + columnGap * (columnCount - 1);
-          const gridX = gridInset + Math.max(0, Math.floor((contentWidth - gridWidth) / 2));
-          const rowStep = 8;
-          hotRows.forEach((row, itemIndex) => {
-            const column = itemIndex % columnCount;
-            const index = Math.floor(itemIndex / columnCount);
-            const hotKey = wallDashboardHotNodeKey(dashboard, row, itemIndex);
-            activeHotKeys.add(hotKey);
-            let node = reusableHotNodes.get(hotKey);
-            if (!(node instanceof HTMLElement)) {
-              node = document.createElement("div");
-              layer.appendChild(node);
-            }
-            syncWallDashboardHotNode(node, dashboard, row, itemIndex, scale, {
-              column,
-              index,
-              gridX,
-              columnGap,
-              columnWidth,
-              cellHeight,
-              rowStep
-            });
-          });
-        });
-        reusableHotNodes.forEach((node, key) => {
-          if (!activeHotKeys.has(key)) {
-            hideOfficeMapHover(node);
-            node.remove();
-          }
-        });
-        const activeFurnitureKeys = new Set();
-        model.furniture.forEach((item) => {
-          activeFurnitureKeys.add(item.id);
-          let node = reusableFurnitureNodes.get(item.id);
-          if (!(node instanceof HTMLElement)) {
-            node = document.createElement("div");
-            layer.appendChild(node);
-          }
-          syncFurnitureOverlayNode(node, item, model, scale);
-        });
-        reusableAgentNodes.forEach((node, key) => {
-          if (!activeAgentKeys.has(key)) {
-            hideOfficeMapHover(node);
-            node.remove();
-          }
-        });
-        reusableWorkstationNodes.forEach((node, key) => {
-          if (!activeWorkstationKeys.has(key)) {
-            node.remove();
-          }
-        });
-        reusableFurnitureNodes.forEach((node, key) => {
-          if (!activeFurnitureKeys.has(key)) {
-            node.remove();
-          }
-        });
-      }
-
-      function isScreenFloatingHermesAgent(agent) {
-        return agent
-          && (
-            (agent.source === "hermes" && agent.sourceKind === "hermes:roaming")
-            || (agent.source === "openclaw" && agent.sourceKind === "openclaw:roaming")
-          );
-      }
-
-      function parseHermesFloatingTimestamp(value) {
-        const time = Date.parse(value || "");
-        return Number.isFinite(time) ? time : 0;
-      }
-
-      function isFinishedScreenFloatingHermesAgent(agent) {
-        const state = String(agent && agent.state || "").toLowerCase();
-        const statusText = String(agent && agent.statusText || "").toLowerCase();
-        return state === "done"
-          || state === "idle"
-          || statusText === "done"
-          || statusText === "idle";
-      }
-
-      function shouldRenderScreenFloatingHermesAgent(agent) {
-        if (!isScreenFloatingHermesAgent(agent)) {
-          return false;
-        }
-        if (isFinishedScreenFloatingHermesAgent(agent)) {
-          const finishedAt = parseHermesFloatingTimestamp(agent.stoppedAt || agent.updatedAt);
-          return finishedAt > 0 && Date.now() - finishedAt <= HERMES_FLOATING_FINISHED_COOLDOWN_MS;
-        }
-        return agent.isOngoing === true || agent.isCurrent === true;
-      }
-
-      function floatingHermesAgentKey(agent) {
-        const id = String(agent && agent.id || "");
-        if (id) {
-          return id;
-        }
-        const threadId = String(agent && agent.threadId || "");
-        return threadId ? "hermes:" + threadId : "";
-      }
-
-      function collectFloatingHermesEntries(projects) {
-        const byKey = new Map();
-        (Array.isArray(projects) ? projects : []).forEach((snapshot) => {
-          if (!snapshot || !Array.isArray(snapshot.agents)) {
-            return;
-          }
-          snapshot.agents.forEach((agent) => {
-            if (!shouldRenderScreenFloatingHermesAgent(agent)) {
-              return;
-            }
-            const key = floatingHermesAgentKey(agent);
-            if (!key) {
-              return;
-            }
-            const updatedAt = Date.parse(agent.updatedAt || "");
-            const current = byKey.get(key);
-            if (!current || (Number.isFinite(updatedAt) && updatedAt > current.updatedAtMs)) {
-              byKey.set(key, {
-                key,
-                snapshot,
-                agent,
-                updatedAtMs: Number.isFinite(updatedAt) ? updatedAt : 0
-              });
-            }
-          });
-        });
-        return [...byKey.values()]
-          .sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.key.localeCompare(right.key))
-          .slice(0, HERMES_FLOATING_AGENT_LIMIT);
-      }
-
-      function ensureHermesFloatingLayer() {
-        let layer = document.querySelector("[data-hermes-float-layer]");
-        if (!(layer instanceof HTMLElement)) {
-          layer = document.createElement("div");
-          layer.className = "hermes-float-layer";
-          layer.dataset.hermesFloatLayer = "true";
-          document.body.appendChild(layer);
-        }
-        return layer;
-      }
-
-      function hermesFloatingViewport() {
-        const doc = document.documentElement;
-        const width = Math.max(320, Math.round(window.innerWidth || doc.clientWidth || 0));
-        const height = Math.max(240, Math.round(window.innerHeight || doc.clientHeight || 0));
-        return { width, height };
-      }
-
-      function hermesFloatingSkyBounds(size, compact, viewport) {
-        const viewportLeft = compact ? 10 : 22;
-        const defaultRight = Math.min(
-          viewport.width - size - 10,
-          compact ? 138 : Math.max(172, Math.round(viewport.width * 0.22))
-        );
-        const defaultTop = compact
-          ? Math.max(96, Math.round(viewport.height * 0.16))
-          : Math.max(220, Math.round(viewport.height * 0.24));
-        const defaultBottom = Math.max(defaultTop + size, viewport.height - Math.max(compact ? 28 : 42, Math.round(viewport.height * 0.07)));
-        const sceneRects = Array.from(document.querySelectorAll("[data-office-map-host]"))
-          .filter((node) => node instanceof HTMLElement)
-          .map((node) => node.getBoundingClientRect())
-          .filter((rect) => rect.width > 0 && rect.height > 0);
-        const visibleSceneRects = sceneRects
-          .map((rect) => ({
-            left: Math.max(0, rect.left),
-            right: Math.min(viewport.width, rect.right),
-            top: Math.max(compact ? 84 : 104, rect.top),
-            bottom: Math.min(viewport.height - (compact ? 18 : 26), rect.bottom)
-          }))
-          .filter((rect) => rect.right - rect.left > size * 1.2 && rect.bottom - rect.top > size * 1.2);
-        if (visibleSceneRects.length > 0) {
-          const towerLeft = Math.min(...visibleSceneRects.map((rect) => rect.left));
-          const viewportGutterLeft = compact ? 10 : 22;
-          const gutterGap = compact ? 6 : 10;
-          const minimumVisibleLeft = -Math.round(size * 0.35);
-          const outsideRight = Math.max(minimumVisibleLeft, Math.round(towerLeft - size - gutterGap));
-          const outsideLeft = Math.min(viewportGutterLeft, outsideRight);
-          if (outsideRight >= outsideLeft && defaultBottom >= defaultTop + size) {
-            return {
-              left: outsideLeft,
-              right: outsideRight,
-              top: defaultTop,
-              bottom: defaultBottom
-            };
-          }
-        }
-        if (sceneRects.length === 0) {
-          return {
-            left: viewportLeft,
-            right: Math.max(viewportLeft, defaultRight),
-            top: defaultTop,
-            bottom: defaultBottom
-          };
-        }
-        const sceneLefts = sceneRects
-          .map((rect) => rect.left)
-          .filter((left) => Number.isFinite(left));
-        const firstSceneLeft = sceneLefts.length > 0 ? Math.min(...sceneLefts) : viewportLeft + size;
-        const gutterGap = compact ? 4 : 8;
-        const minimumVisibleLeft = -Math.round(size * 0.25);
-        const gutterRight = Math.max(minimumVisibleLeft, Math.round(firstSceneLeft - size - gutterGap));
-        const gutterLeft = Math.min(viewportLeft, Math.max(minimumVisibleLeft, gutterRight));
-        return {
-          left: gutterLeft,
-          right: Math.max(gutterLeft, Math.min(defaultRight, gutterRight)),
-          top: defaultTop,
-          bottom: defaultBottom
-        };
-      }
-
-      function hermesFloatingSlotLayout(entries) {
-        const viewport = hermesFloatingViewport();
-        const compact = viewport.width < 720;
-        const size = compact ? 58 : 68;
-        const minDistance = compact ? 70 : 86;
-        const skyBounds = hermesFloatingSkyBounds(size, compact, viewport);
-        const left = skyBounds.left;
-        const right = skyBounds.right;
-        const top = skyBounds.top;
-        const bottom = skyBounds.bottom;
-        const columns = Math.max(1, Math.floor(Math.max(1, right - left) / minDistance) + 1);
-        const rows = Math.max(1, Math.floor(Math.max(1, bottom - top) / minDistance) + 1);
-        const candidates = [];
-        for (let row = 0; row < rows; row += 1) {
-          for (let column = 0; column < columns; column += 1) {
-            const seed = stableHash("hermes-float:" + row + ":" + column);
-            const jitterX = (((seed % 997) / 997) - 0.5) * Math.min(18, minDistance * 0.3);
-            const jitterY = ((((Math.floor(seed / 997)) % 991) / 991) - 0.5) * Math.min(22, minDistance * 0.36);
-            const x = Math.max(left, Math.min(right, left + column * minDistance + jitterX));
-            const y = Math.max(top, Math.min(bottom - size, top + row * minDistance + jitterY));
-            candidates.push({ x, y });
-          }
-        }
-        const placed = [];
-        const layout = new Map();
-        const sortedEntries = [...entries].sort((leftEntry, rightEntry) => leftEntry.key.localeCompare(rightEntry.key));
-        const preferredX = left + Math.max(0, Math.min(right - left, (right - left) * 0.35));
-        const preferredY = top + Math.max(0, (bottom - top - size) * 0.38);
-        sortedEntries.forEach((entry, index) => {
-          let best = null;
-          let bestScore = -Infinity;
-          candidates.forEach((candidate) => {
-            const nearest = placed.length === 0
-              ? minDistance * 2
-              : Math.min(...placed.map((point) => Math.hypot(point.x - candidate.x, point.y - candidate.y)));
-            const preference = (stableHash(entry.key + ":" + Math.round(candidate.x) + ":" + Math.round(candidate.y)) % 1000) / 100000;
-            const preferredDistance = Math.hypot(candidate.x - preferredX, candidate.y - preferredY);
-            const score = nearest + preference - preferredDistance * 0.018;
-            if (score > bestScore) {
-              best = candidate;
-              bestScore = score;
-            }
-          });
-          if (!best) {
-            const row = Math.floor(index / Math.max(1, columns));
-            const column = index % Math.max(1, columns);
-            best = {
-              x: Math.max(left, Math.min(right, left + column * minDistance)),
-              y: Math.max(top, Math.min(bottom - size, top + row * minDistance))
-            };
-          }
-          placed.push(best);
-          layout.set(entry.key, {
-            x: Math.round(best.x),
-            y: Math.round(best.y),
-            size
-          });
-        });
-        return layout;
-      }
-
-      function hermesFloatingTransform(x, y, tilt = 0) {
-        const tiltValue = Number.isFinite(tilt) ? Math.max(-10, Math.min(10, tilt)) : 0;
-        return "translate3d(" + Math.round(x) + "px, " + Math.round(y) + "px, 0) rotateZ(" + (Math.round(tiltValue * 100) / 100) + "deg)";
-      }
-
-      function hermesFloatingVelocityTilt(fromX, fromY, toX, toY) {
-        const dx = Number(toX) - Number(fromX);
-        const dy = Number(toY) - Number(fromY);
-        if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-          return 0;
-        }
-        return Math.max(-10, Math.min(10, dx * 0.12 + dy * 0.025));
-      }
-
-      function setHermesFloatStyle(node, property, value) {
-        if (!node || !node.style) {
-          return;
-        }
-        if (typeof node.style.setProperty === "function") {
-          node.style.setProperty(property, value);
-        } else {
-          node.style[property] = value;
-        }
-      }
-
-      function syncHermesFloatingMotionStyle(node, key) {
-        const seed = stableHash("hermes-float-motion:" + key);
-        const bob = 9 + (seed % 6);
-        const sway = 4 + ((seed >>> 4) % 5);
-        const duration = 2350 + ((seed >>> 8) % 900);
-        const delay = -((seed >>> 13) % duration);
-        const driftBias = ((seed >>> 19) % 7) - 3;
-        setHermesFloatStyle(node, "--hermes-float-duration", duration + "ms");
-        setHermesFloatStyle(node, "--hermes-float-delay", delay + "ms");
-        setHermesFloatStyle(node, "--hermes-float-bob-up", "-" + bob + "px");
-        setHermesFloatStyle(node, "--hermes-float-bob-down", Math.max(3, Math.round(bob * 0.5)) + "px");
-        setHermesFloatStyle(node, "--hermes-float-sway-left", "-" + Math.max(1, sway - driftBias * 0.2).toFixed(1) + "px");
-        setHermesFloatStyle(node, "--hermes-float-sway-right", Math.max(1, sway + driftBias * 0.2).toFixed(1) + "px");
-      }
-
-      function queueHermesFloatingTiltSettle(record, key, x, y, tilt) {
-        if (!record || !(record.node instanceof HTMLElement) || Math.abs(tilt) < 0.2) {
-          return;
-        }
-        record.tiltTimer = window.setTimeout(() => {
-          if (hermesFloatingNodes.get(key) !== record || !(record.node instanceof HTMLElement)) {
-            return;
-          }
-          record.node.style.transform = hermesFloatingTransform(x, y, 0);
-          record.tiltTimer = null;
-        }, HERMES_FLOATING_TILT_SETTLE_MS);
-      }
-
-      function renderFloatingHermesAgent(entry) {
-        const snapshot = entry.snapshot;
-        const agent = entry.agent;
-        const visualHtml = renderFloatingHermesVisual(snapshot, agent, true);
-        const label = displayAgentLabel(snapshot, agent);
-        const projectRoot = threadViewProjectRoot(snapshot, agent) || snapshot.projectRoot || "";
-        const triggerHtml = projectRoot && agent.threadId
-          ? '<button type="button" class="hermes-float-trigger" data-action="open-agent-thread" data-project-root="' + escapeHtml(projectRoot) + '" data-thread-id="' + escapeHtml(agent.threadId) + '" aria-label="Open ' + escapeHtml(label) + ' history"></button>'
-          : "";
-        return visualHtml
-          + triggerHtml
-          + renderAgentHover(snapshot, agent, { className: "agent-hover hermes-float-hover" });
-      }
-
-      function renderFloatingHermesVisual(snapshot, agent, includeBubble = false) {
-        const sizeAgent = agent && Number(agent.depth) > 0 ? { ...agent, depth: 0 } : agent;
-        const avatarSize = avatarVisualSizeForAgent(sizeAgent, 2.05);
-        const scaleUp = avatarSize && avatarSize.width > 0 && avatarSize.height > 0
-          ? Math.max(1, 38 / avatarSize.width, 48 / avatarSize.height)
-          : 1;
-        const visualWidth = Math.max(1, Math.round((avatarSize.width || 1) * scaleUp));
-        const visualHeight = Math.max(1, Math.round((avatarSize.height || 1) * scaleUp));
-        const avatarUrl = avatarSize && avatarSize.avatar && avatarSize.avatar.url ? avatarSize.avatar.url : "";
-        const label = displayAgentLabel(snapshot, agent);
-        const visualHtml = avatarUrl
-          ? '<img class="hermes-float-avatar" src="' + escapeHtml(avatarUrl) + '" alt="" aria-hidden="true" style="width:' + visualWidth + 'px;height:' + visualHeight + 'px" />'
-          : '<span class="hermes-float-initial">' + escapeHtml(label.slice(0, 1) || "H") + '</span>';
-        const bubbleHtml = includeBubble && agent.isOngoing === true ? '<span class="hermes-float-bubble">...</span>' : "";
-        return '<div class="hermes-float-visual">' + visualHtml + bubbleHtml + '</div>';
-      }
-
-      function rectTransform(rect, width, height) {
-        const x = Math.round(rect.left + rect.width / 2 - width / 2);
-        const y = Math.round(rect.top + rect.height / 2 - height / 2);
-        return "translate3d(" + x + "px, " + y + "px, 0)";
-      }
-
-      function rememberHermesAssignedRect(rects, key, rect) {
-        if (!key || !rect || rect.width <= 0 || rect.height <= 0) {
-          return;
-        }
-        if (!rects.has(key)) {
-          rects.set(key, rect);
-        }
-      }
-
-      function isHermesRectMap(value) {
-        return value
-          && typeof value.get === "function"
-          && typeof value.has === "function";
-      }
-
-      function snapshotHermesAssignedScreenRects() {
-        const rects = new Map();
-        document.querySelectorAll(".office-map-agent-hit").forEach((node) => {
-          if (!(node instanceof HTMLElement)) {
-            return;
-          }
-          const rect = node.getBoundingClientRect();
-          const threadId = node.dataset.threadId || "";
-          if (threadId) {
-            rememberHermesAssignedRect(rects, threadId, rect);
-            rememberHermesAssignedRect(rects, "hermes:" + threadId, rect);
-            rememberHermesAssignedRect(rects, "openclaw:" + threadId, rect);
-          }
-          const nodeKey = node.dataset.agentKey || "";
-          const hermesIndex = nodeKey.indexOf("::hermes:");
-          if (hermesIndex >= 0) {
-            rememberHermesAssignedRect(rects, nodeKey.slice(hermesIndex + 2), rect);
-          }
-          const openClawIndex = nodeKey.indexOf("::openclaw:");
-          if (openClawIndex >= 0) {
-            rememberHermesAssignedRect(rects, nodeKey.slice(openClawIndex + 2), rect);
-          }
-        });
-        return rects;
-      }
-
-      function findHermesAssignedAgentRect(key, threadId) {
-        const threadKey = String(threadId || "");
-        for (const node of Array.from(document.querySelectorAll(".office-map-agent-hit"))) {
-          if (!(node instanceof HTMLElement)) {
-            continue;
-          }
-          const nodeThreadId = node.dataset.threadId || "";
-          const nodeKey = node.dataset.agentKey || "";
-          if (
-            (threadKey && nodeThreadId === threadKey)
-            || nodeKey === key
-            || nodeKey.endsWith("::" + key)
-            || (threadKey && nodeKey.endsWith("::hermes:" + threadKey))
-            || (threadKey && nodeKey.endsWith("::openclaw:" + threadKey))
-          ) {
-            const rect = node.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-              return rect;
-            }
-          }
-        }
-        return null;
-      }
-
-      function collectAssignedHermesEntries(projects) {
-        const entries = [];
-        (Array.isArray(projects) ? projects : []).forEach((snapshot) => {
-          if (!snapshot || !Array.isArray(snapshot.agents)) {
-            return;
-          }
-          snapshot.agents.forEach((agent) => {
-            if (!agent || (agent.source !== "hermes" && agent.source !== "openclaw") || isScreenFloatingHermesAgent(agent)) {
-              return;
-            }
-            const key = floatingHermesAgentKey(agent);
-            if (!key) {
-              return;
-            }
-            entries.push({
-              key,
-              threadId: agent.threadId || "",
-              snapshot,
-              agent
-            });
-          });
-        });
-        return entries;
-      }
-
-      function spawnHermesAssignedTransferGhosts(previousRects, projects, activeFloatingKeys = new Set(), options = {}) {
-        if (!isHermesRectMap(previousRects) || state.view !== "map" || options.viewportOnly === true) {
-          return;
-        }
-        collectAssignedHermesEntries(projects).forEach((entry) => {
-          if (activeFloatingKeys.has(entry.key) || (entry.threadId && activeFloatingKeys.has(entry.threadId))) {
-            return;
-          }
-          const previousRect = previousRects.get(entry.key)
-            || (entry.threadId ? previousRects.get(entry.threadId) : null)
-            || null;
-          if (!previousRect || pendingHermesAssignedTransfers.has(entry.key)) {
-            return;
-          }
-          pendingHermesAssignedTransfers.add(entry.key);
-          window.setTimeout(() => {
-            pendingHermesAssignedTransfers.delete(entry.key);
-            if (state.view !== "map") {
-              return;
-            }
-            const currentRect = findHermesAssignedAgentRect(entry.key, entry.threadId);
-            if (!currentRect) {
-              return;
-            }
-            const distance = Math.hypot(
-              previousRect.left + previousRect.width / 2 - (currentRect.left + currentRect.width / 2),
-              previousRect.top + previousRect.height / 2 - (currentRect.top + currentRect.height / 2)
-            );
-            if (distance < 80) {
-              return;
-            }
-            const layer = ensureHermesFloatingLayer();
-            if (Array.from(layer.children).some((child) => child instanceof HTMLElement && child.dataset.hermesFloatTransfer === entry.key)) {
-              return;
-            }
-            const size = Math.max(36, Math.min(54, Math.round(Math.max(previousRect.width, previousRect.height, currentRect.width, currentRect.height))));
-            const node = document.createElement("div");
-            node.className = "hermes-float-agent is-transfer";
-            node.dataset.hermesFloatTransfer = entry.key;
-            node.innerHTML = renderFloatingHermesVisual(entry.snapshot, entry.agent, false);
-            node.style.width = size + "px";
-            node.style.height = size + "px";
-            node.style.transform = rectTransform(previousRect, size, size);
-            node.style.opacity = "0.9";
-            layer.appendChild(node);
-            window.requestAnimationFrame(() => {
-              node.style.transform = rectTransform(currentRect, size, size);
-            });
-            window.setTimeout(() => {
-              node.style.opacity = "0";
-            }, Math.max(1, HERMES_ASSIGNED_TRANSFER_MS - 180));
-            window.setTimeout(() => {
-              node.remove();
-              if (hermesFloatingNodes.size === 0 && layer.children.length === 0) {
-                layer.remove();
-              }
-            }, HERMES_ASSIGNED_TRANSFER_MS + 220);
-          }, HERMES_ASSIGNED_TRANSFER_SETTLE_MS);
-        });
-      }
-
-      function syncFloatingHermesAgents(projects, options = {}) {
-        if (state.view !== "map") {
-          projects = [];
-        }
-        const entries = collectFloatingHermesEntries(projects);
-        const activeKeys = new Set(entries.map((entry) => entry.key));
-        if (entries.length === 0 && hermesFloatingNodes.size === 0) {
-          const staleLayer = document.querySelector("[data-hermes-float-layer]");
-          if (staleLayer instanceof HTMLElement) {
-            staleLayer.remove();
-          }
-          return;
-        }
-        const layer = ensureHermesFloatingLayer();
-        const layout = hermesFloatingSlotLayout(entries);
-        const assignedRects = options && isHermesRectMap(options.assignedRects) ? options.assignedRects : new Map();
-        entries.forEach((entry) => {
-          const point = layout.get(entry.key);
-          if (!point) {
-            return;
-          }
-          let record = hermesFloatingNodes.get(entry.key);
-          let node = record && record.node instanceof HTMLElement ? record.node : null;
-          const isNew = !node;
-          if (!node) {
-            node = document.createElement("div");
-            layer.appendChild(node);
-          }
-          if (record && record.removeTimer) {
-            window.clearTimeout(record.removeTimer);
-          }
-          const html = renderFloatingHermesAgent(entry);
-          if (node.dataset.renderHtml !== html) {
-            node.innerHTML = html;
-            node.dataset.renderHtml = html;
-          }
-          syncHermesFloatingMotionStyle(node, entry.key);
-          node.className = "hermes-float-agent";
-          node.dataset.hermesFloatKey = entry.key;
-          node.dataset.threadId = entry.agent.threadId || "";
-          node.dataset.focusAgent = "true";
-          node.dataset.focusKey = focusAgentKey(entry.snapshot, entry.agent);
-          node.dataset.focusKeys = JSON.stringify(collectFocusedSessionKeys(entry.snapshot, entry.agent));
-          node.style.width = point.size + "px";
-          node.style.height = point.size + "px";
-          const nextRecord = record && record.node === node
-            ? record
-            : { node, threadId: "", removeTimer: null, tiltTimer: null, targetX: point.x, targetY: point.y };
-          if (nextRecord.tiltTimer) {
-            window.clearTimeout(nextRecord.tiltTimer);
-            nextRecord.tiltTimer = null;
-          }
-          const previousX = Number.isFinite(nextRecord.targetX) ? nextRecord.targetX : point.x;
-          const previousY = Number.isFinite(nextRecord.targetY) ? nextRecord.targetY : point.y;
-          let tilt = hermesFloatingVelocityTilt(previousX, previousY, point.x, point.y);
-          let targetTransform = hermesFloatingTransform(point.x, point.y, tilt);
-          if (isNew) {
-            const startRect = assignedRects.get(entry.key)
-              || (entry.agent.threadId ? assignedRects.get(entry.agent.threadId) : null)
-              || null;
-            if (startRect) {
-              const startX = Math.round(startRect.left + startRect.width / 2 - point.size / 2);
-              const startY = Math.round(startRect.top + startRect.height / 2 - point.size / 2);
-              tilt = hermesFloatingVelocityTilt(startX, startY, point.x, point.y);
-              targetTransform = hermesFloatingTransform(point.x, point.y, tilt);
-              node.style.transform = hermesFloatingTransform(startX, startY, 0);
-              node.style.opacity = "0.82";
-              window.requestAnimationFrame(() => {
-                node.style.transform = targetTransform;
-                node.style.opacity = "1";
-                queueHermesFloatingTiltSettle(nextRecord, entry.key, point.x, point.y, tilt);
-              });
-            } else {
-              node.style.transform = targetTransform;
-              node.style.opacity = "1";
-              queueHermesFloatingTiltSettle(nextRecord, entry.key, point.x, point.y, tilt);
-            }
-          } else {
-            node.style.transform = targetTransform;
-            node.style.opacity = "1";
-            queueHermesFloatingTiltSettle(nextRecord, entry.key, point.x, point.y, tilt);
-          }
-          nextRecord.node = node;
-          nextRecord.threadId = entry.agent.threadId || "";
-          nextRecord.removeTimer = null;
-          nextRecord.targetX = point.x;
-          nextRecord.targetY = point.y;
-          hermesFloatingNodes.set(entry.key, nextRecord);
-        });
-        hermesFloatingNodes.forEach((record, key) => {
-          if (activeKeys.has(key)) {
-            return;
-          }
-          const node = record.node;
-          if (!(node instanceof HTMLElement)) {
-            hermesFloatingNodes.delete(key);
-            return;
-          }
-          const rect = findHermesAssignedAgentRect(key, record.threadId);
-          const nodeRect = node.getBoundingClientRect();
-          node.classList.add("is-departing");
-          node.style.opacity = "0";
-          if (record.tiltTimer) {
-            window.clearTimeout(record.tiltTimer);
-            record.tiltTimer = null;
-          }
-          if (rect) {
-            node.style.transform = rectTransform(rect, Math.max(1, nodeRect.width), Math.max(1, nodeRect.height));
-          }
-          if (record.removeTimer) {
-            window.clearTimeout(record.removeTimer);
-          }
-          record.removeTimer = window.setTimeout(() => {
-            node.remove();
-            hermesFloatingNodes.delete(key);
-            if (hermesFloatingNodes.size === 0 && layer.children.length === 0) {
-              layer.remove();
-            }
-          }, HERMES_FLOATING_TRANSITION_MS + 120);
-        });
-        return activeKeys;
-      }
 
       function sceneFootDepth(y, height, bias = 0, tileSize = 16, depthBaseY = 0, depthRow = null) {
         const footY = Number(y) + Number(height);
@@ -1520,7 +19,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
       }
 
       const WORKSTATION_LAYOUT_TWEEN_MS = 520;
-      const MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX = 8;
+      const MAX_SEATED_NAVIGATION_DISTANCE_PX = 8;
 
       function setPixelStyleIfChanged(element, property, value) {
         if (!(element instanceof HTMLElement)) {
@@ -1544,7 +43,11 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
         const leftOffset = Math.max(0, Math.round((availableWidth - scaledWidth) / 2));
         renderer.scale = scale;
         renderer.leftOffset = leftOffset;
+        if (renderer.hostHeightSynced === true) {
+          renderer.host.classList.add("office-map-host-animated");
+        }
         setPixelStyleIfChanged(renderer.host, "height", scaledHeight + "px");
+        renderer.hostHeightSynced = true;
         setPixelStyleIfChanged(renderer.canvasContainer, "left", leftOffset + "px");
         setPixelStyleIfChanged(renderer.canvasContainer, "width", scaledWidth + "px");
         setPixelStyleIfChanged(renderer.canvasContainer, "height", scaledHeight + "px");
@@ -1625,6 +128,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
         renderer.root = nextRoot;
 
         const PIXI = window.PIXI;
+        const scenePalette = model.palette || deriveScenePalette(null,
+          model.sceneKind === "street-cafe" ? DEFAULT_CAFE_SCENE_COLORS : DEFAULT_WORKSPACE_SCENE_COLORS
+        ).pixi;
         try {
         const scale = renderer.scale || 1;
         const roomById = new Map(model.rooms.map((room) => [room.id, room]));
@@ -1642,9 +148,9 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             .map((workstation) => [workstation.key, workstation])
         );
         const background = new PIXI.Graphics()
-          .roundRect(0, 0, model.width, model.height, 14)
-          .fill({ color: 0x0b1b2b })
-          .stroke({ color: 0x2e5c7b, width: 2 });
+          .rect(0, 0, model.width, model.height)
+          .fill({ color: 0x14282a })
+          .stroke({ color: 0x0c1b1e, width: 2 });
         background.zIndex = 0;
         renderer.root.addChild(background);
 
@@ -1861,8 +367,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
 
           const frame = new PIXI.Graphics()
             .rect(0, 0, width, height)
-            .fill({ color: 0x16352c, alpha: 1 })
-            .stroke({ color: 0x1f5e47, width: 1, alpha: 1 });
+            .fill({ color: scenePalette.boardBase, alpha: 1 })
+            .stroke({ color: scenePalette.boardLight, width: 1, alpha: 0.86 });
           frame.zIndex = 1;
           container.addChild(frame);
 
@@ -1947,11 +453,11 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             branchText.x = Math.max(6, tooltipWidth - 6 - Math.ceil(branchText.width));
             const bubble = new PIXI.Graphics()
               .rect(0, 0, tooltipWidth, tooltipHeight)
-              .fill({ color: 0x10251e, alpha: 0.98 })
-              .stroke({ color: 0x62d597, width: 1, alpha: 0.95 });
+              .fill({ color: scenePalette.boardDark, alpha: 0.98 })
+              .stroke({ color: scenePalette.boardLight, width: 1, alpha: 0.95 });
             const heatTrack = new PIXI.Graphics()
               .rect(6, 20, heatBarWidth, 3)
-              .fill({ color: 0x07140f, alpha: 0.95 });
+              .fill({ color: scenePalette.boardDark, alpha: 0.95 });
             const heatFill = new PIXI.Graphics()
               .rect(6, 20, Math.max(1, Math.round(heatBarWidth * heatRatio)), 3)
               .fill({ color: wallDashboardHeatPalette(row, wallDashboardPalette(row)).accent, alpha: 0.95 });
@@ -2243,8 +749,18 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           );
           const endTile = nearestWalkableTile(nav, targetTile) || targetTile;
           const route = startTile && endTile
-            ? buildAgentPixelRoute(nav, startTile, endTile, room, model.tile, motionState.width, motionState.height, exactTarget)
-            : [exactTarget || { x: motionState.currentX, y: motionState.currentY }];
+            ? buildAgentPixelRoute(
+              nav,
+              startTile,
+              endTile,
+              room,
+              model.tile,
+              motionState.width,
+              motionState.height,
+              exactTarget,
+              { x: motionState.currentX, y: motionState.currentY }
+            )
+            : [{ x: motionState.currentX, y: motionState.currentY }];
           motionState.route = route;
           motionState.routeIndex = route.length > 1 ? 1 : route.length;
           motionState.currentTile = startTile || endTile || motionState.currentTile;
@@ -2287,7 +803,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           }
           const distance = motionTargetDistance(previousState, agent);
           if (sameSlotAssignment(previousState, agent)) {
-            return Number.isFinite(distance) && distance <= MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX;
+            return Number.isFinite(distance) && distance <= MAX_SEATED_NAVIGATION_DISTANCE_PX;
           }
           if (!Number.isFinite(distance) || distance > 3) {
             return false;
@@ -2295,8 +811,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           return !previousState.slotId && !agent.slotId;
         }
 
-        function startSeatedLayoutShift(motionState, agent) {
-          if (!motionState || !agent || motionState.exiting === true || !sameSlotAssignment(motionState, agent)) {
+        function startSeatedNavigation(motionState, agent, room, nav, targetTile) {
+          if (!motionState || !agent || !room || !nav || !targetTile || motionState.exiting === true || !sameSlotAssignment(motionState, agent)) {
             return false;
           }
           const previousTargetX = Number.isFinite(motionState.targetX) ? Number(motionState.targetX) : Number(motionState.currentX);
@@ -2307,22 +823,33 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             motionState.targetY = agent.y;
             return false;
           }
-          if (!Number.isFinite(shiftDistance) || shiftDistance > MAX_SEATED_LAYOUT_TWEEN_DISTANCE_PX) {
-            motionState.seatShift = null;
+          if (!Number.isFinite(shiftDistance) || shiftDistance > MAX_SEATED_NAVIGATION_DISTANCE_PX) {
             return false;
           }
-          motionState.seatShift = {
-            fromX: Number.isFinite(motionState.currentX) ? Number(motionState.currentX) : previousTargetX,
-            fromY: Number.isFinite(motionState.currentY) ? Number(motionState.currentY) : previousTargetY,
-            targetX: Number(agent.x),
-            targetY: Number(agent.y),
-            distancePx: shiftDistance,
-            startedAt: performance.now(),
-            durationMs: WORKSTATION_LAYOUT_TWEEN_MS
-          };
+          const startTile = nearestWalkableTile(
+            nav,
+            motionState.currentTile || officeAvatarFootTile(room, model.tile, motionState.currentX, motionState.currentY, motionState.width, motionState.height)
+          );
+          const endTile = nearestWalkableTile(nav, targetTile);
+          const route = startTile && endTile
+            ? buildAgentPixelRoute(
+              nav,
+              startTile,
+              endTile,
+              room,
+              model.tile,
+              motionState.width,
+              motionState.height,
+              { x: agent.x, y: agent.y },
+              { x: motionState.currentX, y: motionState.currentY }
+            )
+            : [{ x: motionState.currentX, y: motionState.currentY }];
+          if (route.length <= 1) {
+            return false;
+          }
           motionState.targetX = agent.x;
           motionState.targetY = agent.y;
-          motionState.route = [{ x: agent.x, y: agent.y }];
+          motionState.route = route;
           motionState.routeIndex = 1;
           return true;
         }
@@ -2363,8 +890,18 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           const ghostRoute = routeFinished
             ? [{ x: motionState.currentX, y: motionState.currentY }]
             : (startTile && exitTile
-              ? buildAgentPixelRoute(nav, startTile, exitTile, room, model.tile, motionState.width, motionState.height, targetPoint)
-              : [targetPoint]);
+              ? buildAgentPixelRoute(
+                nav,
+                startTile,
+                exitTile,
+                room,
+                model.tile,
+                motionState.width,
+                motionState.height,
+                targetPoint,
+                { x: motionState.currentX, y: motionState.currentY }
+              )
+              : [{ x: motionState.currentX, y: motionState.currentY }]);
           const exitFadeAlpha = Number.isFinite(motionState.exitFadeAlpha)
             ? Math.max(0, Math.min(1, Number(motionState.exitFadeAlpha)))
             : 1;
@@ -2383,7 +920,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             currentY: motionState.currentY,
             currentTile: startTile,
             route: ghostRoute,
-            routeIndex: routeFinished ? ghostRoute.length : 0,
+            routeIndex: routeFinished ? ghostRoute.length : (ghostRoute.length > 1 ? 1 : ghostRoute.length),
             speed: Number(motionState.speed) || 216,
             flipX: motionState.flipX,
             targetFlipX: motionState.targetFlipX,
@@ -3989,8 +2526,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             previousState.settledDepthFootY = Number.isFinite(avatarVisual.depthFootY) ? Number(avatarVisual.depthFootY) : null;
             previousState.settledDepthBias = Number.isFinite(avatarVisual.depthBias) ? Number(avatarVisual.depthBias) : null;
             previousState.settledDepthRow = Number.isFinite(avatarVisual.depthRow) ? Number(avatarVisual.depthRow) : null;
-            const seatedLayoutShifting = startSeatedLayoutShift(previousState, agent);
-            const isMoving = (seatedLayoutShifting
+            const seatedLayoutNavigating = startSeatedNavigation(previousState, agent, room, nav, targetTile);
+            const isMoving = (seatedLayoutNavigating
               || Boolean(previousState && previousState.routeIndex < (previousState.route?.length || 0))
               || previousState.exiting === true);
             const movingDepthFootY = isMoving ? null : avatarVisual.depthFootY;
@@ -4032,7 +2569,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             }
             renderer.motionStates.set(agentKey, previousState);
             const previousStateEffectEntry = buildStateEffectAnimationEntry(agent, previousState);
-            if (autonomousResting || seatedLayoutShifting) {
+            if (autonomousResting || seatedLayoutNavigating) {
               renderer.animatedSprites.push(previousState);
             } else if (["editing", "running", "validating", "scanning", "thinking", "planning", "delegating"].includes(agent.state) && previousState.routeIndex >= (previousState.route?.length || 0)) {
               renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, previousState));
@@ -4069,9 +2606,14 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
               model.tile,
               agent.width,
               agent.height,
-              { x: agent.x, y: agent.y }
+              { x: agent.x, y: agent.y },
+              previousState
+                ? { x: previousState.currentX, y: previousState.currentY }
+                : null
             )
-            : [{ x: agent.x, y: agent.y }];
+            : [previousState
+              ? { x: previousState.currentX, y: previousState.currentY }
+              : { x: agent.x, y: agent.y }];
           if (enteringFromParent && parentSpawnPoint && route.length > 0) {
             route[0] = { x: parentSpawnPoint.x, y: parentSpawnPoint.y };
           }
@@ -4141,7 +2683,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             targetX: agent.x,
             targetY: agent.y,
             route,
-            routeIndex: previousState ? 0 : 1,
+            routeIndex: route.length > 1 ? 1 : route.length,
             speed: options.speed || 198,
             flipX: previousState ? previousState.flipX : agent.flipX === true,
             targetFlipX: agent.flipX === true,
@@ -4189,9 +2731,11 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             }
           }
           if (["editing", "running", "validating", "scanning", "thinking", "planning", "delegating"].includes(agent.state) && route.length <= 1) {
-            motionState.currentX = agent.x;
-            motionState.currentY = agent.y;
-            motionState.route = [{ x: agent.x, y: agent.y }];
+            if (!previousState && !enteringFromDoor && !enteringFromParent) {
+              motionState.currentX = agent.x;
+              motionState.currentY = agent.y;
+              motionState.route = [{ x: agent.x, y: agent.y }];
+            }
             motionState.routeIndex = 1;
             renderer.motionStates.set(motionState.key, motionState);
             renderer.animatedSprites.push(buildBobAnimationEntry(agent, avatarVisual, motionState));
@@ -4211,9 +2755,11 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             return avatarVisual.nodes;
           }
           if (route.length <= 1 && !motionState.exiting) {
-            motionState.currentX = agent.x;
-            motionState.currentY = agent.y;
-            motionState.route = [{ x: agent.x, y: agent.y }];
+            if (!previousState && !enteringFromDoor && !enteringFromParent) {
+              motionState.currentX = agent.x;
+              motionState.currentY = agent.y;
+              motionState.route = [{ x: agent.x, y: agent.y }];
+            }
             motionState.routeIndex = 1;
             renderer.motionStates.set(motionState.key, motionState);
             const restingStateEffectEntry = buildStateEffectAnimationEntry(agent, motionState);
@@ -4297,23 +2843,24 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
         }
 
         model.rooms.forEach((room) => {
+          const streetCafe = model.sceneKind === "street-cafe";
           const roomVisualWidth = Math.max(room.width, Number(room.visualWidth) || room.width);
           const roomBox = new PIXI.Graphics()
-            .roundRect(room.x, room.y, roomVisualWidth, room.height, 10)
-            .fill({ color: room.isPrimary ? 0x1f7fcf : 0x256fa8, alpha: 0.95 })
-            .stroke({ color: 0x365a76, width: 3 });
+            .rect(room.x, room.y, roomVisualWidth, room.height)
+            .fill({ color: room.isPrimary ? scenePalette.floorDark : scenePalette.floorBorder, alpha: 0.98 })
+            .stroke({ color: scenePalette.floorBorder, width: 3 });
           roomBox.zIndex = 1;
           renderer.root.addChild(roomBox);
 
           const wallBand = new PIXI.Graphics()
             .rect(room.x, room.y, roomVisualWidth, room.wallHeight)
-            .fill({ color: 0xdceefe, alpha: 0.92 });
+            .fill({ color: scenePalette.wallBase, alpha: streetCafe ? 1 : 0.92 });
           wallBand.zIndex = 2;
           renderer.root.addChild(wallBand);
 
           const mural = new PIXI.Graphics()
             .rect(room.x + 8, room.y + 8, Math.max(16, roomVisualWidth - 16), Math.max(16, room.wallHeight - 16))
-            .fill({ color: 0x9dd6ff, alpha: 0.32 });
+            .fill({ color: scenePalette.wallMural, alpha: streetCafe ? 0.24 : 0.32 });
           mural.zIndex = 2;
           renderer.root.addChild(mural);
 
@@ -4357,22 +2904,57 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           }
 
           const floorTop = room.floorTop;
-          for (let y = floorTop; y < room.y + room.height; y += 48) {
+          const floorBase = new PIXI.Graphics()
+            .rect(room.x, floorTop, roomVisualWidth, Math.max(0, room.y + room.height - floorTop))
+            .fill({ color: scenePalette.floorBase, alpha: 1 });
+          floorBase.zIndex = 1.45;
+          renderer.root.addChild(floorBase);
+          const baseboard = new PIXI.Graphics()
+            .rect(room.x, floorTop, roomVisualWidth, 4)
+            .fill({ color: scenePalette.floorSeam, alpha: streetCafe ? 0.42 : 0.32 });
+          baseboard.zIndex = 1.72;
+          renderer.root.addChild(baseboard);
+          for (let y = floorTop + 4, rowIndex = 0; y < room.y + room.height; y += model.tile, rowIndex += 1) {
             const band = new PIXI.Graphics()
-              .rect(room.x, y, roomVisualWidth, 22)
-              .fill({ color: 0x48a7ee, alpha: 0.96 });
+              .rect(room.x, y, roomVisualWidth, Math.min(model.tile, room.y + room.height - y))
+              .fill({ color: rowIndex % 2 === 0 ? scenePalette.floorLight : scenePalette.floorBase, alpha: streetCafe ? 0.86 : 0.82 });
             band.zIndex = 1.5;
             renderer.root.addChild(band);
             const seam = new PIXI.Graphics()
-              .rect(room.x, Math.min(y + 22, room.y + room.height - 2), roomVisualWidth, 2)
-              .fill({ color: 0x7eeaff, alpha: 0.86 });
+              .rect(room.x, Math.min(y + model.tile - 1, room.y + room.height - 1), roomVisualWidth, 1)
+              .fill({ color: scenePalette.floorSeam, alpha: streetCafe ? 0.24 : 0.18 });
             seam.zIndex = 1.6;
             renderer.root.addChild(seam);
-            const shadowBand = new PIXI.Graphics()
-              .rect(room.x, Math.min(y + 24, room.y + room.height - 22), roomVisualWidth, 22)
-              .fill({ color: 0x2f8fdf, alpha: 0.94 });
-            shadowBand.zIndex = 1.55;
-            renderer.root.addChild(shadowBand);
+            const jointOffset = rowIndex % 2 === 0 ? 0 : model.tile;
+            for (let x = room.x + jointOffset; x < room.x + roomVisualWidth; x += model.tile * 2) {
+              const joint = new PIXI.Graphics()
+                .rect(x, y, 1, Math.min(model.tile, room.y + room.height - y))
+                .fill({ color: scenePalette.floorSeam, alpha: streetCafe ? 0.18 : 0.12 });
+              joint.zIndex = 1.61;
+              renderer.root.addChild(joint);
+            }
+          }
+
+          if (streetCafe) {
+            const pavementHeight = Math.min(model.tile * 3, Math.max(model.tile * 2, room.height * 0.22));
+            const pavementY = room.y + room.height - pavementHeight;
+            const pavement = new PIXI.Graphics()
+              .rect(room.x, pavementY, roomVisualWidth, pavementHeight)
+              .fill({ color: 0x4d5872, alpha: 1 });
+            pavement.zIndex = 1.66;
+            renderer.root.addChild(pavement);
+            const curb = new PIXI.Graphics()
+              .rect(room.x, pavementY, roomVisualWidth, 5)
+              .fill({ color: 0xc4d2df, alpha: 0.95 });
+            curb.zIndex = 1.67;
+            renderer.root.addChild(curb);
+            for (let x = room.x; x < room.x + roomVisualWidth; x += model.tile * 3) {
+              const pavementJoint = new PIXI.Graphics()
+                .rect(x, pavementY + 5, 1, pavementHeight - 5)
+                .fill({ color: 0x2f3850, alpha: 0.5 });
+              pavementJoint.zIndex = 1.68;
+              renderer.root.addChild(pavementJoint);
+            }
           }
 
           if (state.globalSceneSettings.debugTiles) {
@@ -4609,32 +3191,35 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             addDebugBounds(office.x, office.y, office.width, office.height, 0xff8d4d, tileBoundsLabel(office.width, office.height, model.tile));
           }
           const wallHeight = Math.max(model.tile + 8, Math.round(office.height * 0.42));
+          // Keep the booth box on the same room-relative depth plane as its
+          // workstation sprites so lower booth walls can occlude upper bosses.
+          const officeDepthBase = Number.isFinite(office.depthBaseY) ? Number(office.depthBaseY) : 0;
           const shell = new PIXI.Graphics()
             .rect(office.x, office.y, office.width, office.height)
             .fill({ color: 0x1b2b33, alpha: 0.96 })
             .stroke({ color: 0xffcf4d, width: 2, alpha: 0.42 });
-          shell.zIndex = 5;
+          applyFootDepth(shell, office.y, wallHeight, 10, model.tile, officeDepthBase);
           renderer.root.addChild(shell);
           officeNodes.push(shell);
 
           const wall = new PIXI.Graphics()
             .rect(office.x + 2, office.y + 2, Math.max(0, office.width - 4), Math.max(0, wallHeight - 2))
-            .fill({ color: 0xdceefe, alpha: 0.92 });
-          wall.zIndex = 6;
+            .fill({ color: 0xd8d5c6, alpha: 0.98 });
+          applyFootDepth(wall, office.y, wallHeight, 20, model.tile, officeDepthBase);
           renderer.root.addChild(wall);
           officeNodes.push(wall);
 
           const divider = new PIXI.Graphics()
             .rect(office.x + 2, office.y + wallHeight, Math.max(0, office.width - 4), 2)
-            .fill({ color: 0x8ed6ff, alpha: 0.76 });
-          divider.zIndex = 7;
+            .fill({ color: 0x788f87, alpha: 0.94 });
+          applyFootDepth(divider, office.y, wallHeight + 2, 30, model.tile, officeDepthBase);
           renderer.root.addChild(divider);
           officeNodes.push(divider);
 
           const floor = new PIXI.Graphics()
             .rect(office.x + 2, office.y + wallHeight + 2, Math.max(0, office.width - 4), Math.max(0, office.height - wallHeight - 4))
-            .fill({ color: 0x357bb0, alpha: 0.9 });
-          floor.zIndex = 6;
+            .fill({ color: 0x405851, alpha: 0.96 });
+          applyFootDepth(floor, office.y, wallHeight, 12, model.tile, officeDepthBase);
           renderer.root.addChild(floor);
           officeNodes.push(floor);
 
@@ -4643,7 +3228,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           const doorway = new PIXI.Graphics()
             .rect(doorwayX, office.y + office.height - 2, doorwayWidth, 2)
             .fill({ color: 0x0b1b2b, alpha: 1 });
-          doorway.zIndex = 7;
+          applyFootDepth(doorway, office.y, office.height, 14, model.tile, officeDepthBase);
           renderer.root.addChild(doorway);
           officeNodes.push(doorway);
 
@@ -4732,7 +3317,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
               .roundRect(office.x + 4, office.y + 4, Math.max(32, office.badgeLabel.length * 4 + 6), 10, 2)
               .fill({ color: 0x0c1210, alpha: 0.62 })
               .stroke({ color: 0xffffff, width: 1, alpha: 0.14 });
-            badgeBg.zIndex = 11;
+            applyFootDepth(badgeBg, office.y, wallHeight, 880, model.tile, officeDepthBase);
             renderer.root.addChild(badgeBg);
             const badgeText = createPixiText(renderer, office.badgeLabel, {
               fill: 0xf6eed9,
@@ -4741,7 +3326,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
             });
             badgeText.x = office.x + 7;
             badgeText.y = office.y + 5;
-            badgeText.zIndex = 12;
+            applyFootDepth(badgeText, office.y, wallHeight, 890, model.tile, officeDepthBase);
             renderer.root.addChild(badgeText);
             officeNodes.push(badgeBg, badgeText);
           }
@@ -4848,553 +3433,4 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `const stableAgentTileReservatio
           throw error;
         }
       }
-
-      function recentActivitySceneToken(snapshot) {
-        const now = Date.now();
-        return (snapshot.events || [])
-          .filter((event) => {
-            const cue = activityCueForEvent(event);
-            if (!cue) {
-              return false;
-            }
-            const createdAtMs = Date.parse(event.createdAt || "");
-            const durationMs = activityCueDurationMs(cue.mode);
-            return Number.isFinite(createdAtMs)
-              && now - createdAtMs <= durationMs
-              && createdAtMs <= now + ACTIVITY_CUE_MAX_AGE_MS;
-          })
-          .map(eventSnapshotToken)
-          .join("||");
-      }
-
-      function officeSceneInteractionToken(snapshot) {
-        const opened = state.openAgentThread && state.openAgentThread.projectRoot === snapshot.projectRoot
-          ? ["open", state.openAgentThread.threadId].join(":")
-          : "";
-        const closing = state.closingAgentThread && state.closingAgentThread.projectRoot === snapshot.projectRoot
-          ? ["closing", state.closingAgentThread.threadId].join(":")
-          : "";
-        const replyIntents = (snapshot.agents || [])
-          .filter((agent) => hasReplyThreadWorkIntent(agent))
-          .map((agent) => agent.threadId || "")
-          .filter(Boolean)
-          .sort()
-          .join(",");
-        return [opened, closing, replyIntents].join("|");
-      }
-
-      function officeSceneRenderToken(snapshot, options = {}) {
-        return [
-          snapshot.projectRoot,
-          roomsSnapshotToken(snapshot.rooms),
-          sceneSnapshotToken(snapshot),
-          furnitureLayoutOverrideToken(snapshot.projectRoot),
-          recentActivitySceneToken(snapshot),
-          officeSceneInteractionToken(snapshot),
-          options.compact ? "compact" : "wide",
-          options.focusMode ? "focus" : "normal",
-          options.liveOnly ? "live" : "all",
-          typeof officeWallDashboardSceneToken === "function" ? officeWallDashboardSceneToken(snapshot) : ""
-        ].join("::");
-      }
-
-      function scheduleOfficeSceneViewportSync() {
-        if (officeSceneViewportSyncQueued || state.view !== "map" || latestOfficeMapProjects.length === 0) {
-          return;
-        }
-        officeSceneViewportSyncQueued = true;
-        window.requestAnimationFrame(() => {
-          officeSceneViewportSyncQueued = false;
-          if (state.view === "map" && latestOfficeMapProjects.length > 0) {
-            void syncOfficeMapScenes(latestOfficeMapProjects, latestFloatingHermesProjects, { viewportOnly: true });
-          }
-        });
-      }
-
-      async function syncOfficeMapScenes(projects, floatingProjects = null, options = {}) {
-  const assignedRects = new Map(lastHermesAssignedScreenRects);
-  snapshotHermesAssignedScreenRects().forEach((rect, key) => {
-    rememberHermesAssignedRect(assignedRects, key, rect);
-  });
-  cleanupOfficeRenderers();
-  latestOfficeMapProjects = Array.isArray(projects) ? projects : [];
-  if (Array.isArray(floatingProjects)) {
-    latestFloatingHermesProjects = floatingProjects;
-  } else if (latestFloatingHermesProjects.length === 0) {
-    latestFloatingHermesProjects = latestOfficeMapProjects;
-  }
-  for (const host of Array.from(document.querySelectorAll("[data-office-map-host]"))) {
-    if (!(host instanceof HTMLElement)) {
-      continue;
-    }
-    const projectRoot = host.dataset.projectRoot || "";
-    const snapshot = projects.find((project) => project.projectRoot === projectRoot);
-    if (!snapshot) {
-      continue;
-    }
-    const compact = host.dataset.compact === "1";
-    const focusMode = host.dataset.focusMode === "1";
-    const renderer = await ensureOfficeRenderer(host);
-    if (!renderer) {
-      continue;
-    }
-    const model = buildOfficeSceneModel(snapshot, {
-      compact,
-      focusMode,
-      liveOnly: state.activeOnly
-    });
-    if (!model) {
-      continue;
-    }
-    try {
-      const renderToken = officeSceneRenderToken(snapshot, {
-        compact,
-        focusMode,
-        liveOnly: state.activeOnly
-      });
-      if (renderer.sceneRenderToken !== renderToken) {
-        await ensureOfficeSceneAssets(model);
-        if (syncOfficeRendererScene(renderer, model)) {
-          renderer.sceneRenderToken = renderToken;
-        }
-      } else {
-        renderer.model = model;
-        syncOfficeAnchors(renderer, model, renderer.scale || 1);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-          console.error("office scene render failed", {
-            projectRoot,
-            compact,
-            focusMode,
-            message,
-            modelSummary: {
-              rooms: model.rooms.length,
-              wallDashboards: (model.wallDashboards || []).length,
-              tileObjects: model.tileObjects.length,
-              desks: model.desks.length,
-              offices: model.offices.length,
-          recAgents: model.recAgents.length
-        }
-      });
-    }
-  }
-  const activeFloatingHermesKeys = syncFloatingHermesAgents(latestFloatingHermesProjects.length > 0 ? latestFloatingHermesProjects : latestOfficeMapProjects, {
-    assignedRects
-  }) || new Set();
-  spawnHermesAssignedTransferGhosts(assignedRects, latestOfficeMapProjects, activeFloatingHermesKeys, options || {});
-  lastHermesAssignedScreenRects = snapshotHermesAssignedScreenRects();
-}
-
-function focusKeysIntersect(keys, focusedKeys) {
-        return Array.isArray(keys) && keys.some((key) => focusedKeys.has(String(key)));
-      }
-
-      function applyOfficeRendererFocus(renderer) {
-        if (!renderer || !Array.isArray(renderer.focusables)) {
-          return;
-        }
-        const focusedKeys = new Set(state.focusedSessionKeys);
-        const hasFocus = focusedKeys.size > 0;
-        renderer.focusables.forEach((entry) => {
-          const match = !hasFocus || focusKeysIntersect(entry.keys, focusedKeys);
-          entry.nodes.forEach((nodeEntry) => {
-            if (!nodeEntry || !nodeEntry.node) {
-              return;
-            }
-            nodeEntry.node.alpha = match ? nodeEntry.baseAlpha : Math.max(0.18, nodeEntry.baseAlpha * 0.45);
-          });
-        });
-        const hoveredRelationshipBossKey = typeof state.hoveredRelationshipBossKey === "string"
-          ? state.hoveredRelationshipBossKey
-          : "";
-        (Array.isArray(renderer.relationshipLineEntries) ? renderer.relationshipLineEntries : []).forEach((entry) => {
-          const visible = hoveredRelationshipBossKey.length > 0 && entry && entry.bossKey === hoveredRelationshipBossKey;
-          (Array.isArray(entry?.nodes) ? entry.nodes : []).forEach((nodeEntry) => {
-            if (!nodeEntry || !nodeEntry.node) {
-              return;
-            }
-            nodeEntry.node.visible = visible;
-            nodeEntry.node.alpha = visible ? nodeEntry.baseAlpha : 0;
-          });
-        });
-      }
-
-      function applyOfficeRendererFocusAll() {
-        officeSceneRenderers.forEach((renderer) => applyOfficeRendererFocus(renderer));
-      }
-
-      function rendererForHost(host) {
-        if (!(host instanceof HTMLElement)) {
-          return null;
-        }
-        return officeSceneRenderers.get(host.dataset.officeMapHost || "") || null;
-      }
-
-      function furnitureDragRendererForTarget(target, host) {
-        const renderer = rendererForHost(host);
-        if (renderer && renderer.model && Number.isFinite(renderer.scale)) {
-          return renderer;
-        }
-        if (!(host instanceof HTMLElement)) {
-          return null;
-        }
-        const projectRoot = host.dataset.projectRoot || target?.dataset?.projectRoot || "";
-        const snapshot = latestOfficeMapProjects.find((project) => project && project.projectRoot === projectRoot);
-        if (!snapshot) {
-          return null;
-        }
-        const model = buildOfficeSceneModel(snapshot, {
-          compact: host.dataset.compact === "1",
-          focusMode: host.dataset.focusMode === "1",
-          liveOnly: state.activeOnly
-        });
-        if (!model) {
-          return null;
-        }
-        const availableWidth = Math.max(Math.round(host.getBoundingClientRect().width || host.clientWidth || model.width), 1);
-        const fitWidth = Math.max(1, Number(model.fitWidth) || model.width);
-        const scale = Math.min(Math.max(availableWidth / fitWidth, 0.5), 3.5);
-        const scaledWidth = Math.max(1, Math.round(model.width * scale));
-        return {
-          host,
-          model,
-          scale,
-          leftOffset: Math.max(0, Math.round((availableWidth - scaledWidth) / 2))
-        };
-      }
-
-      function canPlaceFurniture(model, movingItem, nextColumn) {
-        const room = model.rooms.find((entry) => entry.id === movingItem.roomId);
-        if (!room) {
-          return false;
-        }
-        const roomWidthTiles = Math.round(room.width / model.tile);
-        if (nextColumn < 0 || nextColumn + movingItem.widthTiles > roomWidthTiles) {
-          return false;
-        }
-        return !model.furniture.some((item) =>
-          item.id !== movingItem.id
-          && item.roomId === movingItem.roomId
-          && rectanglesOverlap({ ...movingItem, column: nextColumn }, item)
-        );
-      }
-
-      function handleFurnitureDragMove(event) {
-        if (!furnitureDragState) {
-          return;
-        }
-        const renderer = furnitureDragState.renderer;
-        if (!renderer || !renderer.model) {
-          return;
-        }
-        const pointerX = event.clientX - furnitureDragState.hostRect.left + (renderer.host.scrollLeft || 0) - (renderer.leftOffset || 0);
-        const nextColumn = Math.round(pointerX / (renderer.scale * renderer.model.tile) - furnitureDragState.pointerOffsetTiles);
-        if (!Number.isFinite(nextColumn) || nextColumn === furnitureDragState.currentColumn) {
-          return;
-        }
-        if (!canPlaceFurniture(renderer.model, furnitureDragState.item, nextColumn)) {
-          return;
-        }
-        furnitureDragState.currentColumn = nextColumn;
-        furnitureDragState.dirty = true;
-        setFurnitureColumnOverride(furnitureDragState.projectRoot, furnitureDragState.item.roomId, furnitureDragState.item.id, nextColumn, { persist: false });
-        render();
-      }
-
-      function stopFurnitureDrag() {
-        if (!furnitureDragState) {
-          return;
-        }
-        window.removeEventListener("pointermove", handleFurnitureDragMove);
-        window.removeEventListener("pointerup", stopFurnitureDrag);
-        window.removeEventListener("pointercancel", stopFurnitureDrag);
-        if (furnitureDragState.dirty) {
-          saveFurnitureLayoutOverrides();
-        }
-        furnitureDragState = null;
-      }
-
-      function renderFleetTerminal(fleet) {
-        const lines = ["$ codex-agents-office fleet", ""];
-        for (const snapshot of fleet.projects) {
-          const counts = countsForSnapshot(snapshot);
-          lines.push(\`PROJECT \${projectLabel(snapshot.projectRoot)}\`);
-          lines.push(\`  total=\${counts.total} active=\${counts.active} waiting=\${counts.waiting} blocked=\${counts.blocked} cloud=\${counts.cloud}\`);
-          if (snapshot.notes.length > 0) {
-            for (const note of snapshot.notes) {
-              lines.push(\`  ! \${note}\`);
-            }
-          }
-          lines.push("");
-        }
-
-        return \`<div class="terminal-shell">\${lines.map((line) => {
-          const className = line.startsWith("$ ") ? "terminal-hot"
-            : line.startsWith("  ! ") ? "terminal-warn"
-            : /^[A-Z]/.test(line) ? "terminal-dim"
-            : "";
-          return \`<div class="\${className}">\${escapeHtml(line)}</div>\`;
-        }).join("")}</div>\`;
-      }
-
-      function agentsNeedingUser(projects) {
-        return projects.flatMap((snapshot) =>
-          snapshot.agents
-            .filter((agent) => agent.needsUser)
-            .map((agent) => ({ snapshot, agent }))
-        ).sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
-      }
-
-      function needsUserActionProjectRoot(snapshot, agent) {
-        if (!snapshot || !agent || !agent.needsUser) {
-          return null;
-        }
-        const isLocalCodex = !agent.network && agent.provenance === "codex" && agent.source === "local";
-        const isTypedClaude = !agent.network && agent.provenance === "claude" && agent.confidence === "typed" && agent.source === "claude";
-        if (!isLocalCodex && !isTypedClaude) {
-          return null;
-        }
-        const preferredRoot = typeof agent.sourceProjectRoot === "string" && agent.sourceProjectRoot.length > 0
-          ? agent.sourceProjectRoot
-          : snapshot.projectRoot;
-        const localRoots = localProjectRootsForSnapshot(snapshot);
-        if (localRoots.includes(preferredRoot)) {
-          return preferredRoot;
-        }
-        return localRoots[0] || preferredRoot;
-      }
-
-      function approvalDecisionEntries(need) {
-        const supported = ["accept", "acceptForSession", "decline", "cancel"];
-        const available = Array.isArray(need && need.availableDecisions)
-          ? need.availableDecisions.filter((decision) => supported.includes(decision))
-          : [];
-        const selected = available.length > 0 ? available : ["accept", "decline", "cancel"];
-        return selected.map((decision) => ({
-          decision,
-          label:
-            decision === "accept" ? "Accept"
-            : decision === "acceptForSession" ? "Always for session"
-            : decision === "decline" ? "Decline"
-            : "Cancel"
-        }));
-      }
-
-      function needsUserActionError(requestId) {
-        const errors = state.needsUserActionErrorsByRequestId;
-        if (!errors || typeof errors !== "object") {
-          return "";
-        }
-        const value = errors[requestId];
-        return typeof value === "string" ? value : "";
-      }
-
-      function needsUserInputDraft(requestId, questionId) {
-        const drafts = state.needsUserInputDrafts;
-        if (!drafts || typeof drafts !== "object") {
-          return { selected: "", other: "" };
-        }
-        const requestDraft = drafts[requestId];
-        if (!requestDraft || typeof requestDraft !== "object") {
-          return { selected: "", other: "" };
-        }
-        const questionDraft = requestDraft[questionId];
-        if (!questionDraft || typeof questionDraft !== "object") {
-          return { selected: "", other: "" };
-        }
-        return {
-          selected: typeof questionDraft.selected === "string" ? questionDraft.selected : "",
-          other: typeof questionDraft.other === "string" ? questionDraft.other : ""
-        };
-      }
-
-      function needsUserInputAnswerValues(question, draft) {
-        const options = Array.isArray(question && question.options) ? question.options : [];
-        const selected = String(draft && draft.selected || "").trim();
-        const other = String(draft && draft.other || "").trim();
-        if (options.length === 0) {
-          return other ? [other] : [];
-        }
-        if (!selected) {
-          return [];
-        }
-        if (selected === "__other__") {
-          return other ? [other] : [];
-        }
-        return [selected];
-      }
-
-      function needsUserInputQuestionLabel(question, questionIndex = 0) {
-        const header = typeof (question && question.header) === "string" ? question.header.trim() : "";
-        return header || "Question " + (questionIndex + 1);
-      }
-
-      function needsUserInputCompletion(need) {
-        const questions = Array.isArray(need && need.questions) ? need.questions : [];
-        let answered = 0;
-        let requiredAnswered = 0;
-        let requiredTotal = 0;
-        const missingRequired = [];
-        questions.forEach((question, questionIndex) => {
-          const hasAnswer = needsUserInputAnswerValues(
-            question,
-            needsUserInputDraft(need.requestId, question.id)
-          ).length > 0;
-          if (hasAnswer) {
-            answered += 1;
-          }
-          if (question.required === false) {
-            return;
-          }
-          requiredTotal += 1;
-          if (hasAnswer) {
-            requiredAnswered += 1;
-            return;
-          }
-          missingRequired.push(needsUserInputQuestionLabel(question, questionIndex));
-        });
-        return {
-          total: questions.length,
-          answered,
-          requiredTotal,
-          requiredAnswered,
-          missingRequired
-        };
-      }
-
-      function needsUserInputReady(need) {
-        const completion = needsUserInputCompletion(need);
-        if (completion.total === 0) {
-          return false;
-        }
-        return completion.missingRequired.length === 0;
-      }
-
-      function needsUserInputSummary(need) {
-        const completion = needsUserInputCompletion(need);
-        if (completion.total === 0) {
-          return "";
-        }
-        if (completion.requiredTotal > 0) {
-          return completion.requiredAnswered + "/" + completion.requiredTotal + " required answered"
-            + (completion.total > completion.requiredTotal
-              ? " · " + completion.answered + "/" + completion.total + " total answered"
-              : "");
-        }
-        return completion.answered + "/" + completion.total + " optional answered";
-      }
-
-      function needsUserInputPendingHint(need) {
-        const completion = needsUserInputCompletion(need);
-        if (completion.missingRequired.length === 0) {
-          return completion.requiredTotal > 0
-            ? "All required questions are answered."
-            : "Optional answers can be left blank.";
-        }
-        if (completion.missingRequired.length === 1) {
-          return "Still needed: " + completion.missingRequired[0];
-        }
-        return completion.missingRequired.length + " required questions still need answers.";
-      }
-
-      function needsUserInputSubmitLabel(need, isPending) {
-        if (isPending) {
-          return "Sending...";
-        }
-        const completion = needsUserInputCompletion(need);
-        if (completion.missingRequired.length === 0) {
-          return "Send";
-        }
-        return "Complete " + completion.missingRequired.length + " required "
-          + (completion.missingRequired.length === 1 ? "question" : "questions");
-      }
-
-      function renderNeedsUserInputQuestion(requestId, question, questionIndex, isPending) {
-        const options = Array.isArray(question && question.options) ? question.options : [];
-        const draft = needsUserInputDraft(requestId, question.id);
-        const selected = String(draft.selected || "");
-        const showOther = options.length === 0 || selected === "__other__";
-        const questionLabel = needsUserInputQuestionLabel(question, questionIndex);
-        const requirementLabel = question.required === false ? "Optional" : "Required";
-        const helperLabel = options.length > 0
-          ? (question.isOther === true ? "Choose one option or use Other." : "Choose one option.")
-          : (question.isSecret === true ? "Enter one value." : "Type your answer.");
-        const hasDraftValue = Boolean(selected || String(draft.other || "").trim());
-        const selectorBase = \`data-needs-user-request-id="\${escapeHtml(requestId)}" data-needs-user-question-id="\${escapeHtml(question.id)}"\`;
-        const optionButtons = options.length > 0
-          ? \`<div class="needs-you-options">\${options.map((option) => {
-              const isSelected = selected === option.label;
-              return \`<button type="button" class="needs-you-option\${isSelected ? " is-selected" : ""}" data-action="select-needs-user-option" \${selectorBase} data-answer="\${escapeHtml(option.label)}" title="\${escapeHtml(option.description || option.label)}"\${isPending ? " disabled" : ""}>\${escapeHtml(option.label)}</button>\`;
-            }).join("")}\${question.isOther === true
-              ? \`<button type="button" class="needs-you-option\${selected === "__other__" ? " is-selected" : ""}" data-action="select-needs-user-option" \${selectorBase} data-answer="__other__"\${isPending ? " disabled" : ""}>Other</button>\`
-              : ""}</div>\`
-          : "";
-        const otherField = showOther
-          ? (question.isSecret === true
-            ? \`<input class="needs-you-field" type="password" \${selectorBase} data-needs-user-text="true" placeholder="Type your answer..."\${isPending ? " disabled" : ""} value="\${escapeHtml(draft.other || "")}" />\`
-            : \`<textarea class="needs-you-field" rows="2" \${selectorBase} data-needs-user-text="true" placeholder="Type your answer..."\${isPending ? " disabled" : ""}>\${escapeHtml(draft.other || "")}</textarea>\`)
-          : "";
-        const clearButton = hasDraftValue
-          ? \`<div class="needs-you-question-actions"><button type="button" data-action="clear-needs-user-answer" \${selectorBase}\${isPending ? " disabled" : ""}>Clear</button></div>\`
-          : "";
-        return \`<div class="needs-you-question"><div class="needs-you-question-head"><strong>\${escapeHtml(questionLabel)}</strong><span>\${escapeHtml(requirementLabel)}</span></div><div class="needs-you-question-text">\${escapeHtml(question.question || questionLabel)}</div><div class="needs-you-question-help">\${escapeHtml(helperLabel)}</div>\${optionButtons}\${otherField}\${clearButton}</div>\`;
-      }
-
-      function renderNeedsAttention(projects) {
-        const entries = agentsNeedingUser(projects);
-        if (entries.length === 0) {
-          return "";
-        }
-
-        const pendingRequestIds = new Set(Array.isArray(state.needsUserActionRequestIds) ? state.needsUserActionRequestIds : []);
-
-        return \`<section class="session-card needs-you-panel"><div class="needs-you-panel-head"><strong>Needs You</strong><span>\${escapeHtml(String(entries.length))}</span></div><div class="needs-you-list">\${entries.map(({ snapshot, agent }) => {
-          const need = agent.needsUser;
-          const scope = normalizeDisplayText(snapshot.projectRoot, need?.command || need?.reason || need?.grantRoot || agent.detail);
-          const actionProjectRoot = needsUserActionProjectRoot(snapshot, agent);
-          const canActOnApproval = Boolean(
-            actionProjectRoot
-            && need
-            && need.kind === "approval"
-            && typeof need.requestId === "string"
-            && need.requestId.length > 0
-          );
-          const canActOnInput = Boolean(
-            actionProjectRoot
-            && need
-            && need.kind === "input"
-            && typeof need.requestId === "string"
-            && need.requestId.length > 0
-            && Array.isArray(need.questions)
-            && need.questions.length > 0
-          );
-          const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
-          const canReplyToInput = Boolean(
-            need
-            && need.kind === "input"
-            && (!Array.isArray(need.questions) || need.questions.length === 0)
-            && replyProjectRoot
-            && agent.threadId
-          );
-          const isPending = Boolean(need && pendingRequestIds.has(need.requestId));
-          const requestError = need ? needsUserActionError(need.requestId) : "";
-          const errorHtml = requestError
-            ? \`<div class="chat-composer-error">\${escapeHtml(requestError)}</div>\`
-            : "";
-          const actionsHtml = canActOnApproval
-            ? \`<div class="needs-you-actions">\${approvalDecisionEntries(need).map(({ decision, label }) =>
-              \`<button type="button" data-action="respond-needs-user" data-project-root="\${escapeHtml(actionProjectRoot)}" data-request-id="\${escapeHtml(need.requestId)}" data-decision="\${escapeHtml(decision)}"\${isPending ? " disabled" : ""}>\${escapeHtml(isPending ? "Sending..." : label)}</button>\`
-            ).join("")}</div>\${errorHtml}\`
-            : canActOnInput
-              ? \`<div class="needs-you-form"><div class="needs-you-summary">\${escapeHtml(needsUserInputSummary(need))}</div>\${need.questions.map((question, questionIndex) =>
-                renderNeedsUserInputQuestion(need.requestId, question, questionIndex, isPending)
-              ).join("")}<div class="needs-you-submit-row"><div class="needs-you-submit-hint">\${escapeHtml(needsUserInputPendingHint(need))}</div><button type="button" class="primary-action" data-action="submit-needs-user-input" data-project-root="\${escapeHtml(actionProjectRoot)}" data-request-id="\${escapeHtml(need.requestId)}"\${isPending || !needsUserInputReady(need) ? " disabled" : ""}>\${escapeHtml(needsUserInputSubmitLabel(need, isPending))}</button></div>\${errorHtml}</div>\`
-            : canReplyToInput
-              ? \`<div class="needs-you-form"><div class="needs-you-actions"><button type="button" data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">\${escapeHtml(replyComposerMatchesThread(replyProjectRoot, agent.threadId) ? "Editing reply..." : "Reply")}</button></div>\${renderReplyComposerForThread(replyProjectRoot, agent.threadId, "Reply to this input...")}\${need?.kind === "input" && agent.resumeCommand ? \`<div class="needs-you-fallback">Terminal fallback: <code>\${escapeHtml(agent.resumeCommand)}</code></div>\` : ""}\${errorHtml}</div>\`
-            : (need?.kind === "input" && agent.resumeCommand
-              ? \`<div class="needs-you-fallback">Reply in Codex: <code>\${escapeHtml(agent.resumeCommand)}</code></div>\`
-              : "");
-          return \`<article class="needs-you-item" data-needs-user-project-root="\${escapeHtml(actionProjectRoot || "")}"><div class="needs-you-item-meta"><span>\${escapeHtml(projectLabel(snapshot.projectRoot))}</span><span>\${escapeHtml(agent.label)}</span><span>\${escapeHtml(need?.kind || "input")}</span></div><div class="needs-you-item-scope">\${escapeHtml(scope)}</div>\${actionsHtml}</article>\`;
-        }).join("")}</div></section>\`;
-      }`;
+`;

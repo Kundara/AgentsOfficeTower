@@ -244,6 +244,42 @@ test("newer Claude SDK hook events are summarized as typed workload states", () 
   assert.equal(postToolBatch.isOngoing, true);
 });
 
+test("Claude MessageDisplay hooks surface typed streaming assistant text", () => {
+  const partial = summariseClaudeHookRecord({
+    sessionId: "claude-message-display",
+    model: "claude-opus-4-8",
+    fallbackCwd: "/workspaces/CodexAgentsOffice",
+    gitBranch: "main",
+    fallbackUpdatedAt: Date.now(),
+    record: {
+      hook_event_name: "MessageDisplay",
+      delta: "Checking the current integration.\n",
+      final: false,
+      timestamp: new Date().toISOString()
+    }
+  });
+  const completed = summariseClaudeHookRecord({
+    sessionId: "claude-message-display",
+    model: "claude-opus-4-8",
+    fallbackCwd: "/workspaces/CodexAgentsOffice",
+    gitBranch: "main",
+    fallbackUpdatedAt: Date.now(),
+    record: {
+      hook_event_name: "MessageDisplay",
+      delta: "",
+      final: true,
+      timestamp: new Date().toISOString()
+    }
+  });
+
+  assert.equal(partial?.state, "thinking");
+  assert.equal(partial?.latestMessage, "Checking the current integration.");
+  assert.equal(partial?.isOngoing, true);
+  assert.equal(completed?.state, "thinking");
+  assert.equal(completed?.detail, "Assistant message displayed");
+  assert.equal(completed?.isOngoing, true);
+});
+
 test("Claude delegation hooks normalize to shared subagent events", () => {
   const now = Date.now();
   const events = buildClaudeSessionEventsForTest({
@@ -852,7 +888,7 @@ test("fresh Claude team active flags can still keep loaded lead sessions running
   });
 });
 
-test("Claude Co-work local agent sessions create workspace floors and read-only agents", async () => {
+test("Claude Home local work sessions create workspace floors and read-only agents", async () => {
   await withTempAppData("claude-cowork-rows-", async () => {
     const now = Date.now();
     const sessions = [
@@ -895,6 +931,8 @@ test("Claude Co-work local agent sessions create workspace floors and read-only 
     assert.equal(agents[0].id, "claude:cowork:local_93d9682b-41c3-4903-a969-9531b87dc7e4");
     assert.equal(agents[0].sourceKind, "claude:cowork:claude-opus-4-7");
     assert.equal(agents[0].threadId, "local_93d9682b-41c3-4903-a969-9531b87dc7e4");
+    assert.equal(agents[0].statusText, "home");
+    assert.equal(agents[0].role, "home work");
     assert.equal(agents[0].state, "thinking");
     assert.equal(agents[0].activityEvent?.type, "fileChange");
     assert.equal(agents[0].goal?.kind, "claudeCowork");

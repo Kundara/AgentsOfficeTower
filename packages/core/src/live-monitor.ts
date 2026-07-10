@@ -14,9 +14,13 @@ import {
 import { listCloudTasks } from "./cloud";
 import { codexGoalToAgentGoal } from "./goal";
 import { canonicalizeProjectPath } from "./project-paths";
+import {
+  turnHasFinalAnswer,
+  turnHasNonFinalWorkSignal,
+  turnHasOpenWorkSignal
+} from "./domain/codex-turn-semantics";
 import { getRoomsFilePath, resolveReadableRoomsFilePath } from "./room-config";
 import {
-  buildDashboardSnapshotFromState,
   filterProjectCloudTasks,
   isOngoingThread,
   isStaleActiveSubagentThread,
@@ -58,6 +62,7 @@ import {
   readRecentRolloutHookEvents
 } from "./live-monitor-lib/rollout-hooks";
 import { RECENT_DONE_GRACE_MS } from "./workload";
+import type { ProjectSnapshotCoordinator } from "./services/project-snapshot-coordinator";
 
 export {
   buildAppServerDiagnosticNote,
@@ -157,59 +162,6 @@ function upsertThreadTurn(thread: CodexThread, turn: CodexThread["turns"][number
   };
 }
 
-const NON_FINAL_WORK_ITEM_TYPES = new Set([
-  "agentMessage",
-  "plan",
-  "reasoning",
-  "commandExecution",
-  "fileChange",
-  "mcpToolCall",
-  "dynamicToolCall",
-  "collabToolCall",
-  "collabAgentToolCall",
-  "webSearch",
-  "imageView",
-  "enteredReviewMode",
-  "exitedReviewMode",
-  "contextCompaction"
-]);
-
-function turnHasFinalAnswer(turn: CodexThread["turns"][number]): boolean {
-  return turn.items.some((item) => {
-    const record = asRecord(item);
-    return asString(record?.type) === "agentMessage" && asString(record?.phase) === "final_answer";
-  });
-}
-
-function turnHasNonFinalWorkSignal(turn: CodexThread["turns"][number]): boolean {
-  return turn.items.some((item) => {
-    const record = asRecord(item);
-    const type = asString(record?.type);
-    if (!type || !NON_FINAL_WORK_ITEM_TYPES.has(type)) {
-      return false;
-    }
-    return type !== "agentMessage" || asString(record?.phase) !== "final_answer";
-  });
-}
-
-function turnHasOpenWorkSignal(turn: CodexThread["turns"][number]): boolean {
-  if (turn.status === "inProgress") {
-    return true;
-  }
-  return turn.items.some((item) => {
-    const record = asRecord(item);
-    const type = asString(record?.type);
-    if (!type || !NON_FINAL_WORK_ITEM_TYPES.has(type)) {
-      return false;
-    }
-    if (type === "agentMessage") {
-      return false;
-    }
-    const status = asString(record?.status);
-    return status !== "completed" && status !== "failed" && status !== "declined";
-  });
-}
-
 function threadStillAwaitsFinalAnswer(thread: CodexThread): boolean {
   if (thread.status.type === "systemError") {
     return false;
@@ -275,6 +227,7 @@ export class ProjectLiveMonitor extends EventEmitter {
   private readonly threads = new Map<string, CodexThread>();
   private readonly threadWatchers = new Map<string, FSWatcher>();
   private readonly threadReadTimers = new Map<string, NodeJS.Timeout>();
+  private readonly threadRefreshGenerations = new Map<string, number>();
   private readonly threadPaths = new Map<string, string>();
   private readonly notes = new Set<string>();
   private roomConfigPath: string;
@@ -288,11 +241,22 @@ export class ProjectLiveMonitor extends EventEmitter {
   private readonly pendingNotLoadedStopTimers = new Map<string, NodeJS.Timeout>();
   private roomWatcher: FSWatcher | null = null;
   private snapshot: DashboardSnapshot | null = null;
+  private snapshotCoordinator: ProjectSnapshotCoordinator | null = null;
+  private snapshotCoordinatorPromise: Promise<ProjectSnapshotCoordinator> | null = null;
   private cloudTasks: CloudTask[] = [];
   private client: CodexAppServerClient | null = null;
   private discoveryTimer: NodeJS.Timeout | null = null;
   private cloudTimer: NodeJS.Timeout | null = null;
   private snapshotTimer: NodeJS.Timeout | null = null;
+  private discoveryPromise: Promise<void> | null = null;
+  private discoveryRequested = 0;
+  private discoveryCompleted = 0;
+  private snapshotRebuildPromise: Promise<void> | null = null;
+  private snapshotRebuildRequested = 0;
+  private snapshotRebuildCompleted = 0;
+  private stopping = false;
+  private stopped = false;
+  private stopPromise: Promise<void> | null = null;
   private recentEvents: DashboardEvent[] = [];
   private unsubscribeNotifications: (() => void) | null = null;
   private unsubscribeServerRequests: (() => void) | null = null;
@@ -312,12 +276,14 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    await this.ensureClient();
+    const coordinator = await this.ensureSnapshotCoordinator();
+    await Promise.all([this.ensureClient(), coordinator.warm()]);
     await this.discoverThreads();
     this.roomConfigPath = await resolveReadableRoomsFilePath(this.projectRoot);
     this.watchRoomsFile();
     this.discoveryTimer = setInterval(() => {
       void this.discoverThreads();
+      void this.refreshSecondarySources();
     }, DISCOVERY_INTERVAL_MS);
 
     if (this.includeCloud) {
@@ -331,10 +297,11 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   async refreshNow(): Promise<void> {
-    if (this.includeCloud) {
-      await this.refreshCloudTasks();
-    }
-    await this.discoverThreads();
+    await Promise.all([
+      this.includeCloud ? this.refreshCloudTasks() : Promise.resolve(),
+      this.discoverThreads(),
+      this.refreshSecondarySources("manual", 0)
+    ]);
     await this.rebuildSnapshot();
   }
 
@@ -475,7 +442,15 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.scheduleSnapshot();
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (!this.stopPromise) {
+      this.stopPromise = this.performStop();
+    }
+    return this.stopPromise;
+  }
+
+  private async performStop(): Promise<void> {
+    this.stopping = true;
     if (this.discoveryTimer) {
       clearInterval(this.discoveryTimer);
     }
@@ -493,6 +468,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       clearTimeout(timer);
     }
     this.threadReadTimers.clear();
+    this.threadRefreshGenerations.clear();
     for (const timer of this.threadRemovalTimers.values()) {
       clearTimeout(timer);
     }
@@ -516,11 +492,28 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.unsubscribeServerRequests = null;
     this.client?.close();
     this.client = null;
+    await this.discoveryPromise?.catch(() => undefined);
+    await this.snapshotRebuildPromise?.catch((error) => {
+      if (!this.stopping && !this.stopped) {
+        throw error;
+      }
+    });
+    const coordinator = this.snapshotCoordinator
+      ?? await this.snapshotCoordinatorPromise?.catch(() => null)
+      ?? null;
+    await coordinator?.dispose();
+    this.snapshotCoordinator = null;
+    this.snapshotCoordinatorPromise = null;
     this.ongoingThreadIds.clear();
     this.subscribedThreadIds.clear();
+    this.stopped = true;
+    this.stopping = false;
   }
 
   private async ensureClient(): Promise<void> {
+    if (this.stopping || this.stopped) {
+      return;
+    }
     if (this.client) {
       return;
     }
@@ -567,7 +560,36 @@ export class ProjectLiveMonitor extends EventEmitter {
     );
   }
 
-  private async discoverThreads(): Promise<void> {
+  private discoverThreads(): Promise<void> {
+    if (this.stopping || this.stopped) {
+      return Promise.resolve();
+    }
+    this.discoveryRequested += 1;
+    if (!this.discoveryPromise) {
+      const pump = this.runDiscoveryPump();
+      this.discoveryPromise = pump.finally(() => {
+        this.discoveryPromise = null;
+      });
+    }
+    return this.discoveryPromise;
+  }
+
+  private async runDiscoveryPump(): Promise<void> {
+    while (this.discoveryCompleted < this.discoveryRequested) {
+      if (this.stopping || this.stopped) {
+        this.discoveryCompleted = this.discoveryRequested;
+        return;
+      }
+      const targetGeneration = this.discoveryRequested;
+      await this.performThreadDiscovery();
+      this.discoveryCompleted = targetGeneration;
+    }
+  }
+
+  private async performThreadDiscovery(): Promise<void> {
+    if (this.stopping || this.stopped) {
+      return;
+    }
     await this.ensureClient();
     if (!this.client) {
       return;
@@ -579,6 +601,9 @@ export class ProjectLiveMonitor extends EventEmitter {
         projectRoot: this.projectRoot,
         localLimit: this.localLimit
       });
+      if (this.stopping || this.stopped) {
+        return;
+      }
       if (query.usedUnscopedFallback) {
         this.addNote("Local Codex cwd filter returned no project threads; used unscoped Windows path fallback.");
       } else {
@@ -696,6 +721,9 @@ export class ProjectLiveMonitor extends EventEmitter {
       this.scheduleThreadSubscriptions();
       this.scheduleSnapshot();
     } catch (error) {
+      if (this.stopping || this.stopped) {
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.addNote(`Local Codex app-server unavailable: ${message}`);
       this.client?.close();
@@ -706,6 +734,9 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   private scheduleThreadSubscriptions(): void {
+    if (this.stopping || this.stopped) {
+      return;
+    }
     if (this.subscriptionSyncPromise) {
       this.subscriptionSyncQueued = true;
       return;
@@ -1129,6 +1160,8 @@ export class ProjectLiveMonitor extends EventEmitter {
     if (!this.client) {
       return;
     }
+    const refreshGeneration = (this.threadRefreshGenerations.get(threadId) ?? 0) + 1;
+    this.threadRefreshGenerations.set(threadId, refreshGeneration);
 
     try {
       const wasHydrated = this.hydratedThreadIds.has(threadId);
@@ -1146,12 +1179,19 @@ export class ProjectLiveMonitor extends EventEmitter {
         }
         readThread = listedThread;
       }
-      const thread = listedThread
+      if (this.threadRefreshGenerations.get(threadId) !== refreshGeneration) {
+        return;
+      }
+      // A file-watch reread may arrive immediately after thread/list hydration.
+      // Preserve the freshest known list metadata instead of letting an older
+      // thread/read payload move the workload backwards in time.
+      const freshestKnownThread = listedThread ?? previousThread;
+      const thread = freshestKnownThread
         ? {
           ...readThread,
-          status: listedThread.status,
-          updatedAt: Math.max(readThread.updatedAt, listedThread.updatedAt),
-          path: listedThread.path ?? readThread.path
+          status: listedThread ? listedThread.status : readThread.status,
+          updatedAt: Math.max(readThread.updatedAt, freshestKnownThread.updatedAt),
+          path: freshestKnownThread.path ?? readThread.path
         }
         : readThread;
       this.clearMatchingNote(`Thread refresh failed (${threadId.slice(0, 8)}):`);
@@ -1285,6 +1325,9 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   private scheduleSnapshot(): void {
+    if (this.stopping || this.stopped) {
+      return;
+    }
     if (this.snapshotTimer) {
       clearTimeout(this.snapshotTimer);
     }
@@ -1296,14 +1339,48 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   private async rebuildSnapshot(): Promise<void> {
+    if (this.stopping || this.stopped) {
+      return;
+    }
     this.snapshotTimer = null;
+    this.snapshotRebuildRequested += 1;
+    if (!this.snapshotRebuildPromise) {
+      const pump = this.runSnapshotRebuildPump();
+      this.snapshotRebuildPromise = pump.finally(() => {
+        this.snapshotRebuildPromise = null;
+      });
+    }
+    await this.snapshotRebuildPromise;
+  }
+
+  private async runSnapshotRebuildPump(): Promise<void> {
+    while (this.snapshotRebuildCompleted < this.snapshotRebuildRequested) {
+      if (this.stopping || this.stopped) {
+        this.snapshotRebuildCompleted = this.snapshotRebuildRequested;
+        return;
+      }
+      const targetGeneration = this.snapshotRebuildRequested;
+      try {
+        await this.assembleLatestSnapshot(targetGeneration);
+      } catch (error) {
+        if (this.stopping || this.stopped) {
+          this.snapshotRebuildCompleted = this.snapshotRebuildRequested;
+          return;
+        }
+        throw error;
+      }
+      this.snapshotRebuildCompleted = targetGeneration;
+    }
+  }
+
+  private async assembleLatestSnapshot(targetGeneration: number): Promise<void> {
     const needsUserByThreadId = new Map<string, NeedsUserState>();
     for (const pending of this.pendingUserRequests.values()) {
       needsUserByThreadId.set(pending.threadId, pending);
     }
 
-    this.snapshot = await buildDashboardSnapshotFromState({
-      projectRoot: this.projectRoot,
+    const coordinator = await this.ensureSnapshotCoordinator();
+    const snapshot = await coordinator.buildSnapshot({
       threads: Array.from(this.threads.values()),
       cloudTasks: this.cloudTasks,
       events: this.recentEvents,
@@ -1314,7 +1391,53 @@ export class ProjectLiveMonitor extends EventEmitter {
       stoppedAtByThreadId: this.stoppedAtByThreadId,
       ongoingThreadIds: this.ongoingThreadIds
     });
-    this.emit("snapshot", this.snapshot);
+    if (snapshot && targetGeneration === this.snapshotRebuildRequested) {
+      this.snapshot = snapshot;
+      this.emit("snapshot", snapshot);
+    }
+  }
+
+  private async ensureSnapshotCoordinator(): Promise<ProjectSnapshotCoordinator> {
+    if (this.stopping || this.stopped) {
+      throw new Error("ProjectLiveMonitor has been stopped.");
+    }
+    if (this.snapshotCoordinator) {
+      return this.snapshotCoordinator;
+    }
+    if (!this.snapshotCoordinatorPromise) {
+      this.snapshotCoordinatorPromise = import("./snapshot").then(async ({ createProjectSnapshotCoordinator }) => {
+        const coordinator = await createProjectSnapshotCoordinator({
+          projectRoot: this.projectRoot,
+          localLimit: this.localLimit,
+          includeManagedCloud: false
+        });
+        this.snapshotCoordinator = coordinator;
+        return coordinator;
+      });
+    }
+    return this.snapshotCoordinatorPromise;
+  }
+
+  private async refreshSecondarySources(
+    reason: "manual" | "interval" = "interval",
+    minimumAgeMs = DISCOVERY_INTERVAL_MS
+  ): Promise<void> {
+    if (this.stopping || this.stopped) {
+      return;
+    }
+    try {
+      const coordinator = await this.ensureSnapshotCoordinator();
+      if (this.stopping || this.stopped) {
+        return;
+      }
+      if (await coordinator.refreshIfStale(reason, minimumAgeMs)) {
+        this.scheduleSnapshot();
+      }
+    } catch (error) {
+      if (!this.stopping && !this.stopped) {
+        throw error;
+      }
+    }
   }
 
   private markThreadLive(threadId: string): void {

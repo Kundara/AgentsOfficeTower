@@ -1,10 +1,13 @@
 import { resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import { projectPathIdentityKey } from "@codex-agents-office/core";
+
 import { readJsonBody, notFound, sendAbsoluteFileAsset, sendHtml, sendJson, sendProjectFile, sendStaticAsset } from "../http-helpers";
 import { buildServerMeta } from "./server-metadata";
 import { renderHtml } from "../render/render-html";
 import { renderIconAuditHtml } from "../render/render-icon-audit-html";
+import { renderLayoutAuditHtml } from "../render/render-layout-audit-html";
 import { renderSceneEffectsAuditHtml } from "../render/render-scene-effects-audit-html";
 import { renderWideOfficeAuditHtml } from "../render/render-wide-office-audit-html";
 import { renderZOrderAuditHtml } from "../render/render-z-order-audit-html";
@@ -28,6 +31,15 @@ const PARTYSOCKET_BROWSER_DIR = resolve(__dirname, "../../../../node_modules/par
 const CLIENT_BUNDLE_DIR = resolve(__dirname, "../client");
 const WEB_CLI_TEAM_FLEET_MAX_BYTES = 2 * 1024 * 1024;
 const WEB_CLI_CACHE_HEADER = "x-agents-office-web-cli-cache";
+const LOOPBACK_MUTATION_PATHS = new Set([
+  "/api/settings/integrations",
+  "/api/appearance/cycle",
+  "/api/needs-user/respond",
+  "/api/needs-user/answer",
+  "/api/thread/reply",
+  "/api/rooms/scaffold",
+  "/api/refresh"
+]);
 
 function requestMethod(context: RequestContext): string {
   return context.request.method ?? "GET";
@@ -94,6 +106,24 @@ function requestOriginMatchesHost(context: RequestContext): boolean {
   const originHost = normalizeOriginHost(origin);
   const requestHost = firstHeader(context.request.headers.host)?.toLowerCase() ?? null;
   return Boolean(originHost && requestHost && originHost === requestHost);
+}
+
+function rejectUnsafeMutationRequest(context: RequestContext): boolean {
+  if (!matchesMethod(context, "POST") || !LOOPBACK_MUTATION_PATHS.has(context.url.pathname)) {
+    return false;
+  }
+
+  if (!isLoopbackWebCliRequest(context)) {
+    sendJson(context.response, 403, { error: "state-changing requests are only accepted from loopback clients" });
+    return true;
+  }
+
+  if (!requestOriginMatchesHost(context)) {
+    sendJson(context.response, 403, { error: "origin does not match this Agents Office server" });
+    return true;
+  }
+
+  return false;
 }
 
 function parseWebCliCommand(value: string | null): WebCliCommand | null {
@@ -316,6 +346,24 @@ async function handleWideOfficeAuditRoute(context: RequestContext): Promise<bool
   return true;
 }
 
+async function handleLayoutAuditRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET", "HEAD") || context.url.pathname !== "/layout-audit") {
+    return false;
+  }
+
+  if (requestMethod(context) === "HEAD") {
+    context.response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    context.response.end();
+    return true;
+  }
+
+  sendHtml(context.response, renderLayoutAuditHtml());
+  return true;
+}
+
 async function handleFleetRoute(context: RequestContext): Promise<boolean> {
   if (!matchesMethod(context, "GET") || context.url.pathname !== "/api/fleet") {
     return false;
@@ -523,7 +571,16 @@ async function handleProjectFileRoute(context: RequestContext): Promise<boolean>
     return true;
   }
 
-  await sendProjectFile(context.response, projectRoot, filePath, requestMethod(context));
+  const requestedIdentity = projectPathIdentityKey(projectRoot);
+  const matchedProject = requestedIdentity
+    ? context.service.getCurrentProjects().find((project) => projectPathIdentityKey(project.root) === requestedIdentity)
+    : undefined;
+  if (!matchedProject) {
+    notFound(context.response);
+    return true;
+  }
+
+  await sendProjectFile(context.response, matchedProject.root, filePath, requestMethod(context));
   return true;
 }
 
@@ -675,6 +732,7 @@ const ROUTES: RouteHandler[] = [
   handleIconAuditRoute,
   handleSceneEffectsAuditRoute,
   handleWideOfficeAuditRoute,
+  handleLayoutAuditRoute,
   handleZOrderAuditRoute,
   handleFleetRoute,
   handleServerMetaRoute,
@@ -706,6 +764,10 @@ export async function handleRequest(
     options,
     service
   };
+
+  if (rejectUnsafeMutationRequest(context)) {
+    return;
+  }
 
   for (const route of ROUTES) {
     if (await route(context)) {

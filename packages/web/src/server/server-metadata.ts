@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
 
-import type { DashboardSnapshot } from "@codex-agents-office/core";
+import type { DashboardAgent, DashboardSnapshot } from "@codex-agents-office/core";
 
 import type { FleetResponse, MultiplayerStatus, ProjectDescriptor, ServerMeta, ServerOptions } from "./server-types";
 
@@ -37,10 +37,12 @@ function createStartupSnapshot(project: ProjectDescriptor): DashboardSnapshot {
 
 export function buildFleetResponse(
   projects: ProjectDescriptor[],
-  snapshotsByRoot: Map<string, DashboardSnapshot>
+  snapshotsByRoot: Map<string, DashboardSnapshot>,
+  accountAgents: DashboardAgent[] = []
 ): FleetResponse {
   return {
     generatedAt: new Date().toISOString(),
+    accountAgents,
     projects: projects.map((project) => {
       const snapshot = snapshotsByRoot.get(project.root);
       return snapshot ?? createStartupSnapshot(project);

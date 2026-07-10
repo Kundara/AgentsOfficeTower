@@ -1222,7 +1222,7 @@ function normalizeClaudeCoworkSpaces(value: unknown, fallbackUpdatedAt: number):
       continue;
     }
 
-    const name = stringValue(space, "name") ?? "Claude Cowork";
+    const name = stringValue(space, "name") ?? "Claude Home";
     const updatedAt = Math.max(
       fallbackUpdatedAt,
       numberValue(space, "updatedAt", "updated_at") ?? 0,
@@ -2211,6 +2211,36 @@ export function summariseClaudeHookRecord(input: {
       needsUser: null,
       latestMessage: message,
       isOngoing: state !== "blocked"
+    };
+  }
+
+  if (hookEventName === "MessageDisplay") {
+    const delta = stringValue(input.record, "delta") ?? "";
+    const final = booleanValue(input.record, "final", false);
+    const detail = delta.trim() || (final ? "Assistant message displayed" : "Claude is responding");
+    return {
+      label: labelFromModel(input.model, input.sessionId),
+      sourceKind: sourceKindFromModel(input.model),
+      state: "thinking",
+      detail: shorten(detail, 88),
+      updatedAt,
+      paths: [cwd],
+      activityEvent: delta.trim()
+        ? {
+            type: "agentMessage",
+            action: "said",
+            path: cwd,
+            title: shorten(delta, 88),
+            isImage: false
+          }
+        : null,
+      gitBranch: input.gitBranch,
+      confidence: "typed",
+      needsUser: null,
+      latestMessage: delta.trim() || null,
+      // `final` ends this displayed assistant message, not the Claude turn.
+      // Stop/StopFailure/SessionEnd remain the lifecycle signals that settle work.
+      isOngoing: true
     };
   }
 
@@ -3648,7 +3678,7 @@ function claudeCoworkState(session: ClaudeCoworkSession, now = Date.now()): Acti
 }
 
 function claudeCoworkDetail(session: ClaudeCoworkSession): string {
-  return shorten(session.title ?? session.initialMessage ?? "Claude Cowork session", 88);
+  return shorten(session.title ?? session.initialMessage ?? "Claude Home work session", 88);
 }
 
 function claudeCoworkActivityEvent(session: ClaudeCoworkSession, projectRoot: string): AgentActivityEvent | null {
@@ -3678,15 +3708,15 @@ async function claudeAgentFromCoworkSession(input: {
 
   return {
     id,
-    label: input.session.title ?? "Claude Cowork",
+    label: input.session.title ?? "Claude Home",
     source: "claude",
     sourceKind: input.session.model ? `claude:cowork:${input.session.model}` : "claude:cowork",
     parentThreadId: null,
     depth: 0,
     isCurrent: false,
     isOngoing,
-    statusText: "cowork",
-    role: "cowork",
+    statusText: "home",
+    role: "home work",
     nickname: null,
     isSubagent: false,
     state,

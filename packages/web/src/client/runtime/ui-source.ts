@@ -1,29 +1,105 @@
-export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot) {
+export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) {
+        if (agent && agent.needsUser) {
+          return { key: "needs-you", label: "Needs you" };
+        }
+        const key = String(agent && agent.state ? agent.state : "idle")
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "idle";
+        return { key, label: titleCaseWords(agent && agent.state ? agent.state : "idle") || "Idle" };
+      }
+
+      function sessionDomKey(snapshot, agent) {
+        if (agent && agent.conversationKey) {
+          return JSON.stringify(["conversation", agent.conversationKey]);
+        }
+        return JSON.stringify([
+          agent.sourceProjectRoot || snapshot.projectRoot || "",
+          agent.threadId || agent.sourceAgentId || agent.id || ""
+        ]);
+      }
+
+      function renderSessionCard(snapshot, agent, description) {
+        const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
+        const appearanceAgentId = agent.sourceAgentId || agent.id;
+        const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
+        const title = displayAgentLabel(snapshot, agent);
+        const replyAction = replyProjectRoot
+          ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
+          : "";
+        const appearanceAction = agent.network || agent.accountObserved === true || !appearanceProjectRoot
+          ? ""
+          : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
+        const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
+        const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
+        const state = sessionCardState(agent);
+        const sessionKey = sessionDomKey(snapshot, agent);
+        const actions = cardActions
+          ? \`<div class="card-actions session-card-actions" aria-label="Session actions">\${cardActions}</div>\`
+          : "";
+        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(state.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + state.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(state.label)}</span></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
+      }
+
+      function isLiveSessionAgent(agent) {
+        return Boolean(agent && isBusyAgent(agent));
+      }
+
+      function renderSessionGroup(label, key, entries, renderEntry) {
+        const titleId = \`session-group-\${key}-title\`;
+        const cards = entries.map(renderEntry).join("");
+        const empty = cards
+          ? ""
+          : \`<div class="session-group-empty" role="listitem">None right now</div>\`;
+        return \`<section class="session-group session-group-\${key}" role="group" aria-labelledby="\${titleId}"><div class="session-group-header"><h3 id="\${titleId}">\${escapeHtml(label)}</h3><span aria-label="\${escapeHtml(String(entries.length) + " " + label.toLowerCase() + " sessions")}">\${escapeHtml(String(entries.length))}</span></div><div class="session-group-items" role="list">\${cards}\${empty}</div></section>\`;
+      }
+
+      function sessionHierarchy(entries) {
+        const sorted = [...entries].sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
+        const needsYou = sorted.filter(({ agent }) => Boolean(agent.needsUser));
+        const active = sorted.filter(({ agent }) => !agent.needsUser && isLiveSessionAgent(agent));
+        const recent = sorted
+          .filter(({ agent }) => !agent.needsUser && !isLiveSessionAgent(agent))
+          .slice(0, SESSION_RECENT_LEAD_LIMIT);
+        return { needsYou, active, recent };
+      }
+
+      function sessionHierarchySummary(projects) {
+        const entries = projects.flatMap((snapshot) =>
+          snapshot.agents.map((agent) => ({ snapshot, agent }))
+        );
+        const hierarchy = sessionHierarchy(entries);
+        return [
+          hierarchy.needsYou.length > 0 ? \`\${hierarchy.needsYou.length} Needs You\` : "",
+          \`\${hierarchy.active.length} active\`,
+          \`\${hierarchy.recent.length} recent\`
+        ].filter(Boolean).join(" · ");
+      }
+
+      function renderSessionHierarchy(projects, entries, renderEntry) {
+        const { needsYou, active, recent } = sessionHierarchy(entries);
+        const needsYouHtml = needsYou.length > 0
+          ? \`<section class="session-group session-group-needs" role="group" aria-label="Needs You, \${escapeHtml(String(needsYou.length))} sessions">\${renderNeedsAttention(projects)}</section>\`
+          : "";
+        return needsYouHtml
+          + renderSessionGroup("Active", "active", active, renderEntry)
+          + renderSessionGroup("Recent", "recent", recent, renderEntry);
+      }
+
+      function renderSessions(snapshot) {
         if (!snapshot || snapshot.agents.length === 0) {
           return '<div class="empty">No live or recent lead sessions in the selected workspace right now.</div>';
         }
 
-        const sorted = [...snapshot.agents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        return renderNeedsAttention([snapshot]) + sorted.map((agent) => {
-          const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
-          const appearanceAgentId = agent.sourceAgentId || agent.id;
-          const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
-          const title = displayAgentLabel(snapshot, agent);
-          const replyAction = replyProjectRoot
-            ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
-            : "";
-          const appearanceAction = agent.network
-            ? ""
-            : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
-          const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
-          const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
-          const description = normalizeDisplayText(snapshot.projectRoot, agent.detail)
-            || latestAgentMessage(snapshot.projectRoot, agent)
+        const entries = snapshot.agents.map((agent) => ({ snapshot, agent }));
+        return renderSessionHierarchy([snapshot], entries, ({ snapshot: entrySnapshot, agent }) => {
+          const description = normalizeDisplayText(entrySnapshot.projectRoot, agent.detail)
+            || latestAgentMessage(entrySnapshot.projectRoot, agent)
             || \`[\${agent.state}]\`;
           const sourceLabel = agentNetworkLabel(agent);
           const fullDescription = sourceLabel ? \`\${sourceLabel} · \${description}\` : description;
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(title)}</strong><div class="card-actions">\${cardActions}</div></div><div class="muted session-card-description" title="\${escapeHtml(fullDescription)}">\${escapeHtml(fullDescription)}</div>\${renderReplyComposer(snapshot, agent)}</article>\`;
-        }).join("");
+          return renderSessionCard(entrySnapshot, agent, fullDescription);
+        });
       }
 
       function findReplyThreadEntry(projectRoot, threadId) {
@@ -293,27 +369,14 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
           return '<div class="empty">No live or recent lead sessions across the tracked workspaces right now.</div>';
         }
 
-        entries.sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
-        return renderNeedsAttention(projects) + entries.map(({ snapshot, agent }) => {
-          const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
-          const appearanceAgentId = agent.sourceAgentId || agent.id;
-          const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
-          const title = displayAgentLabel(snapshot, agent);
-          const replyAction = replyProjectRoot
-            ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
-            : "";
-          const appearanceAction = agent.network
-            ? ""
-            : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
-          const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
-          const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
+        return renderSessionHierarchy(projects, entries, ({ snapshot, agent }) => {
           const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail)
             || latestAgentMessage(snapshot.projectRoot, agent)
             || \`[\${agent.state}]\`;
           const sourceLabel = agentNetworkLabel(agent);
           const description = projectLabel(snapshot.projectRoot) + " · " + (sourceLabel ? sourceLabel + " · " : "") + detail;
-          return \`<article class="session-card" tabindex="0" data-focus-keys="\${focusKeys}"><div class="session-card-header"><strong class="session-card-title">\${escapeHtml(title)}</strong><div class="card-actions">\${cardActions}</div></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${renderReplyComposer(snapshot, agent)}</article>\`;
-        }).join("");
+          return renderSessionCard(snapshot, agent, description);
+        });
       }
 
       function applySessionFocus() {
@@ -546,45 +609,16 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         });
       }
 
-      function officeMapHorizontalWheelTarget(target) {
-        if (!(target instanceof Element)) {
-          return null;
-        }
-        const host = target.closest("[data-office-map-host]");
-        return host instanceof HTMLElement ? host : null;
-      }
-
-      function wheelDeltaPixels(event) {
-        const unit = event.deltaMode === 1
-          ? 16
-          : event.deltaMode === 2
-            ? Math.max(window.innerHeight || 0, 1)
-            : 1;
-        const dominantDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
-          ? event.deltaX
-          : event.deltaY;
-        return dominantDelta * unit;
-      }
-
-      function officeMapHorizontalMaxScrollLeft(host) {
-        const canvas = host.querySelector("[data-office-map-canvas]");
-        const canvasWidth = canvas instanceof HTMLElement
-          ? Math.max(
-            Number.parseFloat(canvas.style.width || ""),
-            canvas.getBoundingClientRect().width,
-            canvas.scrollWidth
-          )
-          : 0;
-        const scrollWidth = Math.max(canvasWidth || 0, host.clientWidth);
-        return Math.max(0, Math.round(scrollWidth - host.clientWidth));
-      }
-
       function handleOfficeMapHorizontalWheel(event) {
         if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target)) {
           return;
         }
         const host = officeMapHorizontalWheelTarget(event.target);
         if (!(host instanceof HTMLElement)) {
+          return;
+        }
+        const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY);
+        if (!horizontalIntent) {
           return;
         }
         const maxScrollLeft = officeMapHorizontalMaxScrollLeft(host);
@@ -855,13 +889,18 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         }
 
         const preserveScroll = options.preserveScroll === true;
+        const preserveFocus = options.preserveFocus === true;
         const scrollTop = preserveScroll ? element.scrollTop : 0;
         const scrollLeft = preserveScroll ? element.scrollLeft : 0;
+        const focusSnapshot = preserveFocus ? captureSessionFocus(element) : null;
         element.innerHTML = html;
         element.dataset.renderHtml = html;
         if (preserveScroll) {
           element.scrollTop = scrollTop;
           element.scrollLeft = scrollLeft;
+        }
+        if (preserveFocus) {
+          restoreSessionFocus(element, focusSnapshot);
         }
         return true;
       }
@@ -875,12 +914,12 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
 
       function renderHeroSummary(counts) {
         return [
-          ["Agents", counts.total, "primary"],
-          ["Active", counts.active, "is-active"],
-          ["Waiting", counts.waiting, "is-waiting"],
-          ["Blocked", counts.blocked, "is-blocked"],
-          ["Cloud", counts.cloud, "is-cloud"]
-        ].map(([label, value, className]) =>
+          ["Agents", counts.total, "primary", true],
+          ["Active", counts.active, "is-active", true],
+          ["Waiting", counts.waiting, "is-waiting", counts.waiting > 0],
+          ["Blocked", counts.blocked, "is-blocked", counts.blocked > 0],
+          ["Cloud", counts.cloud, "is-cloud", counts.cloud > 0]
+        ].filter(([, , , visible]) => visible).map(([label, value, className]) =>
           \`<span class="hero-summary-item \${className}"><strong>\${value}</strong><span>\${label}</span></span>\`
         ).join("");
       }
@@ -911,9 +950,8 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         }
         const rawProjects = visibleProjects(fleet);
         const floorProjects = mergeWorktreeProjects(rawProjects);
-        const selectableProjects = Boolean(state.globalSceneSettings && state.globalSceneSettings.splitWorktrees)
-          ? rawProjects
-          : floorProjects;
+        const selectableProjects = state.globalSceneSettings?.splitWorktrees ? rawProjects : floorProjects;
+        const street = partitionStreetCafeProjects(floorProjects, fleet.accountAgents);
         const selectedSnapshot = currentSnapshot(selectableProjects);
         if (
           selectedSnapshot
@@ -923,10 +961,10 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
           state.selected = selectedSnapshot.projectRoot;
           syncUrl();
         }
-        const towerProjects = state.selected === "all" ? floorProjects : selectableProjects;
+        const towerProjects=state.selected === "all" ? [...street.workspaceProjects, street.cafeSnapshot] : selectableProjects;
         updateRecentLeadReservations(towerProjects);
         const displayedProjects = towerProjects.map((project) => viewSnapshot(project, SCENE_RECENT_LEAD_LIMIT));
-        const sessionProjects = towerProjects.map((project) => viewSessionSnapshot(project, SESSION_RECENT_LEAD_LIMIT));
+        const sessions=(state.selected === "all" ? [...street.workspaceProjects, street.cafeSnapshot] : towerProjects).map((project) => viewSessionSnapshot(project, SESSION_RECENT_LEAD_LIMIT));
         const snapshot = selectedSnapshot
           ? viewSnapshot(selectedSnapshot, SCENE_RECENT_LEAD_LIMIT, selectableProjects)
           : null;
@@ -939,7 +977,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         }
         syncLiveAgentState(snapshot ? [snapshot] : displayedProjects);
         sceneStateDraft = null;
-        const counts = fleetCounts({ projects: sessionProjects });
+        const counts=fleetCounts({ projects: sessions });
         const nextSceneToken = state.view === "map"
           ? (snapshot
             ? \`project-shell::\${snapshot.projectRoot}::\${state.workspaceFullscreen ? "focus" : "default"}\`
@@ -948,10 +986,15 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
             ? \`project::\${sceneSnapshotToken(snapshot)}\`
             : \`fleet::\${displayedProjects.map(sceneSnapshotToken).join("||")}\`);
 
-        setTextIfChanged(stamp, \`Updated \${fleet.generatedAt}\`);
-        setTextIfChanged(projectCount, \`\${fleet.projects.length} tracked · \${floorProjects.length} floors · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live · \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`);
+        const generatedAtDate = new Date(fleet.generatedAt);
+        setTextIfChanged(stamp, Number.isNaN(generatedAtDate.getTime())
+          ? \`Updated \${fleet.generatedAt}\`
+          : \`Updated \${generatedAtDate.toLocaleTimeString([], { hour12: false })}\`);
+        setTextIfChanged(projectCount, \`\${towerProjects.length} floors · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live\`);
         mapViewButton.classList.toggle("active", state.view === "map");
         terminalViewButton.classList.toggle("active", state.view === "terminal");
+        mapViewButton.setAttribute("aria-pressed", state.view === "map" ? "true" : "false");
+        terminalViewButton.setAttribute("aria-pressed", state.view === "terminal" ? "true" : "false");
         setConnection(state.connection);
         rememberVisibleRecentLeads(displayedProjects);
         syncWorkspaceFullscreenUi();
@@ -965,12 +1008,12 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
         setHtmlIfChanged(heroSummary, renderHeroSummary(counts));
 
         setHtmlIfChanged(projectTabs, [
-          \`<button class="project-tab\${state.selected === "all" ? " active" : ""}" data-action="select-project" data-project-root="all">All</button>\`,
+          \`<button class="project-tab\${state.selected === "all" ? " active" : ""}" data-action="select-project" data-project-root="all"\${state.selected === "all" ? ' aria-current="page"' : ""}>All</button>\`,
           ...selectableProjects.map((project) => {
             const counts = countsForSnapshot(project);
             const activeClass = snapshotMatchesProjectRoot(project, state.selected) ? " active" : "";
             const badge = counts.active;
-            return \`<button class="project-tab\${activeClass}" data-action="select-project" data-project-root="\${escapeHtml(project.projectRoot)}" title="\${escapeHtml(project.projectRoot)}">\${escapeHtml(projectLabel(project.projectRoot))} <span class="muted">\${badge}</span></button>\`;
+            return \`<button class="project-tab\${activeClass}" data-action="select-project" data-project-root="\${escapeHtml(project.projectRoot)}" title="\${escapeHtml(project.projectRoot)}"\${activeClass ? ' aria-current="page"' : ""}>\${escapeHtml(projectLabel(project.projectRoot))} <span class="muted">\${badge}</span></button>\`;
           })
         ].join(""));
 
@@ -983,9 +1026,9 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
             if (shouldRenderScene) {
               lastSceneRenderToken = nextSceneToken;
             }
-            setHtmlIfChanged(sessionList, renderFleetSessions(sessionProjects), { preserveScroll: true });
+            setHtmlIfChanged(sessionList, renderFleetSessions(sessions), { preserveScroll: true, preserveFocus: true });
             setTextIfChanged(centerTitle, "All Workspaces");
-            setTextIfChanged(roomsPath, \`Live agents on the floor plus \${SESSION_RECENT_LEAD_LIMIT} recent sessions in the panel across tracked workspaces\`);
+            setTextIfChanged(roomsPath, sessionHierarchySummary(sessions));
             if (centerChanged) {
               fitScenes();
             }
@@ -1009,14 +1052,14 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
               centerContent,
               state.view === "terminal"
                 ? renderTerminalSnapshot(snapshot)
-                : \`<div class="workspace-tower workspace-tower-single">\${renderWorkspaceFloor(snapshot, {
+                : renderWorkspaceTower(renderWorkspaceFloor(snapshot, {
                   compact: true,
                   focusMode: state.workspaceFullscreen,
                   action: {
                     type: "toggle-workspace-focus",
                     label: state.workspaceFullscreen ? "Close" : "Expand"
                   }
-                })}</div>\`,
+                }), "workspace-tower-single"),
               { preserveScroll: true }
             )
             : false;
@@ -1024,12 +1067,10 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessions(snapshot)
             lastSceneRenderToken = nextSceneToken;
           }
           const sessionsHtml = renderSessions(sessionSnapshot || snapshot);
-          setHtmlIfChanged(sessionList, sessionsHtml, { preserveScroll: true });
+          setHtmlIfChanged(sessionList, sessionsHtml, { preserveScroll: true, preserveFocus: true });
           setTextIfChanged(
             roomsPath,
-            snapshot.rooms.generated
-              ? \`Auto rooms · floor shows live agents plus \${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`
-              : \`Saved rooms.xml · floor shows live agents plus \${SCENE_RECENT_LEAD_LIMIT} recent leads · panel shows \${SESSION_RECENT_LEAD_LIMIT} recent sessions\`
+            sessionHierarchySummary([sessionSnapshot || snapshot])
           );
           if (centerChanged) {
             fitScenes();

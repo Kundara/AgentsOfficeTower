@@ -110,12 +110,11 @@ Current stance:
 Resolution details:
 
 - prefer `CODEX_CLI_PATH` when explicitly set
-- on macOS, prefer the bundled Codex app binary in `/Applications/Codex.app/Contents/Resources/codex` or `~/Applications/Codex.app/Contents/Resources/codex` when present before trying `codex` on `PATH`
-- on Linux, otherwise prefer `codex` on `PATH`
-- on native Windows, if `codex.cmd` is unavailable but `codex` exists inside WSL, fall back to `wsl.exe --exec codex`
-- on Windows and Windows+WSL, fall back to the Microsoft Store Codex app by copying its packaged `app/resources` bundle into `%LOCALAPPDATA%\\CodexAgentsOffice\\cache\\windows-store\\<version>` and spawning the cached `codex.exe`
-- when both a native Windows CLI and a WSL-side Codex CLI exist, `codex` on `PATH` still wins unless `CODEX_CLI_PATH` overrides it
-- when both a WSL-side Codex CLI and the Windows app exist, the WSL CLI now wins before the app fallback unless `CODEX_CLI_PATH` overrides it
+- on macOS, try the bundled binary from ChatGPT.app first and Codex.app second, checking `/Applications` before `~/Applications` for each app, then try `codex` on `PATH`
+- on ordinary Linux, try `codex` on `PATH` after the explicit override
+- on native Windows, try the Microsoft Store Codex app bundle before `codex.cmd` and `codex.exe` on `PATH`; resolve the app by copying its packaged `app/resources` bundle into `%LOCALAPPDATA%\\CodexAgentsOffice\\cache\\windows-store\\<version>` and spawning the cached `codex.exe`
+- on native Windows, fall back to `wsl.exe --exec codex` only after the Store bundle and native PATH candidates; both the ordinary and `System32` WSL launcher paths are tried
+- when Agents Office itself runs as a Linux process inside WSL, its current command candidates remain the explicit override followed by the WSL-side `codex` on Linux `PATH`; this is distinct from native Windows launching Codex through `wsl.exe`
 - the VS Code embedded server on Windows now launches the WSL runtime through a login shell so `CODEX_HOME` and related environment defaults are preserved
 
 ### `thread/list`
@@ -584,7 +583,7 @@ What we read:
 - `listSessions()` from `@anthropic-ai/claude-agent-sdk` when available
 - `~/.claude/projects/*/*.jsonl`
 - `$CLAUDE_CONFIG_DIR/jobs/*/state.json`, falling back to `~/.claude/jobs/*/state.json`, for Claude Code Agent View background sessions
-- Claude Desktop Co-work app data under `local-agent-mode-sessions`, including `spaces.json` and recent `local_*.json` session files
+- locally materialized Claude Home work data under the legacy `local-agent-mode-sessions` store, including `spaces.json` and recent `local_*.json` session files
 
 How we use it:
 
@@ -592,7 +591,7 @@ How we use it:
 - scan project directories
 - fall back to sampling the head and tail of each log when the SDK path is unavailable
 - infer the project root from session `cwd`
-- add Co-work `spaces[].folders[].path` and session `userSelectedFolders` paths as workspace floors
+- add Home work `spaces[].folders[].path` and session `userSelectedFolders` paths as workspace floors
 - add Agent View background job project roots as workspace floors with `sourceKind = claude:background`; jobs running under `<project>/.claude/worktrees/*` are grouped back to `<project>`
 - merge Claude-discovered roots into workspace discovery
 
@@ -608,12 +607,12 @@ What we read:
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl`
 - Claude Agent Teams config files under `~/.claude/teams/*/config.json`
 - Claude Agent View background session state under `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json`
-- Claude Desktop Co-work session files under `local-agent-mode-sessions/**/local_*.json`
+- locally materialized Claude Home work session files under the legacy `local-agent-mode-sessions/**/local_*.json` store
 - record timestamps
 - message model names
 - `cwd`
 - teammate `cwd` / `worktreePath`
-- Co-work `spaceId`, `title`, `initialMessage`, `lastActivityAt`, `userSelectedFolders`, and `fsDetectedFiles`
+- Home work `spaceId`, `title`, `initialMessage`, `lastActivityAt`, `userSelectedFolders`, and `fsDetectedFiles`
 - background job `sessionId`, `cwd`, `name`, `prompt`, state/status text, activity summary, and timestamps when present
 - `gitBranch`
 
@@ -630,16 +629,16 @@ How we use it:
 - add teammate `worktreePath` or `cwd` values to Claude project discovery so cowork/team workspaces can appear as floors
 - add Agent View background jobs as read-only `claude:background` agents keyed by the Claude session id when available, otherwise by the background job id
 - expose `claude attach <job>` as the read-only resume command for those rows
-- add Claude Desktop Co-work project folders as floors and show matching Co-work local-agent sessions as read-only Claude agents
+- add locally materialized Claude Home work project folders as floors and show matching local-agent sessions as read-only Claude agents
 - assign an appearance and render it as a `claude` agent
 
-### Claude Desktop Co-work local store
+### Claude Desktop Home work local store
 
-The Claude Desktop Co-work view keeps its project/task state in app data, not in `~/.claude/teams`. On Windows this has been observed under `%APPDATA%/Claude/local-agent-mode-sessions`; macOS and Linux candidates follow the normal Claude application-support/config locations.
+Claude Desktop now presents chat and work under **Home**, while retaining `cowork` and `local-agent-mode-sessions` as internal compatibility names. Locally materialized Home work project/task state lives in app data, not in `~/.claude/teams`. On Windows this has been observed under `%APPDATA%/Claude/local-agent-mode-sessions`; macOS and Linux candidates follow the normal Claude application-support/config locations.
 
 What Agents Office reads from that store:
 
-- bounded recursive `spaces.json` scans for Co-work spaces and their folder roots
+- bounded recursive `spaces.json` scans for Home work spaces and their folder roots
 - bounded recursive `local_*.json` scans for local-agent sessions
 - session metadata such as `sessionId`, `cliSessionId`, `processName`, `title`, `initialMessage`, `model`, `spaceId`, `createdAt`, and `lastActivityAt`
 - project roots from `userSelectedFolders`
@@ -647,11 +646,27 @@ What Agents Office reads from that store:
 
 How Agents Office uses it:
 
-- Co-work folders become workspace floors in fleet mode
-- matching Co-work sessions become read-only Claude agents with `sourceKind = claude:cowork:<model-or-app>`
+- Home work folders become workspace floors in fleet mode
+- matching Home work sessions become read-only Claude agents with the backward-compatible `sourceKind = claude:cowork:<model-or-app>`
 - recent `fsDetectedFiles` entries become file-change activity for hover cards, session history, and file-change surfaces
 - state is freshness-based because this local store does not expose a Codex-style live thread protocol
 - this is treated as observed local app state rather than an official Claude API contract
+
+### Claude Home conversation boundary
+
+The supported Agent SDK `listSessions()` / `getSessionMessages()` inventory is a local Claude Code session surface backed by `~/.claude/projects`; it is not the personal Claude Home Recent chats list. Agent SDK rows therefore remain on their Code project floors. Claude Desktop's separate `claude-code-sessions` store also belongs to Code and is intentionally not ingested or reclassified as Home by Agents Office.
+
+Personal Free, Pro, and Max Home chats currently have no supported live conversation-list API for a local observer. The supported `claude://claude.ai/chat/<conversation-id>` deep link can open a conversation only after some supported provider has supplied its id; it cannot enumerate chats.
+
+Claude's unified Home surface also hosts remote work sessions. Agents Office has a deliberately narrow, version-sensitive observer for those work rows: it scans a bounded number of fresh Claude Desktop Chromium HTTP-cache entries whose cache key is the Home-work watch feed, parses bounded `added` / `changed` / `removed` response events, and accepts only records with an exact `product:cowork-remote` tag and `anthropic_cloud` environment. It retains the `cse_*` id, optional title, timestamps, model, origin, tags, selected-folder labels, and coarse post-turn state. It never reads past the public cache-key prefix into its query/cursor token; it never extracts, retains, or exposes cookies, Local Storage, Session Storage, IndexedDB drafts, prompts, messages, status-detail summaries, or arbitrary event fields; and it never calls the private endpoint. These rows are inferred, read-only, rootless account agents and remain machine-private.
+
+This exception does not turn the desktop cache into a general chat-history adapter. Ordinary Home chats are rejected, and a cache miss means "not observed" rather than "no chats." A Claude Desktop cache-format or product-tag change may temporarily hide remote work until the adapter is updated.
+
+### Codex Quick Chat boundary
+
+The Codex app-server exposes Codex tasks/threads, not the separate ChatGPT Quick Chat sidebar inventory. Agents Office therefore never fabricates Quick Chat agents or scrapes ChatGPT app credentials/storage. Choosing **Add to task** is the supported product bridge: after conversion, the resulting Codex task enters the normal app-server inventory and appears once in Chat Café and Sessions.
+
+Anthropic's Enterprise Compliance API can list organization chat metadata with a Compliance Access Key and `read:compliance_user_data`; an optional `user_ids[]` filter can narrow the organization-wide result. It is an administrative eDiscovery surface, not a Max/Desktop session API, and Cowork/Home work activity is outside that chat export. It is documented here as a future opt-in provider boundary, not used by the current local adapter.
 
 ### Claude Agent View background jobs
 
@@ -702,7 +717,7 @@ What Anthropic exposes in hook input:
 - `tool_input`
 - `tool_response` for successful tool completions
 - error information for failed tool calls
-- typed lifecycle events such as `PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, `Elicitation`, and `TaskCompleted`
+- typed lifecycle events such as `PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `StopFailure`, `Elicitation`, `TaskCompleted`, and `MessageDisplay`
 - supported session APIs such as `listSessions()` and `getSessionMessages()` for passive inspection
 - SDK hook callbacks that receive `tool_use_id` for tool-call correlation
 - `agent_id` and `agent_type` on subagent-scoped hook callbacks
@@ -715,11 +730,11 @@ How this project uses that surface:
 - `packages/core/src/claude-agent-sdk.ts` exports a reusable Agent SDK hook bridge that appends those sidecars with `session_id`, `hook_event_name`, `tool_use_id`, `agent_id`, and `agent_type` when available
 - that same bridge now gives `PermissionRequest` and `Elicitation` hooks a browser response path by waiting on the matching project-scoped response file in Agents Office user data and then returning the official structured hook output back to Claude
 - Agents Office also appends a synthetic resolution marker into the Claude hook sidecar after a browser response so the queue clears immediately even for permission requests that do not emit a later official hook result
-- when those sidecars exist, Claude agents can surface typed permission, input, tool, subagent, stop, user-prompt, session-start/end, and compacting state with `confidence = typed`
+- when those sidecars exist, Claude agents can surface typed permission, input, tool, subagent, stop, assistant `MessageDisplay` streaming, user-prompt, session-start/end, and compacting state with `confidence = typed`
 - subagent-scoped hook records with `agent_id` become child `DashboardAgent` rows under the lead Claude session, override matching inferred workflow/subagent rows, and attach their events to the child row instead of the parent when possible
 - Claude Agent Teams config files can upgrade teammates into child agents with teammate name, role, active/idle state, parent `leadSessionId`, and cowork project/worktree floor discovery
-- Claude Desktop Co-work session records can add read-only Claude agents and workspace floors, but they do not provide hook-backed browser replies or typed subagent control
-- Claude lead sessions, Agent Teams rows, workflow subagents, Co-work sessions, and Agent View background jobs attach `DashboardAgent.goal` from the strongest local objective-like text available, usually the session title, initial prompt, teammate prompt/name, background job prompt/name, or workflow child description
+- locally materialized Claude Home work records can add read-only Claude agents and workspace floors, but they do not provide hook-backed browser replies or typed subagent control
+- Claude lead sessions, Agent Teams rows, workflow subagents, Home work sessions, and Agent View background jobs attach `DashboardAgent.goal` from the strongest local objective-like text available, usually the session title, initial prompt, teammate prompt/name, background job prompt/name, or workflow child description
 - when they do not exist, Claude falls back to transcript inference with `confidence = inferred`
 
 ### Claude transcript inference rules
@@ -1075,8 +1090,7 @@ Then it:
 Rendered in:
 
 - `packages/web/src/render-html.ts`
-- `packages/web/src/client/index.ts`
-- `packages/web/src/client/app-runtime.ts`
+- `packages/web/scripts/build-client.mjs`
 - `packages/web/src/client/runtime/*.ts`
 
 How normalized fields become visuals:
@@ -1105,8 +1119,7 @@ Transport:
 
 - `packages/web/src/fleet-live-service.ts`
 - `packages/web/src/router.ts`
-- `packages/web/src/client/index.ts`
-- `packages/web/src/client/app-runtime.ts`
+- `packages/web/scripts/build-client.mjs`
 - `packages/web/src/client/runtime/ui-source.ts`
 - `packages/web/src/client/multiplayer-source.ts`
 
@@ -1119,7 +1132,7 @@ How it works:
 - `/api/web-cli/query` exposes loopback-only, read-only `recent` and `last` lookups by repo name for the CLI; it returns projected agent/event summaries from the live local fleet or the latest coordinated team cache
 - `/api/web-cli/team-fleet` accepts a bounded same-origin browser POST of the already-rendered shared-room fleet so local CLI queries can read the same coordinated data without connecting directly to PartyKit
 - `FleetLiveService` owns project monitors and publishes fresh fleet payloads to connected browser clients
-- browser-side rendering starts from `client/index.ts`, executes the generated `app-runtime.ts` module, and then delegates behavior across the focused runtime section files
+- browser-side rendering is assembled in memory from the focused runtime section files and bundled directly by esbuild; no tracked generated runtime or browser-side source evaluation is involved
 - optional PartyKit room sync, shared-room draft handling, machine-local shared-room settings hydration via `/api/settings/integrations`, a server-backed multiplayer device identity for self-peer suppression across local viewers, explicit per-project share preferences, active-agent-only remote merges, and the debounced team-fleet cache post for `web query scope=team` live in `multiplayer-source.ts`
 - `web query <repo> gist` is the light CLI coordination read. It projects the same workspace `activity.hotChanges` used by the in-scene hot-stuff board plus active agents with last message and last file-change hints, so agents can do a short state sync before requesting broader `recent` or `last` data.
 
@@ -1255,11 +1268,11 @@ Today the project already rides:
 - Claude tool-use and message inference
 - local Claude workflow/subagent transcript and journal discovery
 - Claude provenance/confidence signaling
-- Claude inferred goal metadata for lead sessions, Agent Teams rows, workflow subagents, Co-work rows, and Agent View background jobs
+- Claude inferred goal metadata for lead sessions, Agent Teams rows, workflow subagents, Home work rows, and Agent View background jobs
 - hook-backed Claude approval and elicitation responses from the browser queue
 - hook-backed Claude subagent child rows from `agent_id`
 - Claude Agent Teams teammate rows and cowork/worktree floor discovery
-- Claude Desktop Co-work project floors and read-only local-agent sessions
+- Claude Desktop Home work project floors and read-only local-agent sessions
 - Hermes local `state.db` session discovery
 - Hermes cwd/env and system-prompt project matching
 

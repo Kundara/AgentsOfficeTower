@@ -11,6 +11,7 @@ type PendingRequest = {
 
 interface ThreadListResult {
   data: CodexThread[];
+  nextCursor?: string | null;
 }
 
 type ThreadListSortKey = "created_at" | "updated_at";
@@ -386,25 +387,45 @@ export class CodexAppServerClient {
     sortKey?: ThreadListSortKey;
     sortDirection?: SortDirection;
   }): Promise<CodexThread[]> {
-    const result = await this.request<ThreadListResult>("thread/list", {
-      cwd: appServerCwdParam(params.cwd),
-      limit: params.limit ?? 12,
-      sortKey: params.sortKey ?? "updated_at",
-      sortDirection: params.sortDirection ?? "desc",
-      sourceKinds: params.sourceKinds ?? [
-        "cli",
-        "vscode",
-        "exec",
-        "appServer",
-        "subAgent",
-        "subAgentReview",
-        "subAgentCompact",
-        "subAgentThreadSpawn",
-        "subAgentOther"
-      ],
-      archived: false
-    });
-    return result.data ?? [];
+    const requestedLimit = Math.max(0, params.limit ?? 12);
+    const sourceKinds = params.sourceKinds ?? [
+      "cli",
+      "vscode",
+      "exec",
+      "appServer",
+      "subAgent",
+      "subAgentReview",
+      "subAgentCompact",
+      "subAgentThreadSpawn",
+      "subAgentOther",
+      "unknown"
+    ];
+    const threads: CodexThread[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+
+    while (threads.length < requestedLimit) {
+      const result: ThreadListResult = await this.request<ThreadListResult>("thread/list", {
+        cwd: appServerCwdParam(params.cwd),
+        cursor,
+        limit: Math.min(100, requestedLimit - threads.length),
+        sortKey: params.sortKey ?? "updated_at",
+        sortDirection: params.sortDirection ?? "desc",
+        sourceKinds,
+        archived: false
+      });
+      const page = result.data ?? [];
+      threads.push(...page);
+
+      const nextCursor: string | null = result.nextCursor ?? null;
+      if (page.length === 0 || !nextCursor || seenCursors.has(nextCursor)) {
+        break;
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+
+    return threads.slice(0, requestedLimit);
   }
 
   async readThread(threadId: string): Promise<CodexThread> {

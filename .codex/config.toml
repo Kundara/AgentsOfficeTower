@@ -1,0 +1,29 @@
+model = "gpt-5.6-sol"
+review_model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
+plan_mode_reasoning_effort = "high"
+model_verbosity = "medium"
+
+[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 4
+
+[agents]
+max_depth = 1
+job_max_runtime_seconds = 1800
+interrupt_message = true
+
+[agents.office_mapper]
+description = "Read-only repository mapper for tracing behavior to concrete files, symbols, and evidence before implementation."
+config_file = "agents/office-mapper.toml"
+nickname_candidates = ["Scout", "Radar", "Trace"]
+
+[agents.content_designer]
+description = "Read-only product-copy specialist for labels, status text, tooltips, and other constrained UI wording."
+config_file = "agents/content-designer.toml"
+nickname_candidates = ["Banner", "Copy", "Pixel"]
+
+[agents.office_verifier]
+description = "Read-only independent reviewer for regressions, missed requirements, and validation gaps after a change."
+config_file = "agents/office-verifier.toml"
+nickname_candidates = ["Check", "Proof", "Signal"]

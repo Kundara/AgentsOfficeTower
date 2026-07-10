@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { buildServerMeta } = require("../dist/server-metadata.js");
+const { buildFleetResponse, buildServerMeta } = require("../dist/server-metadata.js");
 const {
   DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS,
   filterFreshDiscoveredProjects,
@@ -32,6 +32,18 @@ test("server metadata can reflect the live fleet project set", () => {
     peerCount: 0,
     note: "Multiplayer transport not configured."
   });
+});
+
+test("fleet metadata keeps rootless account agents in a separate local lane", () => {
+  const accountAgent = { id: "claude:home-remote:cse_fixture" };
+  const fleet = buildFleetResponse([], new Map(), [accountAgent]);
+
+  assert.deepEqual(fleet.projects, []);
+  assert.deepEqual(fleet.accountAgents, [accountAgent]);
+});
+
+test("fleet metadata defaults the account lane for older callers", () => {
+  assert.deepEqual(buildFleetResponse([], new Map()).accountAgents, []);
 });
 
 test("server metadata can include multiplayer status", () => {

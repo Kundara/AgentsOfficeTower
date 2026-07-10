@@ -1,4 +1,0 @@
-interface:
-  display_name: "Agents Tower"
-  short_description: "Run and query Agents Office Tower from the CLI."
-  default_prompt: "Use the Agents Tower skill to check or run the local Agents Office Tower CLI."

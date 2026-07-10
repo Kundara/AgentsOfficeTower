@@ -1,4 +1,5 @@
-export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
+export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      const SCENE_PALETTE_STORAGE_KEY = "codex-agents-office:scene-palettes:v1";
+      if (screenshotMode) {
         document.body.classList.add("snapshot-mode");
       }
       const state = {
@@ -13,6 +14,8 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
         focusedSessionKeys: [],
         globalSceneSettings: loadGlobalSceneSettings(),
         furnitureLayoutOverrides: loadFurnitureLayoutOverrides(),
+        projectScenePalettes: loadScenePaletteSettings(),
+        customizeFloorRoot: null,
         integrationSettings: defaultIntegrationSettings(),
         integrationSettingsPending: false,
         appearanceSettingsPending: false,
@@ -72,6 +75,7 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       const NOTIFICATION_PRIORITY_MESSAGE = 2;
       const SCENE_RECENT_LEAD_LIMIT = 4;
       const SESSION_RECENT_LEAD_LIMIT = 10;
+      const STREET_CAFE_PROJECT_ROOT = "__agents-office-street-cafe__";
       const RESTING_DORMANT_MS = 15 * 60 * 1000;
       const DEPARTING_AGENT_TTL_MS = 900;
       const SUBAGENT_DEPARTING_AGENT_TTL_MS = 3200;
@@ -89,6 +93,9 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       const dynamicProjectOrder = new Map();
       let nextDynamicProjectOrder = configuredProjectOrder.size;
       function projectInfo(projectRoot) {
+        if (projectRoot === STREET_CAFE_PROJECT_ROOT) {
+          return { root: STREET_CAFE_PROJECT_ROOT, label: "Chat Café" };
+        }
         if (state.fleet && Array.isArray(state.fleet.projects)) {
           const liveProject = state.fleet.projects.find((project) => project.projectRoot === projectRoot);
           if (liveProject && liveProject.projectLabel) {
@@ -276,7 +283,16 @@ export const CLIENT_RUNTIME_SETTINGS_SOURCE = `      if (screenshotMode) {
       }
 
       function agentKey(projectRoot, agent) {
-        return \`\${projectRoot}::\${agent.id}\`;
+        return \`\${agent.sourceProjectRoot || projectRoot}::\${agent.sourceAgentId || agent.id}\`;
+      }
+
+      function parentAgentKey(projectRoot, agent) {
+        if (!agent.parentThreadId) {
+          return null;
+        }
+        const sourceRoot = agent.sourceProjectRoot || projectRoot;
+        const parentId = String(agent.parentThreadId);
+        return parentId.startsWith(\`\${sourceRoot}::\`) ? parentId : \`\${sourceRoot}::\${parentId}\`;
       }
 
       function formatSceneTextScale(value) {

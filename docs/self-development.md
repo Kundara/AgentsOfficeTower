@@ -28,9 +28,9 @@ A good iteration improves at least one of these:
 1. Keep the shared adapter registry and snapshot assembler authoritative across all front ends.
 2. Improve real session discovery before inventing synthetic presence.
 3. Increase event-level transparency so visible state is traceable to real Codex signals.
-4. Continue breaking the remaining large source-specific sections into smaller adapter/service/domain helpers.
+4. Split the remaining oversized Claude and Hermes provider façades into one-way `*-lib` dependency DAGs while preserving their public exports.
 5. Preserve enough structure in the scene that busy workspaces still scan quickly.
-6. Keep shrinking the largest browser/runtime section files now that the shipped browser entry runs through generated `app-runtime.ts` output, `runtime-source.ts` is only a composition mirror, and desk policy has been isolated into `seating-source.ts`.
+6. Keep shrinking the largest browser/runtime section files now that the shipped browser entry is assembled in memory, dead runtime/style mirrors are gone, and desk policy has been isolated into `seating-source.ts`.
 
 ## Known weak spots
 
@@ -44,12 +44,15 @@ A good iteration improves at least one of these:
 - Live movement is still simpler than the intended office-life simulation.
 - Map and terminal browser views still share some presentation assumptions that should diverge further.
 - The office map now renders through a retained Pixi scene; remaining work is about refining prefab composition, motion, and editor parity rather than migrating off the old HTML map path.
-- The browser runtime is now externally bundled and executes through generated `app-runtime.ts` output sourced from the focused runtime sections. Ownership is cleaner than before because desk policy lives in `seating-source.ts` and renderer/session boundaries no longer spill partial functions across files, but large sections such as scene/layout still need continued extraction into smaller authored browser-native modules.
+- The browser runtime is externally bundled from focused runtime sections through an in-memory build entry. The tracked generated mirror is gone; scene model/renderer, navigation pathing/overlays/floating/Pixi/lifecycle/furniture/attention, and notification CSS now have explicit ownership. Pure helpers are moving to typed browser-native modules, while the retained Pixi renderer closure still needs gradual typed conversion.
+- `claude.ts`, `hermes.ts`, `ui-source.ts`, and `styles.css` still use narrow transitional ceilings above the normal source-size rail. Their next safe splits are structural rather than mechanical: records/identity/activity/local-state/session loading for Claude; session semantics/project resolution/hooks for Hermes; session rendering/refresh orchestration for the browser UI; and shell/session/form groups for the stylesheet. Extracted modules must keep one-way ownership and must not import their façade.
 
 ## Acceptance checks for future changes
 
 - `npm run build`
 - `npm run typecheck`
+- `npm run check:agent-workflows` when changing `.codex`, `.agents/skills`, `AGENTS.md`, or the agent workflow guide
+- `codex features list` after changing project Codex configuration
 - `npm run check:codex-protocol` when validating against an installed Codex runtime
 - browser render for default map mode
 - browser render for `/scene-effects-audit`
@@ -135,7 +138,9 @@ A good iteration improves at least one of these:
 - verify Claude workflow journal `started` records create running child rows before a transcript has useful assistant text, and journal `result` records mark the matching child done with the result summary
 - verify hook-backed Claude `agent_id` rows override matching inferred workflow/subagent rows instead of duplicating the child
 - verify Claude Agent View background jobs under `~/.claude/jobs/*/state.json` appear as read-only `claude:background` agents and workspace floors without requiring project hooks
-- verify Claude Desktop Co-work projects under `local-agent-mode-sessions` appear as workspace floors with read-only Claude agents and recent detected-file activity
+- verify locally materialized Claude Home work projects under the legacy `local-agent-mode-sessions` store appear as workspace floors with read-only Claude agents and recent detected-file activity
+- verify a sanitized `product:cowork-remote` Claude Desktop watch-cache fixture and a real existing remote Home-work session each appear exactly once in Chat Café and Sessions, remain read-only/private, and age out of false live state without retaining prompts or messages
+- verify Codex Quick Chat creates no synthetic row before **Add to task**, then the converted Codex task appears exactly once through the supported app-server inventory
 - verify Claude Code dynamic workflow / `ultracode` runs with a real `/workflows` sample and that local child transcripts/journals match the inferred child rows; if full phase/token progress is needed, prototype an OpenTelemetry collector instead of expanding transcript scraping
 - verify OpenClaw gateway sessions appear on desks only when the configured agent workspace equals a known project root or sits under it
 - verify unmatched active OpenClaw harness/orchestrator sessions appear as `openclaw:roaming` avatars in the fixed left-side sky layer, stay out of room/rec placement, and animate desk/sky or cross-floor handoffs without duplicate agents
@@ -159,10 +164,10 @@ A good iteration improves at least one of these:
 - verify live toast styling remains readable when browser zoom is reduced
 - keep command-window aggregation readable when several commands arrive quickly for the same agent
 - keep the retained Pixi scene stable across scene refreshes with predictable entity ids, z-order, and incremental updates
-- keep user-facing scene controls minimal and global, starting with text scale, while prefab sizing and spacing remain internal until furniture editing exists
+- keep user-facing scene controls minimal: text scale remains global, while scoped workspace appearance controls may expose Floor/Wall/Board colors; prefab sizing, spacing, and furniture geometry remain internal until a deliberate editor exists
 - finish translating the previous office look into the tile system so the retained scene feels like the established PixelOffice floor instead of temporary placeholder geometry
 - replace the remaining large runtime section literals with smaller generated fragments or real browser-native modules while preserving the now-clean section ownership boundaries
-- keep the new file-size and import-boundary rails strict enough to block new monoliths while allowing the remaining transitional browser runtime to shrink incrementally; generated `app-runtime.ts` should stay out of the authored-source size budget, and any temporary ceilings for oversized authored runtime/style files should stay explicit and narrow
+- keep the file-size and import-boundary rails strict enough to block new monoliths while allowing the remaining transitional browser runtime to shrink incrementally; any temporary ceilings for oversized authored runtime/style files should stay explicit and narrow
 
 ## Not the goal
 

@@ -182,10 +182,14 @@ function createRuntimeHarness({ width = 1280, height = 900, hosts = [] } = {}) {
   };
   context.globalThis = context;
   vm.createContext(context);
-  const navigationSource = readRuntimeLiteral("navigation-source.ts", "CLIENT_RUNTIME_NAVIGATION_SOURCE");
+  const navigationSource = readRuntimeLiteral(
+    "floating-orchestrator-source.ts",
+    "CLIENT_RUNTIME_FLOATING_ORCHESTRATOR_SOURCE"
+  );
   vm.runInContext(`${navigationSource}
 this.__floatingHermesTestHooks = {
   hermesFloatingSlotLayout,
+  hermesFloatingTravelDuration,
   syncFloatingHermesAgents,
   spawnHermesAssignedTransferGhosts,
   snapshotHermesAssignedScreenRects
@@ -373,9 +377,9 @@ test("Hermes flies from a desk rect into the projectless sky and back to a desk"
   harness.context.__floatingHermesTestHooks.syncFloatingHermesAgents([roamingProject()], { assignedRects: previousRects });
   const node = harness.document.layer.children[0];
 
-  assert.equal(node.style.transform, "translate3d(408px, 445px, 0) rotateZ(0deg)");
+  assert.equal(node.style.transform, "translate3d(408px, 445px, 0)");
   harness.flushAnimationFrames();
-  assert.match(node.style.transform, /^translate3d\(-?[0-9]+px, [0-9]+px, 0\) rotateZ\([-0-9.]+deg\)$/);
+  assert.match(node.style.transform, /^translate3d\(-?[0-9]+px, [0-9]+px, 0\)$/);
   const floatingRect = node.getBoundingClientRect();
   assert.ok(floatingRect.right <= 48, `floating Hermes right ${floatingRect.right} should land left of the tower`);
 
@@ -385,8 +389,18 @@ test("Hermes flies from a desk rect into the projectless sky and back to a desk"
   harness.context.__floatingHermesTestHooks.syncFloatingHermesAgents([]);
 
   assert.ok(node.classList.contains("is-departing"));
-  assert.equal(node.style.opacity, "0");
+  assert.equal(node.style.opacity, "1");
   assert.equal(node.style.transform, "translate3d(508px, 385px, 0)");
+});
+
+test("reduced-motion preference collapses screen-space flight duration", () => {
+  const harness = createRuntimeHarness();
+  harness.context.window.matchMedia = () => ({ matches: true });
+
+  assert.equal(
+    harness.context.__floatingHermesTestHooks.hermesFloatingTravelDuration(0, 0, 900, 700),
+    1
+  );
 });
 
 test("assigned Hermes transfer ghosts are skipped for viewport-only scroll sync", () => {
@@ -466,9 +480,9 @@ test("OpenClaw roaming orchestrators use left-of-tower handoffs like Hermes", ()
   const node = harness.document.layer.children[0];
 
   assert.equal(node.dataset.hermesFloatKey, "openclaw:agent:main:orchestrator");
-  assert.equal(node.style.transform, "translate3d(408px, 445px, 0) rotateZ(0deg)");
+  assert.equal(node.style.transform, "translate3d(408px, 445px, 0)");
   harness.flushAnimationFrames();
-  assert.match(node.style.transform, /^translate3d\(-?[0-9]+px, [0-9]+px, 0\) rotateZ\([-0-9.]+deg\)$/);
+  assert.match(node.style.transform, /^translate3d\(-?[0-9]+px, [0-9]+px, 0\)$/);
 
   harness.document.hosts[0]._rect = { left: 48, top: -279, width: 778, height: 520 };
   const before = node.getBoundingClientRect();

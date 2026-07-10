@@ -10,6 +10,7 @@ import {
   describeStoredMultiplayerSettings,
   discoverProjects,
   listCloudTasks,
+  loadClaudeHomeAccountAgents,
   loadRoamingHermesSnapshotData,
   loadRoamingOpenClawSnapshotData,
   projectPathIdentityKey,
@@ -21,7 +22,7 @@ import {
   setStoredCursorApiKey,
   setStoredMultiplayerSettings
 } from "@codex-agents-office/core";
-import type { CloudTask, DashboardSnapshot, DiscoveredProject } from "@codex-agents-office/core";
+import type { CloudTask, DashboardAgent, DashboardSnapshot, DiscoveredProject } from "@codex-agents-office/core";
 
 import { buildFleetResponse } from "./server-metadata";
 import { buildProjectDescriptors } from "./server-options";
@@ -112,10 +113,14 @@ export class FleetLiveService {
   private static readonly PROJECT_DISCOVERY_RETENTION_MS = 2 * 60 * 1000;
   private static readonly CLOUD_REFRESH_INTERVAL_MS = 30000;
   private static readonly CLOUD_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
+  private static readonly ACCOUNT_AGENT_REFRESH_INTERVAL_MS = 4000;
   private readonly monitors = new Map<string, ProjectLiveMonitor>();
   private readonly clients = new Set<ServerResponse>();
   private projects: ProjectDescriptor[] = [];
   private fleet: FleetResponse | null = null;
+  private accountAgents: DashboardAgent[] = [];
+  private lastAccountAgentRefreshAt = 0;
+  private accountAgentRefresh: Promise<void> | null = null;
   private lastProjectSetRefreshAt = 0;
   private sharedCloudTasks: CloudTask[] = [];
   private sharedCloudErrorMessage: string | null = null;
@@ -131,7 +136,7 @@ export class FleetLiveService {
 
   async start(): Promise<void> {
     this.projects = [...this.seedProjects];
-    this.fleet = buildFleetResponse(this.projects, new Map());
+    this.fleet = buildFleetResponse(this.projects, new Map(), this.accountAgents);
     this.cloudTimer = setInterval(() => {
       void this.refreshSharedCloudTasks();
     }, FleetLiveService.CLOUD_REFRESH_INTERVAL_MS);
@@ -159,7 +164,7 @@ export class FleetLiveService {
     if (!this.fleet) {
       await this.publish(true);
     }
-    return this.fleet ?? buildFleetResponse(this.projects, new Map());
+    return this.fleet ?? buildFleetResponse(this.projects, new Map(), this.accountAgents);
   }
 
   setCoordinatedTeamFleet(fleet: FleetResponse | null, hasSharedData?: boolean): void {
@@ -201,6 +206,7 @@ export class FleetLiveService {
   async refreshAll(): Promise<FleetResponse> {
     await this.ensureProjectSet(true);
     await this.refreshSharedCloudTasks();
+    await this.refreshAccountAgents(true);
     await Promise.all(Array.from(this.monitors.values()).map((monitor) => monitor.refreshNow()));
     await this.publish();
     return this.getFleet();
@@ -346,6 +352,7 @@ export class FleetLiveService {
 
   private async publish(forceProjectRefresh = false): Promise<void> {
     await this.ensureProjectSet(forceProjectRefresh);
+    await this.refreshAccountAgents(forceProjectRefresh);
     const snapshotsByRoot = new Map<string, DashboardSnapshot>();
     for (const project of this.projects) {
       const snapshot = this.monitors.get(project.root)?.getSnapshot();
@@ -356,7 +363,7 @@ export class FleetLiveService {
 
     await this.attachRoamingHermesAgents(snapshotsByRoot);
     await this.attachRoamingOpenClawAgents(snapshotsByRoot);
-    this.fleet = buildFleetResponse(this.projects, snapshotsByRoot);
+    this.fleet = buildFleetResponse(this.projects, snapshotsByRoot, this.accountAgents);
 
     for (const response of this.clients) {
       response.write(`event: fleet\ndata: ${JSON.stringify(this.fleet)}\n\n`);
@@ -570,6 +577,33 @@ export class FleetLiveService {
         : null;
       monitor.setSharedCloudTasks(this.sharedCloudTasks, errorMessage);
       emittedSharedError = emittedSharedError || Boolean(errorMessage);
+    }
+  }
+
+  private async refreshAccountAgents(force = false): Promise<void> {
+    const stale = Date.now() - this.lastAccountAgentRefreshAt >= FleetLiveService.ACCOUNT_AGENT_REFRESH_INTERVAL_MS;
+    if (!force && !stale) {
+      return;
+    }
+    if (this.accountAgentRefresh) {
+      await this.accountAgentRefresh;
+      return;
+    }
+
+    this.accountAgentRefresh = (async () => {
+      try {
+        this.accountAgents = await loadClaudeHomeAccountAgents();
+      } catch {
+        // Account discovery is an optional, read-only enhancement. Keep the last
+        // good view when a desktop cache is temporarily locked or changing.
+      } finally {
+        this.lastAccountAgentRefreshAt = Date.now();
+      }
+    })();
+    try {
+      await this.accountAgentRefresh;
+    } finally {
+      this.accountAgentRefresh = null;
     }
   }
 

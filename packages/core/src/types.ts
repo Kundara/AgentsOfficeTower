@@ -129,16 +129,23 @@ export interface CodexTurn {
 
 export interface CodexThread {
   id: string;
+  extra?: Record<string, unknown> | null;
+  sessionId?: string;
+  forkedFromId?: string | null;
+  parentThreadId?: string | null;
   preview: string;
   ephemeral: boolean;
+  historyMode?: string;
   modelProvider: string;
   createdAt: number;
   updatedAt: number;
+  recencyAt?: number | null;
   status: ThreadStatus;
   path: string | null;
   cwd: string;
   cliVersion: string;
   source: string | Record<string, unknown>;
+  threadSource?: string | null;
   agentNickname: string | null;
   agentRole: string | null;
   gitInfo: GitInfo | null;
@@ -314,6 +321,12 @@ export interface DashboardAgent {
   detail: string;
   cwd: string | null;
   sourceProjectRoot?: string | null;
+  /** Account-level conversations do not belong to a discovered project monitor. */
+  accountObserved?: boolean;
+  /** Stable upstream identity used to avoid duplicating one conversation across views. */
+  conversationKey?: string | null;
+  /** Product-level distinction used by the Chat Cafe without guessing from titles. */
+  interactionMode?: "chat" | "work";
   roomId: string | null;
   appearance: AppearanceProfile;
   hatId?: string | null;
