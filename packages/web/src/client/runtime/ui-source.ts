@@ -1,47 +1,24 @@
-export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) {
-        if (agent && agent.needsUser) {
-          return { key: "needs-you", label: "Needs you" };
-        }
-        if (agent && (agent.state === "done" || agent.state === "idle") && (agent.isCurrent === true || agent.isOngoing === true)) {
-          return { key: "finishing", label: "Finishing" };
-        }
-        const key = String(agent && agent.state ? agent.state : "idle")
-          .trim()
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "") || "idle";
-        return { key, label: titleCaseWords(agent && agent.state ? agent.state : "idle") || "Idle" };
-      }
-
-      function sessionDomKey(snapshot, agent) {
-        if (agent && agent.conversationKey) {
-          return JSON.stringify(["conversation", agent.conversationKey]);
-        }
-        return JSON.stringify([
-          agent.sourceProjectRoot || snapshot.projectRoot || "",
-          agent.threadId || agent.sourceAgentId || agent.id || ""
-        ]);
-      }
-
-      function renderSessionCard(snapshot, agent, description) {
+export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapshot, agent, description) {
         const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
         const appearanceAgentId = agent.sourceAgentId || agent.id;
         const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
         const title = displayAgentLabel(snapshot, agent);
+        const sessionKey = sessionDomKey(snapshot, agent);
         const replyAction = replyProjectRoot
           ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
           : "";
         const appearanceAction = agent.network || agent.accountObserved === true || !appearanceProjectRoot
           ? ""
           : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
-        const cardActions = [replyAction, appearanceAction].filter(Boolean).join("");
+        const evidenceOpen = state.evidenceKey === sessionKey;
+        const evidenceAction = \`<button data-action="toggle-evidence" data-session-key="\${escapeHtml(sessionKey)}" aria-expanded="\${evidenceOpen ? "true" : "false"}">Why?</button>\`;
+        const cardActions = [replyAction, appearanceAction, evidenceAction].filter(Boolean).join("");
         const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
-        const state = sessionCardState(agent);
-        const sessionKey = sessionDomKey(snapshot, agent);
+        const cardState = sessionCardState(agent);
         const actions = cardActions
           ? \`<div class="card-actions session-card-actions" aria-label="Session actions">\${cardActions}</div>\`
           : "";
-        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(state.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + state.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(state.label)}</span>\${sessionSnapshotStaleBadge(snapshot)}</div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
+        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(cardState.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + cardState.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(cardState.label)}</span>\${sessionSnapshotStaleBadge(snapshot)}</div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${evidenceOpen ? renderAgentEvidence(snapshot, agent) : ""}\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
       }
 
       function isLiveSessionAgent(agent) {
@@ -1141,6 +1118,12 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
 
         if (action === "close-coverage") {
           setCoverageOpen(false);
+          return;
+        }
+
+        if (action === "toggle-evidence") {
+          state.evidenceKey = state.evidenceKey === target.dataset.sessionKey ? null : target.dataset.sessionKey;
+          render();
           return;
         }
 

@@ -114,15 +114,16 @@ test("renderHtml exposes an accessible independently scrollable sessions region"
 
 test("sessions list keeps status, actions, wrapping, focus, scrolling, and responsive layout explicit", () => {
   const uiSource = readRuntimeSource("ui-source.ts");
+  const evidenceSource = readRuntimeSource("evidence-source.ts");
   const attentionSource = readRuntimeSource("attention-panel-source.ts");
   const stylesSource = readClientSource("styles.css");
 
-  assert.ok(uiSource.includes("function sessionCardState(agent) {"));
+  assert.ok(evidenceSource.includes("function sessionCardState(agent) {"));
   assert.ok(uiSource.includes("function renderSessionHierarchy(projects, entries, renderEntry) {"));
   assert.ok(uiSource.includes("function sessionHierarchySummary(projects) {"));
-  assert.ok(uiSource.includes('return { key: "needs-you", label: "Needs you" };'));
-  assert.ok(uiSource.includes('return { key: "finishing", label: "Finishing" };'));
-  assert.ok(uiSource.includes('if (agent && (agent.state === "done" || agent.state === "idle") && (agent.isCurrent === true || agent.isOngoing === true)) {'));
+  assert.ok(evidenceSource.includes('return { key: "needs-you", label: "Needs you" };'));
+  assert.ok(evidenceSource.includes('return { key: "finishing", label: "Finishing" };'));
+  assert.ok(evidenceSource.includes('if (agent && (agent.state === "done" || agent.state === "idle") && (agent.isCurrent === true || agent.isOngoing === true)) {'));
   assert.ok(uiSource.includes("return Boolean(agent && isBusyAgent(agent));"));
   assert.ok(uiSource.includes('class="session-card" role="listitem" tabindex="0"'));
   assert.ok(uiSource.includes('data-session-key="\\${escapeHtml(sessionKey)}"'));
@@ -1507,7 +1508,7 @@ test("runtime source section files now start on function boundaries instead of c
   ];
 
   assert.match(readRuntimeSource("scene-source.ts"), /^export const CLIENT_RUNTIME_SCENE_SOURCE = `\s*function buildLeadClusters/);
-  assert.match(uiSource, /^export const CLIENT_RUNTIME_UI_SOURCE = `\s*function sessionCardState/);
+  assert.match(uiSource, /^export const CLIENT_RUNTIME_UI_SOURCE = `\s*function renderSessionCard/);
   let previousGeneratorOffset = -1;
   for (const [fileName, exportName] of orderedSections) {
     assert.match(readRuntimeSource(fileName), new RegExp("^export const " + exportName + " = `"));
@@ -2105,7 +2106,7 @@ test("tower all-view combines chat and cowork sessions into a dedicated street c
   assert.ok(layoutSource.includes(".map(accountAgentSemanticToken);"));
   assert.ok(uiSource.includes("[...street.workspaceProjects, street.cafeSnapshot]"));
   assert.ok(uiSource.includes("partitionStreetCafeProjects(floorProjects, fleet.accountAgents)"));
-  assert.ok(uiSource.includes('return JSON.stringify(["conversation", agent.conversationKey]);'));
+  assert.ok(readRuntimeSource("evidence-source.ts").includes('return JSON.stringify(["conversation", agent.conversationKey]);'));
   assert.ok(uiSource.includes("agent.network || agent.accountObserved === true || !appearanceProjectRoot"));
   assert.ok(uiSource.includes('const sessions=(state.selected === "all" ? [...street.workspaceProjects, street.cafeSnapshot] : towerProjects)'));
   assert.ok(sceneSource.includes('snapshot.sceneKind === "street-cafe"'));
