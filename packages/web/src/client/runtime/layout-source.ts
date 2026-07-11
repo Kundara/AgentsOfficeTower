@@ -471,6 +471,10 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
       }
 
       function repoIdentityForSnapshot(snapshot) {
+        const rootCommit = String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.rootCommit || "").trim().toLowerCase();
+        if (/^[a-f0-9]{40,64}$/.test(rootCommit)) {
+          return "git-root-commit:" + rootCommit;
+        }
         const explicitRepoUrl = normalizeRepoIdentity(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.repoUrl || "");
         if (explicitRepoUrl) {
           return explicitRepoUrl;

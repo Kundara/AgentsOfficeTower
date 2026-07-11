@@ -970,13 +970,17 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("nextShares[projectRoot] = true;"));
   assert.ok(multiplayerSource.includes("function isSnapshotSharedWithRoom(snapshot) {"));
   assert.ok(multiplayerSource.includes("function sharedRepoIdentityForSnapshot(snapshot) {"));
+  assert.ok(multiplayerSource.includes('return "git-root-commit:" + rootCommit;'));
+  assert.ok(multiplayerSource.includes('rootCommit: sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.rootCommit, 128) || null'));
   assert.ok(multiplayerSource.includes("function indexSharedSnapshotsByWorkspaceKey(snapshots) {"));
   assert.ok(multiplayerSource.includes("function indexSharedSnapshotByWorkspaceKey(snapshotsByKey, snapshot) {"));
   assert.ok(multiplayerSource.includes("if (!snapshotsByKey.has(key)) {"));
   assert.ok(multiplayerSource.includes("function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {"));
   assert.ok(multiplayerSource.includes("const remoteRepoIdentity = sharedRepoIdentityForSnapshot(remoteSnapshot);"));
   assert.ok(multiplayerSource.includes('? ["git-repo:" + remoteRepoIdentity]'));
-  assert.ok(multiplayerSource.includes('.filter((key) => key.startsWith("workspace:"));'));
+  assert.ok(multiplayerSource.includes('const remoteRoot = normalizeSharedPathCandidate(remoteSnapshot && remoteSnapshot.projectRoot);'));
+  assert.ok(multiplayerSource.includes('normalizeSharedPathCandidate(snapshot && snapshot.projectRoot) === remoteRoot'));
+  assert.ok(!multiplayerSource.includes('.filter((key) => key.startsWith("workspace:"));'));
   assert.ok(multiplayerSource.includes("function snapshotActiveSharedAgents(snapshot) {"));
   assert.ok(multiplayerSource.includes("function createSharedRemoteOnlySnapshot(remoteSnapshot) {"));
   assert.ok(multiplayerSource.includes("sharedRemoteOnly: true,"));

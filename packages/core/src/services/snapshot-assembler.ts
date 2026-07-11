@@ -9,7 +9,7 @@ import { buildWorkspaceActivitySnapshot } from "../domain/workspace-activity";
 import { summarizeActivityByAgent } from "../snapshot-lib/activity-summary";
 import type { AdapterSnapshot } from "../adapters";
 import type { CloudTask, DashboardAgent, DashboardEvent, DashboardSnapshot } from "../types";
-import { projectLabelFromRoot } from "./project-discovery";
+import { projectLabelFromRoot } from "../project-paths";
 
 const execFileAsync = promisify(execFile);
 
@@ -151,7 +151,6 @@ export async function assembleProjectSnapshot(input: {
 }): Promise<DashboardSnapshot> {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const projectRoot = input.projectRoot;
-  const projectLabel = projectLabelFromRoot(projectRoot);
   const appearanceSettings = describeStoredAppearanceSettings();
   const [projectIdentity, roomConfig] = await Promise.all([
     resolveProjectIdentity(projectRoot),
@@ -159,6 +158,9 @@ export async function assembleProjectSnapshot(input: {
   ]);
 
   const now = input.currentnessNow ?? Date.now();
+  const projectLabel = projectIdentity?.worktreeName && projectIdentity.gitRoot
+    ? projectLabelFromRoot(projectIdentity.gitRoot)
+    : projectLabelFromRoot(projectRoot);
   const events = aggregateEvents(input.adapterSnapshots);
   const agents = normalizeAgentRoomIds(
     input.adapterSnapshots

@@ -183,7 +183,8 @@ export const MULTIPLAYER_SCRIPT = `
           projectRoot,
           projectLabel: sanitizeSharedText(snapshot.projectLabel, 160) || projectRoot.split(/[\\\\/]/).filter(Boolean).pop() || "Shared project",
           projectIdentity: {
-            repoUrl: sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.repoUrl, 2048) || null
+            repoUrl: sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.repoUrl, 2048) || null,
+            rootCommit: sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.rootCommit, 128) || null
           },
           generatedAt: Number.isFinite(Date.parse(snapshot.generatedAt || "")) ? snapshot.generatedAt : new Date().toISOString(),
           agents,
@@ -344,6 +345,10 @@ export const MULTIPLAYER_SCRIPT = `
       }
 
       function sharedRepoIdentityForSnapshot(snapshot) {
+        const rootCommit = String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.rootCommit || "").trim().toLowerCase();
+        if (/^[a-f0-9]{40,64}$/.test(rootCommit)) {
+          return "git-root-commit:" + rootCommit;
+        }
         const explicitRepoUrl = normalizeSharedRepoIdentity(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.repoUrl || "");
         if (explicitRepoUrl) {
           return explicitRepoUrl;
@@ -400,7 +405,7 @@ export const MULTIPLAYER_SCRIPT = `
         const remoteRepoIdentity = sharedRepoIdentityForSnapshot(remoteSnapshot);
         const candidateKeys = remoteRepoIdentity
           ? ["git-repo:" + remoteRepoIdentity]
-          : snapshotWorkspaceKeys(remoteSnapshot).filter((key) => key.startsWith("workspace:"));
+          : [];
         for (const key of candidateKeys) {
           const localSnapshot = localProjectsByKey.get(key);
           if (
@@ -413,6 +418,11 @@ export const MULTIPLAYER_SCRIPT = `
           ) {
             return localSnapshot;
           }
+        }
+        if (!remoteRepoIdentity) {
+          const remoteRoot = normalizeSharedPathCandidate(remoteSnapshot && remoteSnapshot.projectRoot);
+          return (Array.isArray(state.localFleet && state.localFleet.projects) ? state.localFleet.projects : [])
+            .find((snapshot) => normalizeSharedPathCandidate(snapshot && snapshot.projectRoot) === remoteRoot) || null;
         }
         return null;
       }
@@ -885,6 +895,7 @@ export const MULTIPLAYER_SCRIPT = `
               source: repoUrl ? "git" : "unknown",
               gitRoot: projectRoot,
               commonGitDir: null,
+              rootCommit: sanitizeMultiplayerField(remoteIdentity && remoteIdentity.rootCommit).slice(0, 128) || null,
               repoUrl,
               repoName: sanitizeMultiplayerField(remoteIdentity && remoteIdentity.repoName).slice(0, 160) || null,
               branch: sanitizeMultiplayerField(remoteIdentity && remoteIdentity.branch).slice(0, 240) || null,

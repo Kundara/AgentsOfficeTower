@@ -83,6 +83,8 @@ export interface GitInfo {
 export interface ProjectIdentity {
   key: string | null;
   source: "git" | "unknown";
+  /** Stable across checkout paths and remote repository renames when full history is available. */
+  rootCommit?: string | null;
   gitRoot: string | null;
   commonGitDir: string | null;
   repoUrl: string | null;
