@@ -2,7 +2,7 @@
   "name": "agents-office-tower-vscode",
   "displayName": "Agents Office Tower",
   "description": "Room-based activity view for agent sessions and cloud tasks across supported providers.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "publisher": "local",
   "engines": {

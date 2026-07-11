@@ -1,6 +1,6 @@
 {
   "name": "@agents-tower/web",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "main": "dist/server.js",
   "types": "dist/server.d.ts",

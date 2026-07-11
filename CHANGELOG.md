@@ -5,7 +5,7 @@ All notable changes to this project should be recorded in this file.
 This changelog is maintained against the current root `package.json` version.
 Entries stay under the active version until an explicit version bump is requested.
 
-## [0.1.0] - 2026-03-25
+## [0.1.1] - 2026-07-11
 
 ### Added
 
@@ -15,6 +15,15 @@ Entries stay under the active version until an explicit version bump is requeste
 - Added declared coordination: soft advisory claims (objective, scope, branch, agent label, heartbeat, soft expiry, released/handoff/stale lifecycles) stored per project, managed by `aot claims start|list|heartbeat|release|check` with proceed/caution overlap advice, carried on snapshots, rendered as Declared-work cards beside detected overlaps, and taught to agents through the coordination skill.
 - Added managed lifecycle and audit: `aot start|stop|restart|logs` daemonize the web server with pidfile ownership verification (stop refuses live-pid mismatches without `--force`), `aot service install` writes launchd/systemd user units, and browser approvals, input answers, and thread replies are recorded to a metadata-only local audit journal readable via `aot audit`.
 - Added provider SDK v1: `PROVIDER_CONTRACT_VERSION`, golden contract checks (`runAdapterContractChecks`) that every built-in adapter passes in CI, and `docs/provider-sdk.md` documenting health semantics, provenance rules, and provider boundaries.
+
+### Changed
+
+- Changed the Sessions panel contract so a row in the Active lane never shows contradictory terminal state text: sessions holding runtime ownership while their observed state is terminal display a transitional `Finishing` label, and terminal views hoist notes repeated across floors into one fleet-level banner.
+
+## [0.1.0] - 2026-03-25
+
+### Added
+
 - Added a root MIT `LICENSE`, `license` fields in every workspace package, and a README License section clarifying that bundled art assets keep their original authors' terms.
 - Added GitHub Actions CI running build plus the full `npm run check` suite with a guard against reintroducing the pre-rename `@codex-agents-office/` package scope or `Codex Agents Office` product naming, and a tag-driven npm release workflow publishing `@agents-tower/core`, `@agents-tower/web`, and the `agents-office-tower` CLI in dependency order.
 - Added `docs/product-plan.md`, the phased Trust & Coordination execution roadmap with a recorded decision log, linked from the README docs list and `docs/self-development.md`.
@@ -54,7 +63,6 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
-- Changed the Sessions panel contract so a row in the Active lane never shows contradictory terminal state text: sessions holding runtime ownership while their observed state is terminal display a transitional `Finishing` label, and terminal views hoist notes repeated across floors into one fleet-level banner.
 - Changed the package identity to Agents Office Tower: the CLI publishes as `agents-office-tower` with an `aot` binary plus a deprecated `codex-agents-office` alias, libraries moved to `@agents-tower/core`, `@agents-tower/web`, and `@agents-tower/party`, the VS Code package became `agents-office-tower-vscode`, workspace `file:` dependencies became publishable version ranges with `files` allowlists, and docs dropped the Codex-only product naming. Machine-local functional identifiers (browser storage keys, PartyKit room name, Hermes plugin directory, OpenClaw client id, app user-data directories, VS Code command ids) intentionally keep their original names until a migration exists.
 - Restored the `.codex/config.toml` lead `model` and `model_reasoning_effort` baseline keys that the agent-workflow validation requires, returning `npm run check:agent-workflows` to green.
 - Changed grounded avatar pathfinding to use smooth diagonal routes across open floor while preventing corner cutting through occupied tiles.
