@@ -15,14 +15,25 @@ node packages/cli/dist/index.js web query <repo> gist scope=local --json
 ```
 
 3. Use `recent` or `last` only when the gist leaves a specific agent, event, state, or overlap question unresolved.
-4. For server lifecycle work, inspect the live runtime before changing it:
+4. For a health checkup, prefer the typed status surface over raw endpoints:
 
 ```bash
-curl --fail --max-time 3 http://127.0.0.1:4181/api/server-meta
+node packages/cli/dist/index.js status --json
+node packages/cli/dist/index.js digest
+node packages/cli/dist/index.js doctor
+```
+
+   `status` reports fleet health (healthy/starting/degraded/stale), per-provider health, per-project freshness, and the attention pulse. `digest` answers "what needs a human" in one screen. `doctor` probes the local environment.
+5. For server lifecycle work, inspect the live runtime before changing it:
+
+```bash
+curl --fail --max-time 3 http://127.0.0.1:4181/api/health
 lsof -iTCP:4181 -sTCP:LISTEN -n -P
 ```
 
-5. Rebuild core, web, and CLI when source changed, then start fleet mode without a project root:
+   Managed lifecycle commands exist when you need them: `node packages/cli/dist/index.js start|stop|restart|logs`. `stop` refuses to kill a listener whose live pid does not match the tower pidfile unless `--force` is passed — treat that refusal as a real ownership warning.
+
+6. Rebuild core, web, and CLI when source changed, then start fleet mode without a project root:
 
 ```bash
 npm run build -w packages/core
@@ -31,9 +42,10 @@ npm run build -w packages/cli
 npm run web -- --port 4181
 ```
 
-6. Verify the deployed process and data:
+7. Verify the deployed process and data:
 
 ```bash
+curl --fail --max-time 3 http://127.0.0.1:4181/api/health/ready
 curl --fail --max-time 3 http://127.0.0.1:4181/api/server-meta
 curl --fail --max-time 10 http://127.0.0.1:4181/api/fleet
 ```

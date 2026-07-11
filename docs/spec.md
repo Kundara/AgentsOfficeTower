@@ -22,6 +22,7 @@ It should show:
 - current desk occupancy for live work
 - the 4 most recent lead sessions resting in the rec area
 - hover cards and session panels for longer detail
+- one fleet coverage chip in the top bar (healthy/starting/degraded/stale) opening a viewport-bounded coverage drawer with per-provider health, stale floors, deduplicated coverage notes, and the desktop-notification toggle; degraded or stale floors get one small strip chip, and no other health badging appears on the map
 - a durable cross-project `Needs You` queue when approvals or inputs are pending
 - direct local approval controls inside that queue when the source is a typed Codex approval wait
 - direct local input controls inside that queue when the source is a typed Codex `tool/requestUserInput` wait
@@ -38,6 +39,8 @@ It should show:
 
 The Sessions panel is a secondary workload index, not a second scene or an unbounded transcript dump.
 
+- The panel header carries a search box and a lens selector (all, needs intervention, my live work, inferred only, remote work, possible overlap, degraded visibility); filtering never removes the durable `Needs You` semantics, and Needs You rows rank oldest wait first.
+- Advisory coordination surfaces render above the lanes when they exist: `Declared work` cards for active/stale/handoff claims and `Possible overlap` cards derived from multi-actor hot changes. Both are evidence-backed and timestamped, never say "owned by", and are displayed side by side without reconciling detected activity against declared intent.
 - Its hierarchy is `Needs You`, then `Active`, then `Recent`. `Needs You` is present and pinned only when actionable approval/input requests exist. `Active` contains every live or ongoing session in the selected scope. `Recent` contains eligible non-live rows newest-first.
 - The panel admits all live rows and at most 10 recent rows globally for the current scope. In All view that is one cross-workspace cap, not 10 rows per project. Needs You rows do not consume the recent cap.
 - A finished subagent may remain in Recent only for its normal 12-second readability grace, then disappears. `isOngoing` and durable wait state win over stale display text when deciding whether a row is Active; `thread/closed`, transport unload, or a non-final completed turn do not move ongoing work to Recent.
@@ -74,7 +77,8 @@ The VS Code panel should expose the same snapshot model as the browser and termi
 
 All renderers should consume the same normalized snapshot model.
 
-- A `DashboardSnapshot` represents one tracked workspace and includes `projectRoot`, `projectLabel`, `projectIdentity`, `generatedAt`, `rooms`, `agents`, `cloudTasks`, `events`, `activity`, and `notes`.
+- A `DashboardSnapshot` represents one tracked workspace and includes `projectRoot`, `projectLabel`, `projectIdentity`, `generatedAt`, `rooms`, `agents`, `cloudTasks`, `events`, `activity`, `notes`, `providerHealth`, and `claims`.
+- `providerHealth` carries one row per adapter (`ready`, `unconfigured`, `degraded`, or `error` with detail and freshness); `unconfigured` means intentionally absent and must not degrade fleet health. `claims` carries advisory coordination claims with their derived lifecycle (`active`, `stale`, `released`, `handoff`).
 - A `DashboardAgent` represents one visible session or agent and carries identity, currentness, room placement, state, detail text, latest useful message, resume/open affordances, provenance/confidence, and optional `needsUser`, `hatId`, or shared-room `network` metadata.
 - A `DashboardEvent` is the normalized event log used for browser notifications and event-native state surfaces such as approvals, input waits, command/file activity, delegated-agent or subagent events, and typed messages.
 - `activity` is a derived workspace-level summary for the scene Ops Wall. It contains decayed `hotChanges` from typed file-change events, grouped as script, doc, or media changes for display; tool and command activity should stay out of the hot-stuff board data path.

@@ -18,6 +18,9 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 - **Repo-packaged skills**: Codex skills help agents run the tower CLI and coordinate with local or team workload data.
 - **Shared rooms**: sync active agents across machines with PartyKit-backed rooms and explicit per-project sharing controls.
 - **Weekly fleet cleanup**: fleet mode automatically hides local projects with no agent or session-log activity in the last seven days; explicit project views remain pinned, and current shared-peer activity can temporarily restore a remote-only floor.
+- **Trust and coverage built in**: provider health survives into every snapshot, a hero coverage chip opens a drawer answering "what might be missing?", floors and session cards flag degraded or stale visibility, and every session card explains *why it is here* with typed-vs-inferred evidence.
+- **Attention and coordination**: session search and lenses, oldest-wait-first Needs You ranking, evidence-backed possible-overlap cards, opt-in desktop notifications for waits, and advisory work claims (`aot claims`) that agents check before editing.
+- **Operable as an appliance**: `/api/health` endpoints, `aot status|doctor|digest`, managed `aot start|stop|restart` with pid-ownership verification, launchd/systemd unit generation, and a local audit journal for every browser-initiated action.
 - **Same model everywhere**: browser, terminal, and VS Code surfaces render the same normalized snapshot.
 - **Subtle scene intelligence**: viewport-level hover cards, command toasts, and hot-file cues stay subordinate to the map, while the scrollable Sessions index keeps `Needs You`, every active session, and a globally capped recent list readable across desktop and narrow layouts.
 
@@ -50,7 +53,15 @@ Open [http://127.0.0.1:4181](http://127.0.0.1:4181).
 
 `npm start` installs dependencies if needed, rebuilds the workspace, and starts fleet mode on port `4181`.
 
-The CLI ships as the `agents-office-tower` npm package with an `aot` binary (`aot web`, `aot snapshot`, `aot demo preview`); `codex-agents-office` remains as a deprecated alias for one release. Until the first npm release is published, run it from source as shown below.
+Or run it without cloning anything:
+
+```bash
+npx agents-office-tower demo preview   # disposable demo office
+npm install -g agents-office-tower     # installs the `aot` binary
+aot web                                # fleet mode on port 4181
+```
+
+The CLI ships as the `agents-office-tower` npm package with an `aot` binary; `codex-agents-office` remains as a deprecated alias for one release.
 
 ## Common Commands
 
@@ -77,6 +88,17 @@ node packages/cli/dist/index.js web query AgentsOfficeTower recent scope=team ty
 
 # Demo scene
 node packages/cli/dist/index.js demo preview --port 4181
+
+# Health, attention, and lifecycle (aot = installed binary or node packages/cli/dist/index.js)
+aot status            # fleet health, provider health, freshness, attention pulse
+aot doctor            # environment probes with PASS/WARN/FAIL
+aot digest            # what needs a human right now
+aot audit             # journal of browser approvals/answers/replies
+aot start|stop|logs   # managed daemon lifecycle with pid ownership checks
+
+# Advisory coordination claims
+aot claims start --objective "Refactor drawer" --paths packages/web/src
+aot claims check --paths packages/web/src   # proceed/caution before editing
 ```
 
 `web query` is read-only and loopback-only. `gist` is the light state-sync command for a quick checkup before deeper inspection: it returns top hot file changes plus active agents with their last message and last file change. `scope=local` reads the server's fleet snapshot. `scope=team` reads the coordinated shared-room cache when an open browser page is connected to sharing.
@@ -146,6 +168,7 @@ The VS Code panel embeds the real office renderer by starting a local Agents Off
 ## Docs
 
 - [docs/product-plan.md](docs/product-plan.md)
+- [docs/provider-sdk.md](docs/provider-sdk.md)
 - [docs/spec.md](docs/spec.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/integration-hooks.md](docs/integration-hooks.md)

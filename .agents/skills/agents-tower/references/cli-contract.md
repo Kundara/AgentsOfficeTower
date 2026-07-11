@@ -16,13 +16,33 @@ node packages/cli/dist/index.js watch /abs/project/path
 
 Normal browser deploys omit project roots so the server remains in fleet mode. Passing project roots is reserved for focused debugging.
 
+## Health, lifecycle, and coordination commands
+
+```bash
+node packages/cli/dist/index.js status [--json]        # fleet health, providers, projects, pulse
+node packages/cli/dist/index.js doctor [--json]        # environment + server probes (PASS/WARN/FAIL)
+node packages/cli/dist/index.js digest [--json]        # what needs a human right now
+node packages/cli/dist/index.js audit [--lines 20]     # audited browser actions (approvals, answers, replies)
+node packages/cli/dist/index.js start|stop|restart     # managed daemon lifecycle (pidfile + ownership check)
+node packages/cli/dist/index.js logs [--lines 50]      # tail the managed server log
+node packages/cli/dist/index.js claims start --objective "..." --paths a,b   # declare advisory work claims
+node packages/cli/dist/index.js claims check --paths a,b                     # proceed/caution overlap advice
+```
+
+`stop` refuses a live listener whose pid does not match the tower pidfile unless `--force` is passed. Claims are advisory, expire without heartbeats, and are read by the browser, snapshots, and other agents.
+
 ## Runtime verification
 
 ```bash
+curl --fail --max-time 3 http://127.0.0.1:4181/api/health/live
+curl --fail --max-time 3 http://127.0.0.1:4181/api/health/ready
+curl --fail --max-time 3 http://127.0.0.1:4181/api/health
 curl --fail --max-time 3 http://127.0.0.1:4181/api/server-meta
 curl --fail --max-time 10 http://127.0.0.1:4181/api/fleet
 curl --fail --max-time 3 http://127.0.0.1:4181/api/multiplayer
 ```
+
+`/api/health` includes fleet status (healthy/starting/degraded/stale), per-provider rollups (`ready`/`unconfigured`/`degraded`/`error`), per-project freshness ages, deduplicated coverage notes, and the attention pulse.
 
 Important `server-meta` fields:
 

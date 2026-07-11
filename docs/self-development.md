@@ -42,6 +42,8 @@ A good iteration improves at least one of these:
 - Cursor local support is inferred from workspace storage and logs rather than coming from an official local session API, so it remains weaker and less explicit than Codex app-server visibility.
 - PixelOffice workstation composition still needs refinement and stricter prefab rules.
 - Most Codex event types now reach the snapshot as explicit events or diagnostic notes, and `npm run check:codex-protocol` catches app-server method drift, but many event categories still share the same notification/motion treatment.
+- The fleet pulse and digest are now-first only: they read the live snapshot and the 2-minute event window, so "what happened while I was away" has no durable history behind it yet.
+- Coordination claims are machine-local: shared-room peers do not yet see each other's declared work because the privacy-minimized coordination envelope is not built.
 - Room empty states are still visually heavier than ideal.
 - Live movement is still simpler than the intended office-life simulation.
 - Map and terminal browser views still share some presentation assumptions that should diverge further.
