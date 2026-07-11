@@ -45,6 +45,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed grounded avatar pathfinding to use smooth diagonal routes across open floor while preventing corner cutting through occupied tiles.
 - Changed fleet retention so launch seeds and configured roots no longer keep forgotten projects visible without agent or session-log activity in the last seven days, normalized second/millisecond timestamps across providers, and kept explicit project views pinned.
 - Changed shared-room overlays so current peer activity temporarily restores projects hidden by weekly local retention as read-only remote-only floors, which disappear again when the peer stops publishing or ages out of the multiplayer stale window.
 - Changed per-floor `Shared` into a one-sided publish control: an active project shared by one peer now appears on connected peers with a matching workspace without requiring them to enable their own outbound toggle, late joiners receive a bounded first-seen-peer fleet reply, Git identity prevents unrelated same-named projects from merging, and the enabled state is brighter and labeled `Shared On`.

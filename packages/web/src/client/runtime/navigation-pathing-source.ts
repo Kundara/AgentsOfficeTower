@@ -168,68 +168,15 @@ export const CLIENT_RUNTIME_NAVIGATION_PATHING_SOURCE = `function officeAvatarPo
         grid[endTile.row][endTile.column] = 0;
         pathfinder.setGrid(grid);
         pathfinder.setAcceptableTiles([0]);
-        pathfinder.setIterationsPerCalculation(Math.max(1000, nav.columns * nav.rows * 4));
-        let resolved = false;
+        pathfinder.enableDiagonals();
+        pathfinder.disableCornerCutting();
+        pathfinder.enableSync();
         let result = null;
         pathfinder.findPath(startTile.column, startTile.row, endTile.column, endTile.row, (path) => {
           result = Array.isArray(path) ? path : null;
-          resolved = true;
         });
-        let guard = 0;
-        while (!resolved && guard < 128) {
-          pathfinder.calculate();
-          guard += 1;
-        }
+        pathfinder.calculate();
         return result;
-      }
-
-      function solveGridPath(nav, startTile, endTile) {
-        if (!nav || !startTile || !endTile) {
-          return null;
-        }
-        const inBounds = (column, row) => row >= 0 && row < nav.rows && column >= 0 && column < nav.columns;
-        if (!inBounds(startTile.column, startTile.row) || !inBounds(endTile.column, endTile.row)) {
-          return null;
-        }
-        const grid = nav.grid.map((row) => row.slice());
-        grid[startTile.row][startTile.column] = 0;
-        grid[endTile.row][endTile.column] = 0;
-        const keyFor = (column, row) => column + ":" + row;
-        const queue = [{ column: startTile.column, row: startTile.row }];
-        const parents = new Map([[keyFor(startTile.column, startTile.row), null]]);
-        const directions = [
-          { column: 0, row: -1 },
-          { column: 1, row: 0 },
-          { column: 0, row: 1 },
-          { column: -1, row: 0 }
-        ];
-        let cursor = 0;
-        while (cursor < queue.length) {
-          const current = queue[cursor];
-          cursor += 1;
-          if (current.column === endTile.column && current.row === endTile.row) {
-            const path = [];
-            let step = current;
-            while (step) {
-              path.push({ x: step.column, y: step.row });
-              step = parents.get(keyFor(step.column, step.row));
-            }
-            return path.reverse();
-          }
-          directions.forEach((direction) => {
-            const next = {
-              column: current.column + direction.column,
-              row: current.row + direction.row
-            };
-            const key = keyFor(next.column, next.row);
-            if (!inBounds(next.column, next.row) || grid[next.row][next.column] !== 0 || parents.has(key)) {
-              return;
-            }
-            parents.set(key, current);
-            queue.push(next);
-          });
-        }
-        return null;
       }
 
       function dedupeRoutePoints(points) {
@@ -246,7 +193,7 @@ export const CLIENT_RUNTIME_NAVIGATION_PATHING_SOURCE = `function officeAvatarPo
         if (!nav || !startTile || !endTile || !room) {
           return exactStart ? [exactStart] : [];
         }
-        const tilePath = solveEasyStarPath(nav, startTile, endTile) || solveGridPath(nav, startTile, endTile);
+        const tilePath = solveEasyStarPath(nav, startTile, endTile);
         if (!Array.isArray(tilePath) || tilePath.length === 0) {
           return exactStart
             ? [{ x: exactStart.x, y: exactStart.y }]
