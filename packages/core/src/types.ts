@@ -421,6 +421,27 @@ export interface WorkspaceActivitySnapshot {
   runningCommands: RunningCommandSummary[];
 }
 
+export type CoordinationClaimStatus = "active" | "released" | "handoff";
+export type CoordinationClaimLifecycle = "active" | "stale" | "released" | "handoff";
+
+export interface CoordinationClaim {
+  id: string;
+  projectRoot: string;
+  objective: string;
+  scope: string[];
+  branch: string | null;
+  agentLabel: string | null;
+  status: CoordinationClaimStatus;
+  blockedOn: string | null;
+  createdAt: string;
+  heartbeatAt: string;
+  expiresAt: string;
+}
+
+export interface CoordinationClaimView extends CoordinationClaim {
+  lifecycle: CoordinationClaimLifecycle;
+}
+
 export type ProviderHealthStatus = "ready" | "unconfigured" | "degraded" | "error";
 
 export interface ProviderHealth {
@@ -444,6 +465,7 @@ export interface DashboardSnapshot {
   activity: WorkspaceActivitySnapshot;
   notes: string[];
   providerHealth: ProviderHealth[];
+  claims: CoordinationClaimView[];
 }
 
 export interface SnapshotOptions {

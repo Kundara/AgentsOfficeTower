@@ -45,6 +45,38 @@ export const CLIENT_RUNTIME_COORDINATION_SOURCE = `      const DESKTOP_NOTIFY_PR
         return overlaps;
       }
 
+      function declaredClaimRows(projects) {
+        const rows = [];
+        for (const snapshot of projects) {
+          for (const claim of Array.isArray(snapshot.claims) ? snapshot.claims : []) {
+            if (claim.lifecycle === "active" || claim.lifecycle === "stale" || claim.lifecycle === "handoff") {
+              rows.push({ snapshot, claim });
+            }
+          }
+        }
+        return rows.slice(0, 6);
+      }
+
+      function renderDeclaredClaimCards(projects) {
+        const rows = declaredClaimRows(projects);
+        if (rows.length === 0) return "";
+        const cards = rows.map(({ snapshot, claim }) => {
+          const meta = [
+            claim.agentLabel ? "by " + claim.agentLabel : "",
+            claim.scope.length > 0 ? "scope " + claim.scope.join(", ") : "",
+            claim.branch ? "branch " + claim.branch : "",
+            "heartbeat " + (evidenceTime(claim.heartbeatAt) || "unknown")
+          ].filter(Boolean).join(" \u00b7 ");
+          const staleNote = claim.lifecycle === "stale"
+            ? '<div class="coordination-claim-stale">Stale: expired without an explicit release — confirm before assuming it is done.</div>'
+            : claim.lifecycle === "handoff"
+            ? '<div class="coordination-claim-stale">Marked for handoff.</div>'
+            : "";
+          return \`<div class="coordination-card coordination-claim is-\${claim.lifecycle}" role="listitem"><div class="coordination-card-title">Declared: \${escapeHtml(claim.objective)}</div><div class="muted coordination-card-evidence">\${escapeHtml(projectLabel(snapshot.projectRoot))} \u00b7 \${escapeHtml(meta)}</div>\${staleNote}</div>\`;
+        }).join("");
+        return \`<section class="session-group session-group-coordination" role="group" aria-label="Declared work claims, \${escapeHtml(String(rows.length))} claims"><div class="session-group-header"><h3>Declared work</h3><span>\${escapeHtml(String(rows.length))}</span></div><div class="session-group-items" role="list">\${cards}</div></section>\`;
+      }
+
       function renderCoordinationCards(projects) {
         const overlaps = state.overlapRows || [];
         if (overlaps.length === 0) return "";

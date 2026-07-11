@@ -5,6 +5,7 @@ import { cwd, exit } from "node:process";
 import { resolve } from "node:path";
 
 import { runDemoPreview } from "./demo-preview";
+import { runClaims } from "./claims";
 import { cliVersion, runDoctor, runStatus } from "./status";
 import { runWebQuery } from "./web-query";
 import {
@@ -34,6 +35,9 @@ Usage:
   aot web query <repo> <gist|recent|last> [scope=local|team] [limit=10] [type=agents|events|all] [--json]
   aot status [--json] [--server http://127.0.0.1:4181]
   aot doctor [--json] [--server http://127.0.0.1:4181]
+  aot claims start --objective "..." [--paths a,b] [--branch x] [--agent name] [--ttl 20] [--project root]
+  aot claims <list|check> [--paths a,b] [--json] [--project root]
+  aot claims <heartbeat|release> <id> [--handoff] [--project root]
   aot demo preview [--port 4181] [--host 127.0.0.1] [--duration 75] [--keep]
   aot aseprite inspect [file]
   aot presence boss [projectRoot]
@@ -77,7 +81,7 @@ function printSnapshot(snapshot: DashboardSnapshot): void {
     grouped.set(key, list);
   }
 
-  console.log("Codex Agents Office");
+  console.log("Agents Office Tower");
   console.log(`Project: ${snapshot.projectRoot}`);
   console.log(`Generated: ${snapshot.generatedAt}`);
   console.log("");
@@ -265,6 +269,11 @@ async function main(): Promise<void> {
 
   if (command === "doctor") {
     await runDoctor(args);
+    return;
+  }
+
+  if (command === "claims") {
+    await runClaims(args, usage);
     return;
   }
 

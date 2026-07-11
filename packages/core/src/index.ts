@@ -4,6 +4,7 @@ export * from "./appearance";
 export * from "./app-server";
 export * from "./app-settings";
 export * from "./cloud";
+export * from "./coordination";
 export * from "./claude-agent-sdk";
 export * from "./claude-home-cache";
 export * from "./codex-command";

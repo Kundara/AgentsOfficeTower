@@ -32,7 +32,7 @@ function loadCoordination(state = {}) {
   const localStorageStub = { getItem() { return null; }, setItem() {} };
   const factory = new Function(
     "state", "escapeHtml", "projectLabel", "evidenceTime", "formatHealthAge", "document", "localStorage", "render", "setCoverageOpen",
-    `${code}\nreturn { detectPossibleOverlaps, renderCoordinationCards, refreshCoordinationState, overlapEvidenceLine, desktopNotificationsState };`
+    `${code}\nreturn { detectPossibleOverlaps, renderCoordinationCards, refreshCoordinationState, overlapEvidenceLine, desktopNotificationsState, renderDeclaredClaimCards };`
   );
   return factory(
     state,
@@ -98,4 +98,27 @@ test("refreshCoordinationState publishes overlap agent ids for the lens and card
 test("desktop notifications default to off and report unsupported without the Notification API", () => {
   const coordination = loadCoordination();
   assert.equal(coordination.desktopNotificationsState(), "unsupported");
+});
+
+
+test("declared claims render side by side with detected overlaps, stale claims flagged", () => {
+  const coordination = loadCoordination({});
+  const projects = [{
+    projectRoot: "/tmp/fixture",
+    generatedAt: new Date().toISOString(),
+    notes: [],
+    providerHealth: [],
+    agents: [],
+    activity: { hotChanges: [] },
+    claims: [
+      { id: "c1", objective: "Refactor drawer", scope: ["packages/web"], branch: null, agentLabel: "Claude", lifecycle: "active", heartbeatAt: new Date().toISOString(), status: "active" },
+      { id: "c2", objective: "Abandoned work", scope: [], branch: null, agentLabel: null, lifecycle: "stale", heartbeatAt: new Date().toISOString(), status: "active" },
+      { id: "c3", objective: "Finished work", scope: [], branch: null, agentLabel: null, lifecycle: "released", heartbeatAt: new Date().toISOString(), status: "released" }
+    ]
+  }];
+  const html = coordination.renderDeclaredClaimCards(projects);
+  assert.match(html, /Declared: Refactor drawer/);
+  assert.match(html, /by Claude/);
+  assert.match(html, /Stale: expired without an explicit release/);
+  assert.ok(!html.includes("Finished work"));
 });

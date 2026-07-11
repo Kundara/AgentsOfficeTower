@@ -5,6 +5,7 @@ import { describeStoredAppearanceSettings } from "../app-settings";
 import { findRoomForPaths, loadRoomConfig } from "../room-config";
 import { resolveProjectIdentity } from "../project-identity";
 import { applyCurrentWorkloadState } from "../domain/workload-policy";
+import { listCoordinationClaims } from "../coordination";
 import { buildWorkspaceActivitySnapshot } from "../domain/workspace-activity";
 import { summarizeActivityByAgent } from "../snapshot-lib/activity-summary";
 import type { AdapterSnapshot } from "../adapters";
@@ -206,7 +207,8 @@ export async function assembleProjectSnapshot(input: {
     events,
     activity,
     notes: aggregateNotes(input.adapterSnapshots),
-    providerHealth: aggregateProviderHealth(input.adapterSnapshots)
+    providerHealth: aggregateProviderHealth(input.adapterSnapshots),
+    claims: listCoordinationClaims(projectRoot, now)
   }, now);
   const diagnostics = freshUnseatedHotChangeAgentDiagnostics(snapshot, now);
   return diagnostics.length > 0

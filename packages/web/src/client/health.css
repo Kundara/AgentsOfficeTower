@@ -224,3 +224,18 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+.coordination-claim {
+  border-color: rgba(122, 170, 140, 0.4);
+  background: rgba(122, 170, 140, 0.08);
+}
+
+.coordination-claim.is-stale {
+  border-color: rgba(232, 124, 98, 0.4);
+  background: rgba(232, 124, 98, 0.08);
+}
+
+.coordination-claim-stale {
+  font-size: 12px;
+  color: #e87c62;
+}

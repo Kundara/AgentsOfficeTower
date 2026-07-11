@@ -28,12 +28,22 @@ node packages/cli/dist/index.js web query <repo> recent scope=local type=agents 
 node packages/cli/dist/index.js web query <repo> recent scope=team type=events kind=fileChange limit=20 --json
 ```
 
-6. Choose the smallest conflict-safe action:
+6. Check declared claims before editing, and declare your own for multi-step work:
+
+```bash
+node packages/cli/dist/index.js claims check --paths <path,path> --project <projectRoot>
+node packages/cli/dist/index.js claims start --objective "<goal>" --paths <path,path> --agent <name> --project <projectRoot>
+node packages/cli/dist/index.js claims heartbeat <id> --project <projectRoot>   # extend while still working
+node packages/cli/dist/index.js claims release <id> --project <projectRoot>     # or --handoff
+```
+
+   Claims are advisory and expire without heartbeats (about 20 minutes). A `caution` verdict or a stale overlapping claim means confirm before proceeding, not that you are forbidden. Detected activity and declared claims can diverge — report the divergence rather than assuming either side is wrong.
+7. Choose the smallest conflict-safe action:
    - Proceed when work is separate and evidence shows no meaningful overlap.
    - Narrow the task to different files or a different subsystem when overlap is avoidable.
    - Wait or report the conflict when another agent is validating the same surface.
    - Ask for takeover direction only when ownership materially changes what should be edited.
-7. Report the coordination result before delegation or edits: scope, active actor, state, last useful action, overlap, provenance/confidence, and chosen boundary.
+8. Release or hand off your claim when you finish, and report the coordination result before delegation or edits: scope, active actor, state, last useful action, overlap, provenance/confidence, and chosen boundary.
 
 ## Interpretation
 

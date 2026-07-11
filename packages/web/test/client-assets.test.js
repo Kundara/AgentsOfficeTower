@@ -134,7 +134,7 @@ test("sessions list keeps status, actions, wrapping, focus, scrolling, and respo
   assert.ok(uiSource.includes('.slice(0, SESSION_RECENT_LEAD_LIMIT);'));
   assert.match(
     uiSource,
-    /return renderCoordinationCards\(projects\)\n\s+\+ needsYouHtml\n\s+\+ renderSessionGroup\("Active", "active", active, renderEntry\)\n\s+\+ renderSessionGroup\("Recent", "recent", recent, renderEntry\);/
+    /return renderDeclaredClaimCards\(projects\)\n\s+\+ renderCoordinationCards\(projects\)\n\s+\+ needsYouHtml\n\s+\+ renderSessionGroup\("Active", "active", active, renderEntry\)\n\s+\+ renderSessionGroup\("Recent", "recent", recent, renderEntry\);/
   );
   assert.ok(uiSource.includes("sessionHierarchySummary(sessions)"));
   assert.ok(uiSource.includes("sessionHierarchySummary([sessionSnapshot || snapshot])"));
@@ -2211,5 +2211,5 @@ test("coordination surfaces expose overlap cards, the overlap lens, and desktop 
   assert.ok(triageSource.includes('case "overlap":'));
   assert.ok(healthSource.includes("refreshCoordinationState(projects);"));
   assert.ok(healthSource.includes("syncNeedsYouNotifications(projects);"));
-  assert.ok(uiSource.includes("return renderCoordinationCards(projects)"));
+  assert.ok(uiSource.includes("return renderDeclaredClaimCards(projects)"));
 });

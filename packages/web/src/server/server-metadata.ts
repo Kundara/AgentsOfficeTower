@@ -53,7 +53,8 @@ function createStartupSnapshot(project: ProjectDescriptor): DashboardSnapshot {
       runningCommands: []
     },
     notes: [`Project ${project.label} is starting up.`],
-    providerHealth: []
+    providerHealth: [],
+    claims: []
   };
 }
 

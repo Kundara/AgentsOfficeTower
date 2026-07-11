@@ -95,6 +95,7 @@ function mockFleetResponse(): FleetResponse {
         cloudTasks: [],
         notes: [],
         providerHealth: [],
+        claims: [],
         events: [],
         activity: {
           generatedAt,
