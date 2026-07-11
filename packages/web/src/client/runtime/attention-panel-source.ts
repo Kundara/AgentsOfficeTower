@@ -1,12 +1,21 @@
 export const CLIENT_RUNTIME_ATTENTION_PANEL_SOURCE = `
       function renderFleetTerminal(fleet) {
         const lines = ["$ aot fleet", ""];
+        const sharedNotes = sharedFleetNotes(fleet.projects);
+        if (sharedNotes.size > 0) {
+          lines.push("FLEET NOTES (apply to every workspace)");
+          for (const note of sharedNotes) {
+            lines.push(\`  ! \${note}\`);
+          }
+          lines.push("");
+        }
         for (const snapshot of fleet.projects) {
           const counts = countsForSnapshot(snapshot);
           lines.push(\`PROJECT \${projectLabel(snapshot.projectRoot)}\`);
           lines.push(\`  total=\${counts.total} active=\${counts.active} waiting=\${counts.waiting} blocked=\${counts.blocked} cloud=\${counts.cloud}\`);
-          if (snapshot.notes.length > 0) {
-            for (const note of snapshot.notes) {
+          const floorNotes = snapshot.notes.filter((note) => !sharedNotes.has(note));
+          if (floorNotes.length > 0) {
+            for (const note of floorNotes) {
               lines.push(\`  ! \${note}\`);
             }
           }

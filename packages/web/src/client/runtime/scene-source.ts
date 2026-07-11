@@ -541,7 +541,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         return eventTokens.concat(commandAgentTokens).join("||");
       }
 
-      function renderTerminalSnapshot(snapshot) {
+      function renderTerminalSnapshot(snapshot, visibleNotes) {
         const rooms = flattenRooms(snapshot.rooms.rooms);
         const lines = [
           \`$ aot watch \${projectLabel(snapshot.projectRoot)}\`,
@@ -575,9 +575,10 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           }
         }
 
-        if (snapshot.notes.length > 0) {
+        const terminalNotes = Array.isArray(visibleNotes) ? visibleNotes : snapshot.notes;
+        if (terminalNotes.length > 0) {
           lines.push("", "NOTES");
-          for (const note of snapshot.notes) {
+          for (const note of terminalNotes) {
             lines.push(\`  ! \${note}\`);
           }
         }
@@ -641,9 +642,11 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           : Number.isFinite(options.floorNumber)
           ? "F" + String(Math.max(1, Number(options.floorNumber))).padStart(2, "0")
           : "LIVE";
-        const notes = state.view === "map" ? "" : snapshot.notes.join(" | ");
+        const sharedNotes = options.sharedNotes instanceof Set ? options.sharedNotes : null;
+        const floorNotes = sharedNotes ? snapshot.notes.filter((note) => !sharedNotes.has(note)) : snapshot.notes;
+        const notes = state.view === "map" ? "" : floorNotes.join(" | ");
         const body = state.view === "terminal"
-          ? renderTerminalSnapshot(snapshot)
+          ? renderTerminalSnapshot(snapshot, floorNotes)
           : renderOfficeMapShell(snapshot, {
             showHint: false,
             compact,
@@ -664,21 +667,46 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         return \`<div class="workspace-tower\${extraClass ? " " + escapeHtml(extraClass) : ""}"><div class="tower-crown" aria-hidden="true"><span class="tower-roof-unit"></span><span class="tower-roof-vent"></span><span class="tower-beacon"></span><span class="tower-crown-mark">AGENTS OFFICE TOWER</span></div><div class="tower-shaft">\${floorHtml}</div><div class="tower-foundation" aria-hidden="true"></div></div>\`;
       }
 
+      function sharedFleetNotes(projects) {
+        const seenIn = new Map();
+        for (const snapshot of projects) {
+          for (const note of new Set(snapshot.notes)) {
+            seenIn.set(note, (seenIn.get(note) || 0) + 1);
+          }
+        }
+        return new Set(Array.from(seenIn.entries())
+          .filter(([, count]) => count > 1)
+          .map(([note]) => note));
+      }
+
+      function renderFleetNoteBanner(sharedNotes) {
+        if (!sharedNotes || sharedNotes.size === 0) {
+          return "";
+        }
+        const items = Array.from(sharedNotes)
+          .map((note) => \`<div class="terminal-warn">  ! \${escapeHtml(note)}</div>\`)
+          .join("");
+        return \`<div class="terminal-shell tower-fleet-notes"><div class="terminal-dim">FLEET NOTES (apply to every workspace)</div>\${items}</div>\`;
+      }
+
       function renderWorkspaceScroll(projects) {
         if (projects.length === 0) {
           return '<div class="empty">No tracked workspaces right now.</div>';
         }
 
+        const sharedNotes = state.view === "terminal" ? sharedFleetNotes(projects) : null;
         const floors = projects.map((snapshot, index) => renderWorkspaceFloor(snapshot, {
           compact: true,
           floorNumber: projects.length - index,
+          sharedNotes,
           action: snapshot.sceneKind === "street-cafe" ? null : {
             type: "select-project",
             label: "Focus",
             projectRoot: snapshot.projectRoot
           }
         })).join("");
-        return renderWorkspaceTower(floors);
+        const banner = state.view === "terminal" ? renderFleetNoteBanner(sharedNotes) : "";
+        return banner + renderWorkspaceTower(floors);
       }
 
       function officeSceneHostKey(projectRoot, compact, focusMode) {

@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start", "--", "--port", "4975"],
       "port": 4975
+    },
+    {
+      "name": "demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["packages/cli/dist/index.js", "demo", "preview", "--port", "4603", "--duration", "900"],
+      "port": 4603
     }
   ]
 }

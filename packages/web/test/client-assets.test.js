@@ -121,6 +121,9 @@ test("sessions list keeps status, actions, wrapping, focus, scrolling, and respo
   assert.ok(uiSource.includes("function renderSessionHierarchy(projects, entries, renderEntry) {"));
   assert.ok(uiSource.includes("function sessionHierarchySummary(projects) {"));
   assert.ok(uiSource.includes('return { key: "needs-you", label: "Needs you" };'));
+  assert.ok(uiSource.includes('return { key: "finishing", label: "Finishing" };'));
+  assert.ok(uiSource.includes("const terminalDisplayState = agent && (agent.state === \"done\" || agent.state === \"idle\");"));
+  assert.ok(uiSource.includes("const holdsRuntimeOwnership = agent && (agent.isCurrent === true || agent.isOngoing === true);"));
   assert.ok(uiSource.includes("return Boolean(agent && isBusyAgent(agent));"));
   assert.ok(uiSource.includes('class="session-card" role="listitem" tabindex="0"'));
   assert.ok(uiSource.includes('data-session-key="\\${escapeHtml(sessionKey)}"'));
@@ -2150,4 +2153,14 @@ test("workspace floors expose persisted bounded scene color customization", () =
   assert.ok(navigationSource.includes("scenePalette.boardBase"));
   assert.ok(styles.includes(".tower-floor-customizer"));
   assert.ok(styles.includes(".scene-color-ramp"));
+});
+
+test("terminal note rendering hoists fleet-wide warnings out of per-floor blocks", () => {
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  const attentionSource = readRuntimeSource("attention-panel-source.ts");
+  assert.ok(sceneSource.includes("function sharedFleetNotes(projects) {"));
+  assert.ok(sceneSource.includes("FLEET NOTES (apply to every workspace)"));
+  assert.ok(sceneSource.includes("renderTerminalSnapshot(snapshot, floorNotes)"));
+  assert.ok(attentionSource.includes("const sharedNotes = sharedFleetNotes(fleet.projects);"));
+  assert.ok(attentionSource.includes("snapshot.notes.filter((note) => !sharedNotes.has(note))"));
 });
