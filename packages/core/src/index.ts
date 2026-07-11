@@ -3,6 +3,7 @@ export * from "./aseprite";
 export * from "./appearance";
 export * from "./app-server";
 export * from "./app-settings";
+export * from "./audit";
 export * from "./cloud";
 export * from "./coordination";
 export * from "./claude-agent-sdk";

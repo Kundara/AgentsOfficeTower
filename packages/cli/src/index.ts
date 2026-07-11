@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 
 import { runDemoPreview } from "./demo-preview";
 import { runClaims } from "./claims";
+import { runAudit, runLogs, runRestart, runServiceInstall, runStart, runStop } from "./lifecycle";
 import { cliVersion, runDoctor, runStatus } from "./status";
 import { runWebQuery } from "./web-query";
 import {
@@ -38,6 +39,10 @@ Usage:
   aot claims start --objective "..." [--paths a,b] [--branch x] [--agent name] [--ttl 20] [--project root]
   aot claims <list|check> [--paths a,b] [--json] [--project root]
   aot claims <heartbeat|release> <id> [--handoff] [--project root]
+  aot start|stop|restart [--port 4181] [--force]
+  aot logs [--lines 50]
+  aot audit [--lines 20] [--json]
+  aot service install [--port 4181]
   aot demo preview [--port 4181] [--host 127.0.0.1] [--duration 75] [--keep]
   aot aseprite inspect [file]
   aot presence boss [projectRoot]
@@ -274,6 +279,36 @@ async function main(): Promise<void> {
 
   if (command === "claims") {
     await runClaims(args, usage);
+    return;
+  }
+
+  if (command === "start") {
+    await runStart(args);
+    return;
+  }
+
+  if (command === "stop") {
+    await runStop(args);
+    return;
+  }
+
+  if (command === "restart") {
+    await runRestart(args);
+    return;
+  }
+
+  if (command === "logs") {
+    runLogs(args);
+    return;
+  }
+
+  if (command === "audit") {
+    runAudit(args);
+    return;
+  }
+
+  if (command === "service" && args[0] === "install") {
+    runServiceInstall(args.slice(1));
     return;
   }
 

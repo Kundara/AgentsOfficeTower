@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { projectPathIdentityKey } from "@agents-tower/core";
+import { appendAuditRecord, projectPathIdentityKey } from "@agents-tower/core";
 
 import { readJsonBody, notFound, sendAbsoluteFileAsset, sendHtml, sendJson, sendProjectFile, sendStaticAsset } from "../http-helpers";
 import { buildHealthResponse } from "./health";
@@ -666,10 +666,25 @@ async function handleNeedsUserRoute(context: RequestContext): Promise<boolean> {
     await context.service.respondToApprovalRequest(payload.projectRoot, payload.requestId, decision);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    appendAuditRecord({
+      actor: "browser",
+      action: "approval.respond",
+      target: { projectRoot: payload.projectRoot, requestId: payload.requestId },
+      detail: decision,
+      outcome: "error",
+      error: message
+    });
     sendJson(context.response, 400, { error: message });
     return true;
   }
 
+  appendAuditRecord({
+    actor: "browser",
+    action: "approval.respond",
+    target: { projectRoot: payload.projectRoot, requestId: payload.requestId },
+    detail: decision,
+    outcome: "ok"
+  });
   sendJson(context.response, 200, { ok: true });
   return true;
 }
@@ -691,6 +706,7 @@ async function handleNeedsUserInputRoute(context: RequestContext): Promise<boole
     return true;
   }
 
+  const answeredQuestionCount = Object.keys(payload.answers as Record<string, unknown>).length;
   try {
     await context.service.respondToInputRequest(
       payload.projectRoot,
@@ -699,10 +715,25 @@ async function handleNeedsUserInputRoute(context: RequestContext): Promise<boole
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    appendAuditRecord({
+      actor: "browser",
+      action: "input.answer",
+      target: { projectRoot: payload.projectRoot, requestId: payload.requestId },
+      detail: `${answeredQuestionCount} answered questions`,
+      outcome: "error",
+      error: message
+    });
     sendJson(context.response, 400, { error: message });
     return true;
   }
 
+  appendAuditRecord({
+    actor: "browser",
+    action: "input.answer",
+    target: { projectRoot: payload.projectRoot, requestId: payload.requestId },
+    detail: `${answeredQuestionCount} answered questions`,
+    outcome: "ok"
+  });
   sendJson(context.response, 200, { ok: true });
   return true;
 }
@@ -726,10 +757,25 @@ async function handleThreadReplyRoute(context: RequestContext): Promise<boolean>
     await context.service.sendThreadReply(payload.projectRoot, payload.threadId, payload.text);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    appendAuditRecord({
+      actor: "browser",
+      action: "thread.reply",
+      target: { projectRoot: payload.projectRoot, threadId: payload.threadId },
+      detail: `reply of ${payload.text.length} characters`,
+      outcome: "error",
+      error: message
+    });
     sendJson(context.response, 400, { error: message });
     return true;
   }
 
+  appendAuditRecord({
+    actor: "browser",
+    action: "thread.reply",
+    target: { projectRoot: payload.projectRoot, threadId: payload.threadId },
+    detail: `reply of ${payload.text.length} characters`,
+    outcome: "ok"
+  });
   sendJson(context.response, 200, { ok: true });
   return true;
 }
