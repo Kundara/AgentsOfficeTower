@@ -42,6 +42,10 @@ export const FLEET_MONITOR_REFRESH_TIMEOUT_MS = 20000;
 const HERMES_FLOATING_AGENT_LIMIT = 12;
 const OPENCLAW_FLOATING_AGENT_LIMIT = 12;
 
+function isClientDisconnectError(error: NodeJS.ErrnoException): boolean {
+  return error.code === "EPIPE" || error.code === "ECONNRESET";
+}
+
 export function filterFreshDiscoveredProjects(
   projects: DiscoveredProject[],
   nowMs = Date.now(),
@@ -375,8 +379,33 @@ export class FleetLiveService {
   }
 
   registerSse(response: ServerResponse): void {
+    let closed = false;
+    const close = () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      clearInterval(heartbeat);
+      this.clients.delete(response);
+    };
+    const write = (chunk: string): void => {
+      if (closed || response.destroyed || response.writableEnded) {
+        close();
+        return;
+      }
+      try {
+        response.write(chunk);
+      } catch (error) {
+        const socketError = error as NodeJS.ErrnoException;
+        if (isClientDisconnectError(socketError)) {
+          close();
+          return;
+        }
+        throw error;
+      }
+    };
     const heartbeat = setInterval(() => {
-      response.write(": ping\n\n");
+      write(": ping\n\n");
     }, 15000);
 
     response.writeHead(200, {
@@ -385,17 +414,29 @@ export class FleetLiveService {
       connection: "keep-alive",
       "x-accel-buffering": "no"
     });
-    response.write(": connected\n\n");
+    response.on("error", (error: NodeJS.ErrnoException) => {
+      if (isClientDisconnectError(error)) {
+        close();
+        return;
+      }
+      console.error(`Agents Office Tower SSE response failed: ${error.stack ?? error.message}`);
+    });
+    response.socket?.on("error", (error: NodeJS.ErrnoException) => {
+      if (isClientDisconnectError(error)) {
+        close();
+        return;
+      }
+      console.error(`Agents Office Tower SSE socket failed: ${error.stack ?? error.message}`);
+    });
+
+    write(": connected\n\n");
     this.clients.add(response);
 
     if (this.fleet) {
-      response.write(`event: fleet\ndata: ${JSON.stringify(this.fleet)}\n\n`);
+      write(`event: fleet\ndata: ${JSON.stringify(this.fleet)}\n\n`);
     }
 
-    response.on("close", () => {
-      clearInterval(heartbeat);
-      this.clients.delete(response);
-    });
+    response.on("close", close);
   }
 
   private async publish(forceProjectRefresh = false): Promise<void> {
@@ -413,8 +454,21 @@ export class FleetLiveService {
     await this.attachRoamingOpenClawAgents(snapshotsByRoot);
     this.fleet = buildFleetResponse(this.projects, snapshotsByRoot, this.accountAgents);
 
-    for (const response of this.clients) {
-      response.write(`event: fleet\ndata: ${JSON.stringify(this.fleet)}\n\n`);
+    for (const response of Array.from(this.clients)) {
+      if (response.destroyed || response.writableEnded) {
+        this.clients.delete(response);
+        continue;
+      }
+      try {
+        response.write(`event: fleet\ndata: ${JSON.stringify(this.fleet)}\n\n`);
+      } catch (error) {
+        const socketError = error as NodeJS.ErrnoException;
+        if (isClientDisconnectError(socketError)) {
+          this.clients.delete(response);
+          continue;
+        }
+        throw error;
+      }
     }
   }
 
