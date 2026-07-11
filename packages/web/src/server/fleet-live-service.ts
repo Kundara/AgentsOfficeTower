@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 
 import {
@@ -568,7 +569,8 @@ export class FleetLiveService {
     const rawDiscoveredProjects = this.explicitProjects
       ? []
       : await discoverProjects(FleetLiveService.PROJECT_DISCOVERY_LIMIT).catch(() => []);
-    const discoveredProjects = filterFreshDiscoveredProjects(rawDiscoveredProjects);
+    const discoveredProjects = filterFreshDiscoveredProjects(rawDiscoveredProjects)
+      .filter((project) => existsSync(project.root));
     const normalizedSeeds = this.seedProjects
       .map((project) => {
         const root = canonicalizeProjectPath(project.root);
@@ -601,7 +603,7 @@ export class FleetLiveService {
       });
     }
     for (const [identityKey, project] of Array.from(this.recentlyDiscoveredProjects.entries())) {
-      if (now - project.lastSeenAt > FleetLiveService.PROJECT_DISCOVERY_RETENTION_MS) {
+      if (now - project.lastSeenAt > FleetLiveService.PROJECT_DISCOVERY_RETENTION_MS || !existsSync(project.root)) {
         this.recentlyDiscoveredProjects.delete(identityKey);
       } else {
         sourceKindsByIdentity.set(

@@ -74,8 +74,15 @@ export async function startWebServer(argv: string[] = process.argv.slice(2)): Pr
   });
 
   const shutdown = () => {
+    const forceExitTimer = setTimeout(() => {
+      console.error("Shutdown grace period elapsed with connections still open; exiting.");
+      process.exit(0);
+    }, 5000);
+    forceExitTimer.unref();
     void service.stop().finally(() => {
-      server.close();
+      server.close(() => {
+        process.exit(0);
+      });
     });
   };
 
