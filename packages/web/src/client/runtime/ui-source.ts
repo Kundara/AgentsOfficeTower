@@ -961,10 +961,12 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
           ? \`Updated \${fleet.generatedAt}\`
           : \`Updated \${generatedAtDate.toLocaleTimeString([], { hour12: false })}\`);
         setTextIfChanged(projectCount, \`\${towerProjects.length} floors · \${displayedProjects.filter((project) => busyCount(project) > 0).length} live\`);
-        mapViewButton.classList.toggle("active", state.view === "map");
-        terminalViewButton.classList.toggle("active", state.view === "terminal");
-        mapViewButton.setAttribute("aria-pressed", state.view === "map" ? "true" : "false");
-        terminalViewButton.setAttribute("aria-pressed", state.view === "terminal" ? "true" : "false");
+        if (mapViewButton && terminalViewButton) {
+          mapViewButton.classList.toggle("active", state.view === "map");
+          terminalViewButton.classList.toggle("active", state.view === "terminal");
+          mapViewButton.setAttribute("aria-pressed", state.view === "map" ? "true" : "false");
+          terminalViewButton.setAttribute("aria-pressed", state.view === "terminal" ? "true" : "false");
+        }
         setConnection(state.connection);
         rememberVisibleRecentLeads(displayedProjects);
         syncWorkspaceFullscreenUi();

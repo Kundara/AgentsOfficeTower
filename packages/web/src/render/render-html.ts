@@ -68,10 +68,6 @@ export function renderHtml(
             </div>
           </div>
           <div class="hero-actions">
-            <div class="view-toggle" role="group" aria-label="Workspace view">
-              <button id="map-view-button" data-view="map" type="button" aria-pressed="true">Map</button>
-              <button id="terminal-view-button" data-view="terminal" type="button" aria-pressed="false">Terminal</button>
-            </div>
             <button
               id="split-worktrees-button"
               class="toggle-button"

@@ -59,7 +59,7 @@ Live data should update scene entities in place instead of rebuilding the office
 
 ### Terminal
 
-The terminal surface is the fast inspection mode.
+The terminal surface is the fast inspection mode. It lives in the CLI (`aot snapshot`, `aot watch`, `aot web query`); the browser no longer exposes a Map/Terminal toggle, and the browser terminal renderer remains reachable only through the `?view=terminal` debug URL.
 
 It should group sessions by room and show:
 
