@@ -247,3 +247,32 @@
   align-items: stretch;
   gap: 8px;
 }
+
+/* Compact single-row Recent cards. */
+
+.session-card-compact {
+  padding: 6px 10px;
+}
+
+.session-card-compact .session-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-card-compact .session-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-card-compact .session-card-heading button {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 2px 8px;
+}

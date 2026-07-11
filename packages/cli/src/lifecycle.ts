@@ -117,15 +117,15 @@ export async function runStop(args: string[]): Promise<void> {
   }
 
   process.kill(livePid as number, "SIGTERM");
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await delay(300);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await delay(500);
     if (await liveServerPid(target.serverBase) === null) {
       rmSync(pidfilePath(), { force: true });
       console.log(`Stopped Agents Office Tower (pid ${livePid}).`);
       return;
     }
   }
-  console.error(`Sent SIGTERM to pid ${livePid} but the server is still answering. Investigate manually.`);
+  console.error(`Sent SIGTERM to pid ${livePid} but the server was still answering after 20s. It may still be draining observers; check again with \`aot status\` before forcing anything.`);
   exit(1);
 }
 

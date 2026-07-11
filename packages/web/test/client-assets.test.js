@@ -2107,7 +2107,9 @@ test("tower all-view combines chat and cowork sessions into a dedicated street c
   assert.ok(uiSource.includes("[...street.workspaceProjects, street.cafeSnapshot]"));
   assert.ok(uiSource.includes("partitionStreetCafeProjects(floorProjects, fleet.accountAgents)"));
   assert.ok(readRuntimeSource("evidence-source.ts").includes('return JSON.stringify(["conversation", agent.conversationKey]);'));
-  assert.ok(uiSource.includes("agent.network || agent.accountObserved === true || !appearanceProjectRoot"));
+  assert.ok(!uiSource.includes("data-action=\"cycle-look\""));
+  assert.ok(uiSource.includes('renderEntry(entry, key === "recent")'));
+  assert.ok(uiSource.includes('class="session-card session-card-compact"'));
   assert.ok(uiSource.includes('const sessions=(state.selected === "all" ? [...street.workspaceProjects, street.cafeSnapshot] : towerProjects)'));
   assert.ok(sceneSource.includes('snapshot.sceneKind === "street-cafe"'));
   assert.ok(sceneSource.includes("Codex Quick Chat appears after you choose Add to task."));

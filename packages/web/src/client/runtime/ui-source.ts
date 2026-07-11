@@ -1,20 +1,18 @@
-export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapshot, agent, description) {
-        const appearanceProjectRoot = agent.sourceProjectRoot || snapshot.projectRoot;
-        const appearanceAgentId = agent.sourceAgentId || agent.id;
+export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapshot, agent, description, compact = false) {
         const replyProjectRoot = replyActionProjectRoot(snapshot, agent);
         const title = displayAgentLabel(snapshot, agent);
         const sessionKey = sessionDomKey(snapshot, agent);
         const replyAction = replyProjectRoot
           ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
           : "";
-        const appearanceAction = agent.network || agent.accountObserved === true || !appearanceProjectRoot
-          ? ""
-          : \`<button data-action="cycle-look" data-project-root="\${escapeHtml(appearanceProjectRoot)}" data-agent-id="\${escapeHtml(appearanceAgentId)}">Cycle look</button>\`;
         const evidenceOpen = state.evidenceKey === sessionKey;
         const evidenceAction = \`<button data-action="toggle-evidence" data-session-key="\${escapeHtml(sessionKey)}" aria-expanded="\${evidenceOpen ? "true" : "false"}">Why?</button>\`;
-        const cardActions = [replyAction, appearanceAction, evidenceAction].filter(Boolean).join("");
         const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
         const cardState = sessionCardState(agent);
+        if (compact) {
+          return \`<article class="session-card session-card-compact" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(cardState.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + cardState.label + (description ? ", " + description : ""))}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(description ? title + " — " + description : title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(cardState.label)}</span>\${sessionAgeBadge(agent)}\${evidenceAction}</div>\${evidenceOpen ? renderAgentEvidence(snapshot, agent) : ""}</article>\`;
+        }
+        const cardActions = [replyAction, evidenceAction].filter(Boolean).join("");
         const actions = cardActions
           ? \`<div class="card-actions session-card-actions" aria-label="Session actions">\${cardActions}</div>\`
           : "";
@@ -27,7 +25,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
 
       function renderSessionGroup(label, key, entries, renderEntry) {
         const titleId = \`session-group-\${key}-title\`;
-        const cards = entries.map(renderEntry).join("");
+        const cards = entries.map((entry) => renderEntry(entry, key === "recent")).join("");
         const empty = cards
           ? ""
           : \`<div class="session-group-empty" role="listitem">None right now</div>\`;
@@ -74,13 +72,13 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
         }
 
         const entries = snapshot.agents.map((agent) => ({ snapshot, agent }));
-        return renderSessionHierarchy([snapshot], entries, ({ snapshot: entrySnapshot, agent }) => {
+        return renderSessionHierarchy([snapshot], entries, ({ snapshot: entrySnapshot, agent }, compact = false) => {
           const description = normalizeDisplayText(entrySnapshot.projectRoot, agent.detail)
             || latestAgentMessage(entrySnapshot.projectRoot, agent)
             || \`[\${agent.state}]\`;
           const sourceLabel = agentNetworkLabel(agent);
           const fullDescription = sourceLabel ? \`\${sourceLabel} · \${description}\` : description;
-          return renderSessionCard(entrySnapshot, agent, fullDescription);
+          return renderSessionCard(entrySnapshot, agent, fullDescription, compact);
         });
       }
 
@@ -351,13 +349,13 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
           return '<div class="empty">No live or recent lead sessions across the tracked workspaces right now.</div>';
         }
 
-        return renderSessionHierarchy(projects, entries, ({ snapshot, agent }) => {
+        return renderSessionHierarchy(projects, entries, ({ snapshot, agent }, compact = false) => {
           const detail = normalizeDisplayText(snapshot.projectRoot, agent.detail)
             || latestAgentMessage(snapshot.projectRoot, agent)
             || \`[\${agent.state}]\`;
           const sourceLabel = agentNetworkLabel(agent);
           const description = projectLabel(snapshot.projectRoot) + " · " + (sourceLabel ? sourceLabel + " · " : "") + detail;
-          return renderSessionCard(snapshot, agent, description);
+          return renderSessionCard(snapshot, agent, description, compact);
         });
       }
 

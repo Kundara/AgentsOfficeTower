@@ -215,13 +215,7 @@ textarea:focus-visible,
   margin: 0;
   border: 3px solid #16292d;
   border-bottom-width: 6px;
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.05) 0 2px,
-      transparent 2px 26px
-    ),
-    linear-gradient(180deg, #435e64 0 7px, #2b474d 7px 18px, #1e373c 18px);
+  background: linear-gradient(180deg, #435e64 0 7px, #2b474d 7px 18px, #1e373c 18px);
   box-shadow:
     inset 0 2px #647d7d,
     inset 0 -3px #0f2226;
@@ -306,30 +300,6 @@ textarea:focus-visible,
   position: relative;
   border-inline: 10px solid #1a2f33;
   background: #14282c;
-  box-shadow:
-    inset 3px 0 rgba(116, 151, 151, 0.18),
-    inset -3px 0 rgba(2, 10, 13, 0.34),
-    0 0 0 2px #102124;
-}
-.tower-shaft::before,
-.tower-shaft::after {
-  content: "";
-  position: absolute;
-  top: 6px;
-  bottom: 6px;
-  width: 4px;
-  background: repeating-linear-gradient(
-    180deg,
-    rgba(158, 221, 246, 0.16) 0 10px,
-    transparent 10px 26px
-  );
-  pointer-events: none;
-}
-.tower-shaft::before {
-  left: -8px;
-}
-.tower-shaft::after {
-  right: -8px;
 }
 .tower-floor {
   border: 0;
@@ -346,13 +316,7 @@ textarea:focus-visible,
   min-height: 34px;
   padding: 4px 9px 5px;
   border-bottom: 1px solid rgba(165, 192, 187, 0.16);
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.02) 0 1px,
-      transparent 1px 30px
-    ),
-    linear-gradient(180deg, #1f383d, #152b30);
+  background: linear-gradient(180deg, #1f383d, #152b30);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.04);
 }
 .tower-floor-index {
@@ -543,13 +507,7 @@ textarea:focus-visible,
   border-top: 4px solid #c7d6df;
 }
 .street-cafe-floor .tower-floor-strip {
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 228, 184, 0.06) 0 1px,
-      transparent 1px 26px
-    ),
-    linear-gradient(180deg, #6a3a34, #3b242a);
+  background: linear-gradient(180deg, #6a3a34, #3b242a);
   border-bottom-color: rgba(255, 204, 145, 0.26);
 }
 .street-cafe-floor .tower-floor-index {
@@ -569,13 +527,7 @@ textarea:focus-visible,
   height: 20px;
   margin: 0;
   border-top: 3px solid #3b585d;
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.035) 0 2px,
-      transparent 2px 18px
-    ),
-    #152b30;
+  background: #152b30;
   box-shadow:
     inset 0 -6px #0e2024,
     0 5px rgba(12, 31, 36, 0.24);
@@ -742,12 +694,6 @@ body.workspace-focus .office-map-host {
   }
   .tower-shaft {
     border-inline-width: 7px;
-  }
-  .tower-shaft::before {
-    left: -6px;
-  }
-  .tower-shaft::after {
-    right: -6px;
   }
   .tower-floor-body {
     padding-inline: 4px;
