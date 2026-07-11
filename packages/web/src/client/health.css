@@ -109,61 +109,6 @@
   background: rgba(232, 124, 98, 0.14);
 }
 
-/* "Why is this here?" session evidence. */
-
-.session-card-evidence {
-  margin-top: 6px;
-  padding: 8px;
-  border-radius: 6px;
-  font-size: 12px;
-  background: rgba(122, 140, 170, 0.1);
-  display: grid;
-  gap: 4px;
-}
-
-.evidence-row {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-}
-
-.evidence-label {
-  min-width: 92px;
-  flex-shrink: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 10px;
-  opacity: 0.75;
-}
-
-.evidence-value {
-  overflow-wrap: anywhere;
-}
-
-.evidence-chain-title {
-  margin-top: 4px;
-  font-weight: 600;
-}
-
-.evidence-event {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: baseline;
-}
-
-.evidence-event-kind {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  opacity: 0.75;
-  min-width: 110px;
-}
-
-.evidence-event-title {
-  overflow-wrap: anywhere;
-}
-
 /* Sessions triage filter bar. */
 
 .session-filter {
@@ -269,10 +214,4 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.session-card-compact .session-card-heading button {
-  flex: 0 0 auto;
-  font-size: 11px;
-  padding: 2px 8px;
 }

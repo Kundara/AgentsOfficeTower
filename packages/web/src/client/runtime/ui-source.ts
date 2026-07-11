@@ -5,18 +5,16 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
         const replyAction = replyProjectRoot
           ? \`<button data-action="open-reply-composer" data-project-root="\${escapeHtml(replyProjectRoot)}" data-thread-id="\${escapeHtml(agent.threadId)}">Reply</button>\`
           : "";
-        const evidenceOpen = state.evidenceKey === sessionKey;
-        const evidenceAction = \`<button data-action="toggle-evidence" data-session-key="\${escapeHtml(sessionKey)}" aria-expanded="\${evidenceOpen ? "true" : "false"}">Why?</button>\`;
         const focusKeys = escapeHtml(JSON.stringify(collectFocusedSessionKeys(snapshot, agent)));
         const cardState = sessionCardState(agent);
         if (compact) {
-          return \`<article class="session-card session-card-compact" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(cardState.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + cardState.label + (description ? ", " + description : ""))}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(description ? title + " — " + description : title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(cardState.label)}</span>\${sessionAgeBadge(agent)}\${evidenceAction}</div>\${evidenceOpen ? renderAgentEvidence(snapshot, agent) : ""}</article>\`;
+          return \`<article class="session-card session-card-compact" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(cardState.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + cardState.label + (description ? ", " + description : ""))}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(description ? title + " — " + description : title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(cardState.label)}</span>\${sessionAgeBadge(agent)}</div></article>\`;
         }
-        const cardActions = [replyAction, evidenceAction].filter(Boolean).join("");
+        const cardActions = [replyAction].filter(Boolean).join("");
         const actions = cardActions
           ? \`<div class="card-actions session-card-actions" aria-label="Session actions">\${cardActions}</div>\`
           : "";
-        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(cardState.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + cardState.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(cardState.label)}</span>\${sessionSnapshotStaleBadge(snapshot)}\${sessionAgeBadge(agent)}</div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${evidenceOpen ? renderAgentEvidence(snapshot, agent) : ""}\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
+        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(cardState.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + cardState.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(cardState.label)}</span>\${sessionSnapshotStaleBadge(snapshot)}\${sessionAgeBadge(agent)}</div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
       }
 
       function isLiveSessionAgent(agent) {
@@ -1120,12 +1118,6 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
 
         if (action === "close-coverage") {
           setCoverageOpen(false);
-          return;
-        }
-
-        if (action === "toggle-evidence") {
-          state.evidenceKey = state.evidenceKey === target.dataset.sessionKey ? null : target.dataset.sessionKey;
-          render();
           return;
         }
 
