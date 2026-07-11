@@ -199,3 +199,28 @@
   white-space: nowrap;
   opacity: 0.7;
 }
+
+/* Coordination overlap cards. */
+
+.session-group-coordination .session-group-header h3 {
+  color: #e8b04a;
+}
+
+.coordination-card {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(232, 176, 74, 0.35);
+  background: rgba(232, 176, 74, 0.08);
+  display: grid;
+  gap: 4px;
+}
+
+.coordination-card-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.coordination-card-evidence {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

@@ -220,6 +220,7 @@ export function renderHtml(
                 <option value="live">My live work</option>
                 <option value="inferred">Inferred only</option>
                 <option value="remote">Remote work</option>
+                <option value="overlap">Possible overlap</option>
                 <option value="degraded">Degraded visibility</option>
               </select>
             </div>

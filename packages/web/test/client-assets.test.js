@@ -134,7 +134,7 @@ test("sessions list keeps status, actions, wrapping, focus, scrolling, and respo
   assert.ok(uiSource.includes('.slice(0, SESSION_RECENT_LEAD_LIMIT);'));
   assert.match(
     uiSource,
-    /return needsYouHtml\n\s+\+ renderSessionGroup\("Active", "active", active, renderEntry\)\n\s+\+ renderSessionGroup\("Recent", "recent", recent, renderEntry\);/
+    /return renderCoordinationCards\(projects\)\n\s+\+ needsYouHtml\n\s+\+ renderSessionGroup\("Active", "active", active, renderEntry\)\n\s+\+ renderSessionGroup\("Recent", "recent", recent, renderEntry\);/
   );
   assert.ok(uiSource.includes("sessionHierarchySummary(sessions)"));
   assert.ok(uiSource.includes("sessionHierarchySummary([sessionSnapshot || snapshot])"));
@@ -2195,4 +2195,21 @@ test("sessions triage exposes search, lenses, attention ranking, and time-in-sta
   assert.ok(uiSource.includes("const sorted = [...filterSessionEntries(entries)]"));
   assert.ok(uiSource.includes(".sort(needsYouUrgency);"));
   assert.ok(uiSource.includes("\\${sessionAgeBadge(agent)}"));
+});
+
+test("coordination surfaces expose overlap cards, the overlap lens, and desktop notifications", () => {
+  const coordinationSource = readRuntimeSource("coordination-source.ts");
+  const triageSource = readRuntimeSource("triage-source.ts");
+  const healthSource = readRuntimeSource("health-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+  assert.ok(coordinationSource.includes("function detectPossibleOverlaps(projects) {"));
+  assert.ok(coordinationSource.includes("Possible overlap —"));
+  assert.ok(!coordinationSource.includes("owned by"));
+  assert.ok(coordinationSource.includes("function syncNeedsYouNotifications(projects) {"));
+  assert.ok(coordinationSource.includes("STALE_WAIT_ESCALATION_MS = 10 * 60 * 1000"));
+  assert.ok(coordinationSource.includes('data-action="search-overlap"'));
+  assert.ok(triageSource.includes('case "overlap":'));
+  assert.ok(healthSource.includes("refreshCoordinationState(projects);"));
+  assert.ok(healthSource.includes("syncNeedsYouNotifications(projects);"));
+  assert.ok(uiSource.includes("return renderCoordinationCards(projects)"));
 });

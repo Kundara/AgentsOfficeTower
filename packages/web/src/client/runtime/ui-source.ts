@@ -61,7 +61,8 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
         const needsYouHtml = needsYou.length > 0
           ? \`<section class="session-group session-group-needs" role="group" aria-label="Needs You, \${escapeHtml(String(needsYou.length))} sessions">\${renderNeedsAttention(projects)}</section>\`
           : "";
-        return needsYouHtml
+        return renderCoordinationCards(projects)
+          + needsYouHtml
           + renderSessionGroup("Active", "active", active, renderEntry)
           + renderSessionGroup("Recent", "recent", recent, renderEntry);
       }

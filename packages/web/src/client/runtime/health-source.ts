@@ -104,7 +104,7 @@ export const CLIENT_RUNTIME_HEALTH_SOURCE = `      const SNAPSHOT_STALE_AFTER_CL
           : \`<div class="settings-section"><strong>What might be missing</strong>\${notes.map((note) =>
               \`<div class="coverage-note muted">! \${escapeHtml(note)}</div>\`
             ).join("")}</div>\`;
-        return \`<div class="coverage-fleet-status is-\${status}">Fleet visibility: <strong>\${status}</strong></div><div class="settings-section"><strong>Providers</strong>\${providerRows}</div>\${staleRows}\${noteRows}\`;
+        return \`<div class="coverage-fleet-status is-\${status}">Fleet visibility: <strong>\${status}</strong></div><div class="settings-section"><strong>Providers</strong>\${providerRows}</div>\${staleRows}\${noteRows}\${renderNotificationToggleSection()}\`;
       }
 
       function coveragePopupElements() {
@@ -131,6 +131,8 @@ export const CLIENT_RUNTIME_HEALTH_SOURCE = `      const SNAPSHOT_STALE_AFTER_CL
       function updateHealthSurfaces(projects) {
         state.healthProjects = projects;
         state.fleetHealth = fleetHealthStatusClient(projects);
+        refreshCoordinationState(projects);
+        syncNeedsYouNotifications(projects);
         if (state.coverageOpen) {
           const { body } = coveragePopupElements();
           if (body) {

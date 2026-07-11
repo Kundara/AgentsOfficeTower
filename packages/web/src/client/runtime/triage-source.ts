@@ -10,6 +10,8 @@ export const CLIENT_RUNTIME_TRIAGE_SOURCE = `      function sessionLensPredicate
             return ({ agent }) => Boolean(agent.network) || agent.source === "cloud" || agent.state === "cloud";
           case "degraded":
             return ({ snapshot }) => snapshotHasDegradedProvider(snapshot) || snapshotIsStale(snapshot);
+          case "overlap":
+            return ({ agent }) => Boolean(state.overlapAgentIds && state.overlapAgentIds.has(agent.id));
           default:
             return () => true;
         }
@@ -21,7 +23,8 @@ export const CLIENT_RUNTIME_TRIAGE_SOURCE = `      function sessionLensPredicate
           projectLabel(snapshot.projectRoot),
           agent.detail || "",
           agent.provenance || "",
-          agent.state || ""
+          agent.state || "",
+          Array.isArray(agent.paths) ? agent.paths.join(" ") : ""
         ].join(" ").toLowerCase();
       }
 
