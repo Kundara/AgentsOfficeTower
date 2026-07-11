@@ -18,7 +18,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
         const actions = cardActions
           ? \`<div class="card-actions session-card-actions" aria-label="Session actions">\${cardActions}</div>\`
           : "";
-        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(cardState.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + cardState.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(cardState.label)}</span>\${sessionSnapshotStaleBadge(snapshot)}</div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${evidenceOpen ? renderAgentEvidence(snapshot, agent) : ""}\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
+        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(cardState.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + cardState.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(cardState.label)}</span>\${sessionSnapshotStaleBadge(snapshot)}\${sessionAgeBadge(agent)}</div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${evidenceOpen ? renderAgentEvidence(snapshot, agent) : ""}\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
       }
 
       function isLiveSessionAgent(agent) {
@@ -35,8 +35,8 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
       }
 
       function sessionHierarchy(entries) {
-        const sorted = [...entries].sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
-        const needsYou = sorted.filter(({ agent }) => Boolean(agent.needsUser));
+        const sorted = [...filterSessionEntries(entries)].sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
+        const needsYou = sorted.filter(({ agent }) => Boolean(agent.needsUser)).sort(needsYouUrgency);
         const active = sorted.filter(({ agent }) => !agent.needsUser && isLiveSessionAgent(agent));
         const recent = sorted
           .filter(({ agent }) => !agent.needsUser && !isLiveSessionAgent(agent))

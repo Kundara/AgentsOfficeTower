@@ -212,6 +212,17 @@ export function renderHtml(
               <h2 id="sessions-panel-title">Sessions</h2>
               <span id="rooms-path" class="muted"></span>
             </div>
+            <div id="session-filter" class="session-filter">
+              <input id="session-filter-input" type="search" placeholder="Search sessions" aria-label="Search sessions" autocomplete="off" />
+              <select id="session-filter-lens" aria-label="Session lens">
+                <option value="all">All sessions</option>
+                <option value="needs-intervention">Needs intervention</option>
+                <option value="live">My live work</option>
+                <option value="inferred">Inferred only</option>
+                <option value="remote">Remote work</option>
+                <option value="degraded">Degraded visibility</option>
+              </select>
+            </div>
           </div>
           <div id="session-list" class="panel-body session-list" role="list" tabindex="0" aria-describedby="rooms-path"></div>
         </aside>

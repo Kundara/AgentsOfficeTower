@@ -163,3 +163,39 @@
 .evidence-event-title {
   overflow-wrap: anywhere;
 }
+
+/* Sessions triage filter bar. */
+
+.session-filter {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.session-filter input[type="search"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(122, 140, 170, 0.35);
+  background: rgba(12, 18, 28, 0.35);
+  color: inherit;
+}
+
+.session-filter select {
+  font: inherit;
+  max-width: 46%;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(122, 140, 170, 0.35);
+  background: rgba(12, 18, 28, 0.35);
+  color: inherit;
+}
+
+.session-card-age {
+  margin-left: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0.7;
+}

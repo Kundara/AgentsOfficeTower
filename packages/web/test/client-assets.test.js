@@ -2182,3 +2182,17 @@ test("fleet coverage surfaces expose the health chip, drawer, floor chips, and s
   assert.ok(!uiSource.includes("function renderHeroSummary"));
   assert.ok(sceneSource.includes("renderFloorStatusChips(counts, streetCafe, snapshot)"));
 });
+
+test("sessions triage exposes search, lenses, attention ranking, and time-in-state", () => {
+  const triageSource = readRuntimeSource("triage-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+  assert.ok(triageSource.includes("function sessionLensPredicate(lens) {"));
+  assert.ok(triageSource.includes("function filterSessionEntries(entries) {"));
+  assert.ok(triageSource.includes("function needsYouUrgency(left, right) {"));
+  assert.ok(triageSource.includes("function sessionAgeBadge(agent) {"));
+  assert.ok(triageSource.includes('case "needs-intervention":'));
+  assert.ok(triageSource.includes('case "degraded":'));
+  assert.ok(uiSource.includes("const sorted = [...filterSessionEntries(entries)]"));
+  assert.ok(uiSource.includes(".sort(needsYouUrgency);"));
+  assert.ok(uiSource.includes("\\${sessionAgeBadge(agent)}"));
+});

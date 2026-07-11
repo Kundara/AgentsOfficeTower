@@ -11,6 +11,7 @@ const RUNTIME_SECTIONS = [
   ["src/client/runtime/settings-source.ts", "CLIENT_RUNTIME_SETTINGS_SOURCE"],
   ["src/client/runtime/health-source.ts", "CLIENT_RUNTIME_HEALTH_SOURCE"],
   ["src/client/runtime/evidence-source.ts", "CLIENT_RUNTIME_EVIDENCE_SOURCE"],
+  ["src/client/runtime/triage-source.ts", "CLIENT_RUNTIME_TRIAGE_SOURCE"],
   ["src/client/runtime/scene-customization-source.ts", "CLIENT_RUNTIME_SCENE_CUSTOMIZATION_SOURCE"],
   ["src/client/scene-grid-source.ts", "SCENE_GRID_SCRIPT"],
   ["src/client/toast-source.ts", "TOAST_SCRIPT"],
