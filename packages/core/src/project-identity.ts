@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { open } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -7,6 +9,8 @@ import { canonicalizeProjectPath, projectLabelFromRoot } from "./project-paths";
 import type { ProjectIdentity } from "./types";
 
 const execFileAsync = promisify(execFile);
+const CLAUDE_SCRATCHPAD_PATH = /^\/private\/tmp\/claude-[^/]+\/([^/]+)\/([0-9a-f-]{36})\/scratchpad\/([^/]+)(?:\/|$)/i;
+const CLAUDE_TRANSCRIPT_PREFIX_BYTES = 256 * 1024;
 
 function repoNameFromUrl(repoUrl: string | null): string | null {
   if (!repoUrl) {
@@ -102,17 +106,21 @@ function deriveWorktreeName(input: {
 }
 
 export async function resolveProjectIdentity(projectRoot: string): Promise<ProjectIdentity | null> {
-  const gitRoot = resolveGitPath(projectRoot, await gitOutput(projectRoot, ["rev-parse", "--show-toplevel"]));
+  const directGitRoot = resolveGitPath(projectRoot, await gitOutput(projectRoot, ["rev-parse", "--show-toplevel"]));
+  const scratchpad = directGitRoot ? null : await resolveClaudeScratchpadOwner(projectRoot);
+  const identityRoot = scratchpad?.ownerRoot ?? projectRoot;
+  const gitRoot = directGitRoot ?? resolveGitPath(identityRoot, await gitOutput(identityRoot, ["rev-parse", "--show-toplevel"]));
   if (!gitRoot) {
     return null;
   }
 
-  const commonGitDir = resolveGitPath(projectRoot, await gitOutput(projectRoot, ["rev-parse", "--git-common-dir"]));
-  const absoluteGitDir = resolveGitPath(projectRoot, await gitOutput(projectRoot, ["rev-parse", "--absolute-git-dir"]));
-  const repoUrl = normalizeRepositoryUrl(await gitOutput(projectRoot, ["config", "--get", "remote.origin.url"]));
-  const branch = await gitOutput(projectRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const commonGitDir = resolveGitPath(identityRoot, await gitOutput(identityRoot, ["rev-parse", "--git-common-dir"]));
+  const absoluteGitDir = resolveGitPath(identityRoot, await gitOutput(identityRoot, ["rev-parse", "--absolute-git-dir"]));
+  const repoUrl = normalizeRepositoryUrl(await gitOutput(identityRoot, ["config", "--get", "remote.origin.url"]));
+  const branch = await gitOutput(identityRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const rootCommit = await gitOutput(identityRoot, ["rev-list", "--max-parents=0", "HEAD"]);
   const repoName = repoNameFromUrl(repoUrl) ?? basename(gitRoot) ?? projectLabelFromRoot(projectRoot);
-  const worktreeName = deriveWorktreeName({
+  const worktreeName = scratchpad?.worktreeName ?? deriveWorktreeName({
     projectRoot,
     gitRoot,
     commonGitDir,
@@ -123,6 +131,7 @@ export async function resolveProjectIdentity(projectRoot: string): Promise<Proje
   return {
     key: repoUrl ?? commonGitDir ?? gitRoot,
     source: repoUrl ? "git" : "unknown",
+    rootCommit,
     gitRoot,
     commonGitDir,
     repoUrl,
@@ -130,4 +139,51 @@ export async function resolveProjectIdentity(projectRoot: string): Promise<Proje
     branch,
     worktreeName
   };
+}
+
+export interface ClaudeScratchpadOwner {
+  ownerRoot: string;
+  worktreeName: string;
+}
+
+export async function resolveClaudeScratchpadOwner(
+  projectRoot: string,
+  claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || resolve(homedir(), ".claude")
+): Promise<ClaudeScratchpadOwner | null> {
+  const canonicalRoot = canonicalizeProjectPath(projectRoot);
+  const match = canonicalRoot?.match(CLAUDE_SCRATCHPAD_PATH);
+  if (!match) {
+    return null;
+  }
+
+  const [, encodedOwner, sessionId, worktreeName] = match;
+  const transcriptPath = resolve(claudeConfigDir, "projects", encodedOwner, `${sessionId}.jsonl`);
+  let handle;
+  try {
+    handle = await open(transcriptPath, "r");
+    const buffer = Buffer.alloc(CLAUDE_TRANSCRIPT_PREFIX_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    for (const line of buffer.subarray(0, bytesRead).toString("utf8").split("\n")) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const record = JSON.parse(line) as { cwd?: unknown; sessionId?: unknown };
+        if (record.sessionId !== sessionId || typeof record.cwd !== "string") {
+          continue;
+        }
+        const ownerRoot = canonicalizeProjectPath(record.cwd);
+        if (ownerRoot && !CLAUDE_SCRATCHPAD_PATH.test(ownerRoot)) {
+          return { ownerRoot, worktreeName };
+        }
+      } catch {
+        // A partial final line is expected when the prefix ends mid-record.
+      }
+    }
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+  return null;
 }
