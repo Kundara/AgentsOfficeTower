@@ -9,6 +9,7 @@ const packageRoot = resolve(scriptDir, "..");
 const RUNTIME_SECTIONS = [
   ["src/client/runtime/bootstrap-source.ts", "CLIENT_RUNTIME_BOOTSTRAP_SOURCE"],
   ["src/client/runtime/settings-source.ts", "CLIENT_RUNTIME_SETTINGS_SOURCE"],
+  ["src/client/runtime/health-source.ts", "CLIENT_RUNTIME_HEALTH_SOURCE"],
   ["src/client/runtime/scene-customization-source.ts", "CLIENT_RUNTIME_SCENE_CUSTOMIZATION_SOURCE"],
   ["src/client/scene-grid-source.ts", "SCENE_GRID_SCRIPT"],
   ["src/client/toast-source.ts", "TOAST_SCRIPT"],

@@ -2163,3 +2163,21 @@ test("terminal note rendering hoists fleet-wide warnings out of per-floor blocks
   assert.ok(attentionSource.includes("const sharedNotes = sharedFleetNotes(fleet.projects);"));
   assert.ok(attentionSource.includes("snapshot.notes.filter((note) => !sharedNotes.has(note))"));
 });
+
+test("fleet coverage surfaces expose the health chip, drawer, floor chips, and stale badges", () => {
+  const healthSource = readRuntimeSource("health-source.ts");
+  const uiSource = readRuntimeSource("ui-source.ts");
+  const sceneSource = readRuntimeSource("scene-source.ts");
+  assert.ok(healthSource.includes("function fleetHealthStatusClient(projects"));
+  assert.ok(healthSource.includes("function providerHealthRollup(projects) {"));
+  assert.ok(healthSource.includes("function renderHeroSummary(counts) {"));
+  assert.ok(healthSource.includes("function renderCoveragePopupBody(projects"));
+  assert.ok(healthSource.includes("function sessionSnapshotStaleBadge(snapshot) {"));
+  assert.ok(healthSource.includes('data-action="toggle-coverage"'));
+  assert.ok(healthSource.includes("floorHealthChipEntries"));
+  assert.ok(uiSource.includes("updateHealthSurfaces(floorProjects);"));
+  assert.ok(uiSource.includes('if (action === "toggle-coverage") {'));
+  assert.ok(uiSource.includes("\\${sessionSnapshotStaleBadge(snapshot)}"));
+  assert.ok(!uiSource.includes("function renderHeroSummary"));
+  assert.ok(sceneSource.includes("renderFloorStatusChips(counts, streetCafe, snapshot)"));
+});

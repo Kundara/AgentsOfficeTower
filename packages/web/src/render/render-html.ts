@@ -58,6 +58,15 @@ export function renderHtml(
             </div>
           </div>
           <div id="hero-summary" class="hero-summary"></div>
+          <div class="settings-shell coverage-shell">
+            <div id="coverage-popup" class="settings-popup coverage-popup" role="dialog" aria-modal="false" aria-labelledby="coverage-title" hidden>
+              <div class="settings-popup-header">
+                <strong id="coverage-title">Fleet Coverage</strong>
+                <button type="button" data-action="close-coverage">Close</button>
+              </div>
+              <div id="coverage-popup-body" class="settings-popup-body"></div>
+            </div>
+          </div>
           <div class="hero-actions">
             <div class="view-toggle" role="group" aria-label="Workspace view">
               <button id="map-view-button" data-view="map" type="button" aria-pressed="true">Map</button>

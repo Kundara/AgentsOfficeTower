@@ -1,0 +1,110 @@
+/* Fleet coverage / provider health surfaces. */
+
+.hero-health {
+  cursor: pointer;
+  font: inherit;
+  border: 1px solid transparent;
+}
+
+.hero-health.is-healthy {
+  color: #79d29a;
+}
+
+.hero-health.is-starting {
+  color: #9aa7bd;
+}
+
+.hero-health.is-degraded {
+  color: #e8b04a;
+  border-color: rgba(232, 176, 74, 0.45);
+}
+
+.hero-health.is-stale {
+  color: #e87c62;
+  border-color: rgba(232, 124, 98, 0.45);
+}
+
+.coverage-shell {
+  position: relative;
+}
+
+.coverage-popup {
+  min-width: 320px;
+  max-width: min(440px, calc(100vw - 24px));
+}
+
+.coverage-fleet-status {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(122, 140, 170, 0.12);
+}
+
+.coverage-fleet-status.is-degraded {
+  background: rgba(232, 176, 74, 0.14);
+}
+
+.coverage-fleet-status.is-stale {
+  background: rgba(232, 124, 98, 0.14);
+}
+
+.coverage-provider {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.coverage-provider-status {
+  font-size: 11px;
+  min-width: 84px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.coverage-provider.is-ready .coverage-provider-status {
+  color: #79d29a;
+}
+
+.coverage-provider.is-unconfigured .coverage-provider-status {
+  color: #9aa7bd;
+}
+
+.coverage-provider.is-degraded .coverage-provider-status {
+  color: #e8b04a;
+}
+
+.coverage-provider.is-error .coverage-provider-status {
+  color: #e87c62;
+}
+
+.coverage-provider-detail,
+.coverage-note {
+  flex-basis: 100%;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.coverage-stale-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.floor-chip.is-degraded i {
+  background: #e8b04a;
+}
+
+.floor-chip.is-stale i {
+  background: #e87c62;
+}
+
+.session-card-stale {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: #e87c62;
+  background: rgba(232, 124, 98, 0.14);
+}

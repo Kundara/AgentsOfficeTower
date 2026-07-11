@@ -594,8 +594,11 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         return \`<div class="terminal-shell">\${html}</div>\`;
       }
 
-      function renderFloorStatusChips(counts, streetCafe) {
+      function renderFloorStatusChips(counts, streetCafe, snapshot) {
         const chips = [];
+        if (snapshot) {
+          chips.push(...floorHealthChipEntries(snapshot));
+        }
         if (counts.active > 0) {
           chips.push(["is-active", \`\${counts.active} live\`]);
         }
@@ -636,7 +639,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const summaryTitle = streetCafe
           ? "Chat · Home · Work · Quick Chat: Add to task"
           : \`\${counts.total} agents · \${counts.active} active · \${counts.waiting} waiting · \${counts.blocked} blocked · \${counts.cloud} cloud\`;
-        const summaryChips = renderFloorStatusChips(counts, streetCafe);
+        const summaryChips = renderFloorStatusChips(counts, streetCafe, snapshot);
         const floorMarker = streetCafe
           ? "G"
           : Number.isFinite(options.floorNumber)

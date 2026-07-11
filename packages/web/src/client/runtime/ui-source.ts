@@ -41,7 +41,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
         const actions = cardActions
           ? \`<div class="card-actions session-card-actions" aria-label="Session actions">\${cardActions}</div>\`
           : "";
-        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(state.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + state.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(state.label)}</span></div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
+        return \`<article class="session-card" role="listitem" tabindex="0" data-session-key="\${escapeHtml(sessionKey)}" data-session-state="\${escapeHtml(state.key)}" data-focus-keys="\${focusKeys}" aria-label="\${escapeHtml(title + ", " + state.label)}"><div class="session-card-heading"><strong class="session-card-title" title="\${escapeHtml(title)}">\${escapeHtml(title)}</strong><span class="session-card-state">\${escapeHtml(state.label)}</span>\${sessionSnapshotStaleBadge(snapshot)}</div><div class="muted session-card-description" title="\${escapeHtml(description)}">\${escapeHtml(description)}</div>\${actions}\${renderReplyComposer(snapshot, agent)}</article>\`;
       }
 
       function isLiveSessionAgent(agent) {
@@ -915,18 +915,6 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
         return availableProjects.find((snapshot) => snapshotMatchesProjectRoot(snapshot, state.selected)) || null;
       }
 
-      function renderHeroSummary(counts) {
-        return [
-          ["Agents", counts.total, "primary", true],
-          ["Active", counts.active, "is-active", true],
-          ["Waiting", counts.waiting, "is-waiting", counts.waiting > 0],
-          ["Blocked", counts.blocked, "is-blocked", counts.blocked > 0],
-          ["Cloud", counts.cloud, "is-cloud", counts.cloud > 0]
-        ].filter(([, , , visible]) => visible).map(([label, value, className]) =>
-          \`<span class="hero-summary-item \${className}"><strong>\${value}</strong><span>\${label}</span></span>\`
-        ).join("");
-      }
-
       function ingestFleet(fleet) {
         state.localFleet = fleet;
         applyFleet(fleet);
@@ -1008,6 +996,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
           syncFloatingHermesAgents([]);
         }
 
+        updateHealthSurfaces(floorProjects);
         setHtmlIfChanged(heroSummary, renderHeroSummary(counts));
 
         setHtmlIfChanged(projectTabs, [
@@ -1142,6 +1131,16 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
 
         if (action === "close-settings") {
           setSettingsOpen(false);
+          return;
+        }
+
+        if (action === "toggle-coverage") {
+          setCoverageOpen(!state.coverageOpen);
+          return;
+        }
+
+        if (action === "close-coverage") {
+          setCoverageOpen(false);
           return;
         }
 
