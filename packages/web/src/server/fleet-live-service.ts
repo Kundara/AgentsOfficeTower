@@ -22,8 +22,8 @@ import {
   setStoredAppearanceSettings,
   setStoredCursorApiKey,
   setStoredMultiplayerSettings
-} from "@codex-agents-office/core";
-import type { CloudTask, DashboardAgent, DashboardSnapshot, DiscoveredProject } from "@codex-agents-office/core";
+} from "@agents-tower/core";
+import type { CloudTask, DashboardAgent, DashboardSnapshot, DiscoveredProject } from "@agents-tower/core";
 
 import { buildFleetResponse } from "./server-metadata";
 import { buildProjectDescriptors } from "./server-options";

@@ -4,7 +4,7 @@
 
 This document answers two questions:
 
-1. What signals can Codex Agents Office read from Codex, Claude, Hermes, OpenClaw, and Cursor today?
+1. What signals can Agents Office Tower read from Codex, Claude, Hermes, OpenClaw, and Cursor today?
 2. How does each signal get represented in this project?
 
 The goal is practical transparency. This is not a generic event catalog. It is the list of hooks this codebase can already ride, plus the places where we are still leaving signal on the table.
@@ -1281,4 +1281,4 @@ Today the project does not yet fully ride:
 - richer turn lifecycle motion
 - direct Claude or Cursor session reply steering
 
-That is the current observability contract of Codex Agents Office.
+That is the current observability contract of Agents Office Tower.

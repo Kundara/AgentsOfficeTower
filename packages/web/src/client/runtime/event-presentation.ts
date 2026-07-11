@@ -1,4 +1,4 @@
-import type { AgentActivityEvent, DashboardEvent } from "@codex-agents-office/core";
+import type { AgentActivityEvent, DashboardEvent } from "@agents-tower/core";
 
 type IconCatalog = Readonly<Record<string, string>>;
 type PresentationEvent = Partial<DashboardEvent & AgentActivityEvent> & {

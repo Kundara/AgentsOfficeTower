@@ -1,7 +1,8 @@
 {
-  "name": "@codex-agents-office/party",
+  "name": "@agents-tower/party",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "scripts": {
     "dev": "partykit dev",
     "deploy": "partykit deploy"

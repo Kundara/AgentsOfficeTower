@@ -1,5 +1,5 @@
-import { normalizeRepositoryUrl } from "@codex-agents-office/core";
-import type { AgentGoalState, DashboardAgent, DashboardEvent, DashboardSnapshot, HotChangeSummary, ProjectIdentity } from "@codex-agents-office/core";
+import { normalizeRepositoryUrl } from "@agents-tower/core";
+import type { AgentGoalState, DashboardAgent, DashboardEvent, DashboardSnapshot, HotChangeSummary, ProjectIdentity } from "@agents-tower/core";
 
 import type { FleetResponse } from "./server-types";
 

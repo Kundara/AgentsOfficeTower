@@ -6,7 +6,7 @@ import * as net from "node:net";
 import * as path from "node:path";
 import * as os from "node:os";
 
-import { resolveReadableRoomsFilePath, scaffoldRoomsFile } from "@codex-agents-office/core";
+import { resolveReadableRoomsFilePath, scaffoldRoomsFile } from "@agents-tower/core";
 import * as vscode from "vscode";
 
 const VIEW_ID = "codexAgentsOffice.view";
@@ -510,8 +510,8 @@ function createNonce(): string {
 async function resolveWorkspaceServerEntry(projectRoot: string, extensionPath: string): Promise<string> {
   const candidates = [
     path.join(projectRoot, "packages", "web", "dist", "server.js"),
-    path.join(projectRoot, "node_modules", "@codex-agents-office", "web", "dist", "server.js"),
-    path.join(extensionPath, "node_modules", "@codex-agents-office", "web", "dist", "server.js")
+    path.join(projectRoot, "node_modules", "@agents-tower", "web", "dist", "server.js"),
+    path.join(extensionPath, "node_modules", "@agents-tower", "web", "dist", "server.js")
   ];
 
   for (const candidate of candidates) {

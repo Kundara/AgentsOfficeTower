@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { cwd, env } from "node:process";
 
-import { projectLabelFromRoot, projectPathIdentityKey } from "@codex-agents-office/core";
+import { projectLabelFromRoot, projectPathIdentityKey } from "@agents-tower/core";
 
 import type { ProjectDescriptor, ServerOptions } from "./server-types";
 

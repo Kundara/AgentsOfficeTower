@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile, realpath } from "node:fs/promises";
 import { extname, normalize, resolve } from "node:path";
 
-import { canonicalizeProjectPath } from "@codex-agents-office/core";
+import { canonicalizeProjectPath } from "@agents-tower/core";
 
 const WEB_PUBLIC_DIR = resolve(__dirname, "../public");
 const DEFAULT_JSON_BODY_MAX_BYTES = 1024 * 1024;

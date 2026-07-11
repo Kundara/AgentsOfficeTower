@@ -20,24 +20,24 @@ import {
   validateRoomFile,
   type DashboardAgent,
   type DashboardSnapshot
-} from "@codex-agents-office/core";
-import { startWebServer } from "@codex-agents-office/web";
+} from "@agents-tower/core";
+import { startWebServer } from "@agents-tower/web";
 
 function usage(): void {
-  console.log(`codex-agents-office
+  console.log(`aot
 
 Usage:
-  codex-agents-office snapshot [projectRoot] [--history]
-  codex-agents-office watch [projectRoot] [--history]
-  codex-agents-office web [--port 4181] [--host 127.0.0.1] [projectRoot...]
-  codex-agents-office web query <repo> <gist|recent|last> [scope=local|team] [limit=10] [type=agents|events|all] [--json]
-  codex-agents-office demo preview [--port 4181] [--host 127.0.0.1] [--duration 75] [--keep]
-  codex-agents-office aseprite inspect [file]
-  codex-agents-office presence boss [projectRoot]
-  codex-agents-office presence clear [projectRoot]
-  codex-agents-office rooms validate [fileOrProjectRoot]
-  codex-agents-office rooms scaffold [projectRoot]
-  codex-agents-office agents link hermes [--hermes-home ~/.hermes] [--hook-dir <path>]
+  aot snapshot [projectRoot] [--history]
+  aot watch [projectRoot] [--history]
+  aot web [--port 4181] [--host 127.0.0.1] [projectRoot...]
+  aot web query <repo> <gist|recent|last> [scope=local|team] [limit=10] [type=agents|events|all] [--json]
+  aot demo preview [--port 4181] [--host 127.0.0.1] [--duration 75] [--keep]
+  aot aseprite inspect [file]
+  aot presence boss [projectRoot]
+  aot presence clear [projectRoot]
+  aot rooms validate [fileOrProjectRoot]
+  aot rooms scaffold [projectRoot]
+  aot agents link hermes [--hermes-home ~/.hermes] [--hook-dir <path>]
 
 Omit project roots for normal fleet-mode web deploys.
 Pass project roots only when you intentionally want a pinned single-project or multi-project view.

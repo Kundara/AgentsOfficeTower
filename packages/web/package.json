@@ -1,8 +1,13 @@
 {
-  "name": "@codex-agents-office/web",
+  "name": "@agents-tower/web",
   "version": "0.1.0",
+  "license": "MIT",
   "main": "dist/server.js",
   "types": "dist/server.d.ts",
+  "files": [
+    "dist",
+    "public"
+  ],
   "scripts": {
     "build": "node scripts/build-client.mjs && tsc -p tsconfig.json",
     "test": "node --test test/*.test.js",
@@ -10,7 +15,7 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@codex-agents-office/core": "file:../core",
+    "@agents-tower/core": "^0.1.0",
     "easystarjs": "^0.4.4",
     "partysocket": "^1.1.16",
     "pixi.js": "^8.17.1"

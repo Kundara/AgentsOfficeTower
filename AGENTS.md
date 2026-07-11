@@ -2,8 +2,8 @@
 
 ## Purpose
 
-`CodexAgentsOffice` is a workspace-level observability layer for Codex sessions.
-It renders current workload across local and cloud Codex work as:
+`AgentsOfficeTower` is a workspace-level observability layer for agent sessions across Codex, Claude, Cursor, Hermes, OpenClaw, cloud tasks, and shared rooms. Codex has the deepest typed support; every provider is normalized into the same workload model.
+It renders current workload across local and cloud agent work as:
 
 - a browser office view
 - a terminal snapshot/watch view
@@ -11,7 +11,7 @@ It renders current workload across local and cloud Codex work as:
 
 The project goal is not generic chat replay. It is live workload visibility:
 
-- which Codex workspaces are active now
+- which workspaces are active now
 - which parent sessions are leading work
 - which subagents are active, waiting, blocked, or done
 - what room or project area that work maps to

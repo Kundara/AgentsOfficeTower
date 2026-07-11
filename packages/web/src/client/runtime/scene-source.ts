@@ -544,7 +544,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
       function renderTerminalSnapshot(snapshot) {
         const rooms = flattenRooms(snapshot.rooms.rooms);
         const lines = [
-          \`$ codex-agents-office watch \${projectLabel(snapshot.projectRoot)}\`,
+          \`$ aot watch \${projectLabel(snapshot.projectRoot)}\`,
           "",
           \`PROJECT \${projectLabel(snapshot.projectRoot)}\`,
           \`UPDATED \${snapshot.generatedAt}\`,

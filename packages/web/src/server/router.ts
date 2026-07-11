@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { projectPathIdentityKey } from "@codex-agents-office/core";
+import { projectPathIdentityKey } from "@agents-tower/core";
 
 import { readJsonBody, notFound, sendAbsoluteFileAsset, sendHtml, sendJson, sendProjectFile, sendStaticAsset } from "../http-helpers";
 import { buildServerMeta } from "./server-metadata";

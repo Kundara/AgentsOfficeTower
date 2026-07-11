@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Codex Agents Office is a workspace-level observability layer for Codex sessions.
+Agents Office Tower is a workspace-level observability layer for agent sessions across Codex, Claude, Cursor, Hermes, OpenClaw, cloud tasks, and shared rooms. Codex has the deepest typed support; every provider is normalized into the same workload model.
 
 It is not a chat replay UI. It is a live workload view that answers:
 

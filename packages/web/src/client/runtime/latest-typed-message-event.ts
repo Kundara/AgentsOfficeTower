@@ -1,4 +1,4 @@
-import type { DashboardAgent, DashboardEvent, DashboardSnapshot } from "@codex-agents-office/core";
+import type { DashboardAgent, DashboardEvent, DashboardSnapshot } from "@agents-tower/core";
 
 type MessageSnapshot = Pick<DashboardSnapshot, "events">;
 type MessageAgent = Pick<DashboardAgent, "threadId">;

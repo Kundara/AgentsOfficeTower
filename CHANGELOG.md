@@ -9,6 +9,9 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added a root MIT `LICENSE`, `license` fields in every workspace package, and a README License section clarifying that bundled art assets keep their original authors' terms.
+- Added GitHub Actions CI running build plus the full `npm run check` suite with a guard against reintroducing the pre-rename `@codex-agents-office/` package scope or `Codex Agents Office` product naming, and a tag-driven npm release workflow publishing `@agents-tower/core`, `@agents-tower/web`, and the `agents-office-tower` CLI in dependency order.
+- Added `docs/product-plan.md`, the phased Trust & Coordination execution roadmap with a recorded decision log, linked from the README docs list and `docs/self-development.md`.
 - Added a `/layout-audit` route that runs the normal client bundle against synthetic floors (6-boss vertical column, mixed boss/desk, desks-only, big-team overflow, quiet) for previewing and tuning workstation layout dynamics.
 - Added a private rootless account-agent lane and bounded Claude Desktop HTTP-cache observer for recent `product:cowork-remote` Home work metadata, rendering inferred read-only Claude agents in Chat Café and Sessions without extracting, retaining, or exposing credentials or prompt/message bodies, and without calling private endpoints.
 - Added browser-local per-workspace scene customization beside Shared/Focus, with Floor, Wall, and Board color inputs, bounded derived shades, live Pixi preview, reset, and persistence across merged or split worktree views.
@@ -45,6 +48,8 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed the package identity to Agents Office Tower: the CLI publishes as `agents-office-tower` with an `aot` binary plus a deprecated `codex-agents-office` alias, libraries moved to `@agents-tower/core`, `@agents-tower/web`, and `@agents-tower/party`, the VS Code package became `agents-office-tower-vscode`, workspace `file:` dependencies became publishable version ranges with `files` allowlists, and docs dropped the Codex-only product naming. Machine-local functional identifiers (browser storage keys, PartyKit room name, Hermes plugin directory, OpenClaw client id, app user-data directories, VS Code command ids) intentionally keep their original names until a migration exists.
+- Restored the `.codex/config.toml` lead `model` and `model_reasoning_effort` baseline keys that the agent-workflow validation requires, returning `npm run check:agent-workflows` to green.
 - Changed grounded avatar pathfinding to use smooth diagonal routes across open floor while preventing corner cutting through occupied tiles.
 - Changed fleet retention so launch seeds and configured roots no longer keep forgotten projects visible without agent or session-log activity in the last seven days, normalized second/millisecond timestamps across providers, and kept explicit project views pinned.
 - Changed shared-room overlays so current peer activity temporarily restores projects hidden by weekly local retention as read-only remote-only floors, which disappear again when the peer stops publishing or ages out of the multiplayer stale window.

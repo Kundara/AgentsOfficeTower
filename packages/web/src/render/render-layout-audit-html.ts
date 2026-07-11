@@ -1,6 +1,6 @@
 import { SERVER_BUILD_AT } from "../server/server-metadata";
 import { renderHtml } from "./render-html";
-import type { DashboardAgent } from "@codex-agents-office/core";
+import type { DashboardAgent } from "@agents-tower/core";
 import type { FleetResponse, ProjectDescriptor, ServerOptions } from "../server/server-types";
 
 interface LayoutScenario {

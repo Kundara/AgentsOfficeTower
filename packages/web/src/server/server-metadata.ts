@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
 
-import type { DashboardAgent, DashboardSnapshot } from "@codex-agents-office/core";
+import type { DashboardAgent, DashboardSnapshot } from "@agents-tower/core";
 
 import type { FleetResponse, MultiplayerStatus, ProjectDescriptor, ServerMeta, ServerOptions } from "./server-types";
 

@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Lint, workflows, file sizes, typecheck, tests
+        run: npm run check
+      - name: Guard against reintroducing the pre-rename identity
+        run: |
+          # Scoped package imports must stay on @agents-tower/*.
+          if grep -rn "@codex-agents-office/" --include="*.ts" --include="*.js" --include="*.json" packages scripts --exclude-dir=node_modules --exclude-dir=dist; then
+            echo "Found stale @codex-agents-office/ package references." >&2
+            exit 1
+          fi
+          # Product prose must use the Agents Office Tower identity
+          # (CHANGELOG keeps its historical entries; kept functional
+          # identifiers like storage keys are lowercase and unaffected).
+          if grep -rn "Codex Agents Office" --include="*.md" . --exclude-dir=node_modules --exclude=CHANGELOG.md; then
+            echo "Found stale 'Codex Agents Office' product naming in docs." >&2
+            exit 1
+          fi

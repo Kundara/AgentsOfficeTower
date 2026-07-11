@@ -1,6 +1,6 @@
 export const CLIENT_RUNTIME_ATTENTION_PANEL_SOURCE = `
       function renderFleetTerminal(fleet) {
-        const lines = ["$ codex-agents-office fleet", ""];
+        const lines = ["$ aot fleet", ""];
         for (const snapshot of fleet.projects) {
           const counts = countsForSnapshot(snapshot);
           lines.push(\`PROJECT \${projectLabel(snapshot.projectRoot)}\`);

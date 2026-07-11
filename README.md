@@ -50,6 +50,8 @@ Open [http://127.0.0.1:4181](http://127.0.0.1:4181).
 
 `npm start` installs dependencies if needed, rebuilds the workspace, and starts fleet mode on port `4181`.
 
+The CLI ships as the `agents-office-tower` npm package with an `aot` binary (`aot web`, `aot snapshot`, `aot demo preview`); `codex-agents-office` remains as a deprecated alias for one release. Until the first npm release is published, run it from source as shown below.
+
 ## Common Commands
 
 ```bash
@@ -69,9 +71,9 @@ node packages/cli/dist/index.js snapshot /abs/project/path
 node packages/cli/dist/index.js watch /abs/project/path
 
 # Query the running local tower
-node packages/cli/dist/index.js web query CodexAgentsOffice gist scope=local --json
-node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=local type=agents limit=5 --json
-node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=team type=events limit=10 --json
+node packages/cli/dist/index.js web query AgentsOfficeTower gist scope=local --json
+node packages/cli/dist/index.js web query AgentsOfficeTower recent scope=local type=agents limit=5 --json
+node packages/cli/dist/index.js web query AgentsOfficeTower recent scope=team type=events limit=10 --json
 
 # Demo scene
 node packages/cli/dist/index.js demo preview --port 4181
@@ -143,6 +145,7 @@ The VS Code panel embeds the real office renderer by starting a local Agents Off
 
 ## Docs
 
+- [docs/product-plan.md](docs/product-plan.md)
 - [docs/spec.md](docs/spec.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/integration-hooks.md](docs/integration-hooks.md)
@@ -156,3 +159,7 @@ The VS Code panel embeds the real office renderer by starting a local Agents Off
 - Main PixelOffice environment assets come from [2D Pig's Pixel Office pack](https://2dpig.itch.io/pixel-office).
 - Pixel food/drink held-item icons in `packages/web/public/pixel-office/sprites/props/drinks/` come from [Alex Kovacs Art's "100 Free Pixel Art Foods!"](https://alexkovacsart.itch.io/free-pixel-art-foods), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - Chat Café tiles in `packages/web/public/pixel-office/sprites/cafe/` are derived from [Gherwit's free CAFE TILES and CITY TILES packs](https://gherwit.itch.io/cafe-tiles-16x16).
+
+## License
+
+The code in this repository is licensed under the [MIT License](LICENSE). Bundled art assets remain under their original authors' terms as listed in Asset Credits and [docs/references.md](docs/references.md); they are not relicensed by the MIT grant.

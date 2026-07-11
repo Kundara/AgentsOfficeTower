@@ -1,8 +1,9 @@
 {
-  "name": "codex-agents-office",
+  "name": "agents-office-tower-vscode",
   "displayName": "Agents Office Tower",
-  "description": "Room-based activity view for Codex local sessions and cloud tasks.",
+  "description": "Room-based activity view for agent sessions and cloud tasks across supported providers.",
   "version": "0.1.0",
+  "license": "MIT",
   "publisher": "local",
   "engines": {
     "vscode": "^1.97.0"
@@ -56,7 +57,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@codex-agents-office/core": "file:../core"
+    "@agents-tower/core": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",

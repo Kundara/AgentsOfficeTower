@@ -45,10 +45,10 @@ node packages/cli/dist/index.js web query <repo> <gist|recent|last> \
 Examples:
 
 ```bash
-node packages/cli/dist/index.js web query CodexAgentsOffice gist scope=local --json
-node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=local type=agents state=running limit=5 --json
-node packages/cli/dist/index.js web query CodexAgentsOffice recent scope=team type=events kind=command limit=10 --json
-node packages/cli/dist/index.js web query CodexAgentsOffice last scope=local type=events kind=fileChange --json
+node packages/cli/dist/index.js web query AgentsOfficeTower gist scope=local --json
+node packages/cli/dist/index.js web query AgentsOfficeTower recent scope=local type=agents state=running limit=5 --json
+node packages/cli/dist/index.js web query AgentsOfficeTower recent scope=team type=events kind=command limit=10 --json
+node packages/cli/dist/index.js web query AgentsOfficeTower last scope=local type=events kind=fileChange --json
 ```
 
 Commands:

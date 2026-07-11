@@ -1,9 +1,15 @@
 {
-  "name": "@codex-agents-office/cli",
+  "name": "agents-office-tower",
   "version": "0.1.0",
+  "description": "Live pixel-office view for agent work across Codex, Claude, Cursor, Hermes, OpenClaw, cloud tasks, and shared rooms.",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "bin": {
+    "aot": "dist/index.js",
     "codex-agents-office": "dist/index.js"
   },
   "scripts": {
@@ -11,7 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@codex-agents-office/core": "file:../core",
-    "@codex-agents-office/web": "file:../web"
+    "@agents-tower/core": "^0.1.0",
+    "@agents-tower/web": "^0.1.0"
   }
 }

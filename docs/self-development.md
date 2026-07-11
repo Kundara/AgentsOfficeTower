@@ -1,10 +1,12 @@
 # Self Development
 
+The phased execution roadmap, decision log, and open product questions live in [docs/product-plan.md](./product-plan.md). This file stays focused on the standing product bar, design principles, and acceptance checks that every iteration must satisfy.
+
 ## Product bar
 
 This project should answer one glance-level question well:
 
-`What is Codex working on right now?`
+`What are my agents working on right now?`
 
 A good iteration improves at least one of these:
 
@@ -16,7 +18,7 @@ A good iteration improves at least one of these:
 ## Current design principles
 
 - Current workload first, history second.
-- Workspace tabs should mirror Codex workspaces, not arbitrary local folders.
+- Workspace tabs should mirror real discovered agent workspaces, not arbitrary local folders.
 - Parent sessions are the primary actors.
 - Subagents should visually attach to their parent session and role cluster.
 - Room visuals should stay legible without text banners pasted over the scene.
@@ -27,7 +29,7 @@ A good iteration improves at least one of these:
 
 1. Keep the shared adapter registry and snapshot assembler authoritative across all front ends.
 2. Improve real session discovery before inventing synthetic presence.
-3. Increase event-level transparency so visible state is traceable to real Codex signals.
+3. Increase event-level transparency so visible state is traceable to real provider signals.
 4. Split the remaining oversized Claude and Hermes provider façades into one-way `*-lib` dependency DAGs while preserving their public exports.
 5. Preserve enough structure in the scene that busy workspaces still scan quickly.
 6. Keep shrinking the largest browser/runtime section files now that the shipped browser entry is assembled in memory, dead runtime/style mirrors are gone, and desk policy has been isolated into `seating-source.ts`.

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Render Codex work as a room-based "agent office" without depending on private internals. The current pass keeps the official Codex integration surface and renders active workload as room-based office stations built from PixelOffice assets.
+Render agent work across supported providers as a room-based "agent office" without depending on private internals. The current pass keeps the official Codex integration surface as the deepest provider and renders active workload as room-based office stations built from PixelOffice assets.
 
 Behavior and renderer expectations now live in [docs/spec.md](./spec.md). This file stays focused on system structure and module boundaries.
 

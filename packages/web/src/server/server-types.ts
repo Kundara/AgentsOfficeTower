@@ -1,7 +1,7 @@
-import type { DashboardAgent, DashboardSnapshot } from "@codex-agents-office/core";
-import type { AppearanceSettings } from "@codex-agents-office/core";
-import type { CursorIntegrationSettings } from "@codex-agents-office/core";
-import type { MultiplayerSettings } from "@codex-agents-office/core";
+import type { DashboardAgent, DashboardSnapshot } from "@agents-tower/core";
+import type { AppearanceSettings } from "@agents-tower/core";
+import type { CursorIntegrationSettings } from "@agents-tower/core";
+import type { MultiplayerSettings } from "@agents-tower/core";
 
 export interface ProjectDescriptor {
   root: string;
