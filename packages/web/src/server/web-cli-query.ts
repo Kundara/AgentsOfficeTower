@@ -1,4 +1,5 @@
-import type { AgentGoalState, DashboardAgent, DashboardEvent, DashboardSnapshot, HotChangeSummary } from "@codex-agents-office/core";
+import { normalizeRepositoryUrl } from "@codex-agents-office/core";
+import type { AgentGoalState, DashboardAgent, DashboardEvent, DashboardSnapshot, HotChangeSummary, ProjectIdentity } from "@codex-agents-office/core";
 
 import type { FleetResponse } from "./server-types";
 
@@ -105,6 +106,9 @@ export interface WebCliProjectMatch {
   projectRoot: string;
   projectLabel: string;
   repoName: string | null;
+  repoUrl: string | null;
+  rootCommit: string | null;
+  identitySource: ProjectIdentity["source"] | null;
   participants: string[];
   sharedRemoteOnly: boolean;
 }
@@ -174,11 +178,38 @@ function isSharedRemoteOnly(snapshot: DashboardSnapshot): boolean {
   return (snapshot as unknown as { sharedRemoteOnly?: unknown }).sharedRemoteOnly === true;
 }
 
+function diagnosticRepoUrl(value: string | null | undefined): string | null {
+  const normalized = normalizeRepositoryUrl(value);
+  if (!normalized) {
+    return null;
+  }
+  try {
+    const url = new URL(normalized);
+    return ["http:", "https:"].includes(url.protocol) && url.hostname && url.pathname.replace(/^\/+|\/+$/g, "")
+      ? normalized
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function diagnosticRootCommit(value: string | null | undefined): string | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(normalized) ? normalized : null;
+}
+
+function diagnosticIdentitySource(value: string | null | undefined): ProjectIdentity["source"] | null {
+  return value === "git" || value === "unknown" ? value : null;
+}
+
 function projectMatchDescriptor(snapshot: DashboardSnapshot): WebCliProjectMatch {
   return {
     projectRoot: snapshot.projectRoot,
     projectLabel: snapshot.projectLabel,
     repoName: snapshot.projectIdentity?.repoName ?? lastPathSegment(snapshot.projectIdentity?.gitRoot) ?? lastPathSegment(snapshot.projectRoot),
+    repoUrl: diagnosticRepoUrl(snapshot.projectIdentity?.repoUrl),
+    rootCommit: diagnosticRootCommit(snapshot.projectIdentity?.rootCommit),
+    identitySource: diagnosticIdentitySource(snapshot.projectIdentity?.source),
     participants: sharedParticipants(snapshot),
     sharedRemoteOnly: isSharedRemoteOnly(snapshot)
   };

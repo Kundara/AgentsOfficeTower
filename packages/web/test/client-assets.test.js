@@ -1000,8 +1000,8 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("function indexSharedSnapshotByWorkspaceKey(snapshotsByKey, snapshot) {"));
   assert.ok(multiplayerSource.includes("if (!snapshotsByKey.has(key)) {"));
   assert.ok(multiplayerSource.includes("function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {"));
-  assert.ok(multiplayerSource.includes("const remoteRepoIdentity = sharedRepoIdentityForSnapshot(remoteSnapshot);"));
-  assert.ok(multiplayerSource.includes('? ["git-repo:" + remoteRepoIdentity]'));
+  assert.ok(multiplayerSource.includes("const candidateKeys = snapshotWorkspaceKeys(remoteSnapshot)"));
+  assert.ok(multiplayerSource.includes('.filter((key) => key.startsWith("git-repo:"));'));
   assert.ok(multiplayerSource.includes('const remoteRoot = normalizeSharedPathCandidate(remoteSnapshot && remoteSnapshot.projectRoot);'));
   assert.ok(multiplayerSource.includes('normalizeSharedPathCandidate(snapshot && snapshot.projectRoot) === remoteRoot'));
   assert.ok(!multiplayerSource.includes('.filter((key) => key.startsWith("workspace:"));'));
@@ -1106,6 +1106,58 @@ test("shared peers with the same repository URL merge despite different labels a
     multiplayer.matchingLocalSharedSnapshot(multiplayer.indexSharedSnapshotsByWorkspaceKey([local]), peer),
     local
   );
+  const renamedPeer = {
+    ...peer,
+    projectIdentity: {
+      repoUrl: "https://github.com/kundara/codexagentsoffice.git",
+      rootCommit: local.projectIdentity.rootCommit
+    }
+  };
+  assert.equal(
+    multiplayer.matchingLocalSharedSnapshot(multiplayer.indexSharedSnapshotsByWorkspaceKey([local]), renamedPeer),
+    local
+  );
+  const unrelatedPeer = {
+    ...peer,
+    projectIdentity: {
+      repoUrl: "https://github.com/kundara/unrelated-project.git",
+      rootCommit: "d".repeat(40)
+    }
+  };
+  assert.equal(
+    multiplayer.matchingLocalSharedSnapshot(multiplayer.indexSharedSnapshotsByWorkspaceKey([local]), unrelatedPeer),
+    null
+  );
+  const forkWithSameRoot = {
+    ...local,
+    projectRoot: "/local/ForkedAgentsOffice",
+    projectLabel: "Forked Agents Office",
+    projectIdentity: {
+      repoUrl: "https://github.com/kundara/forked-agentsofficetower.git",
+      rootCommit: local.projectIdentity.rootCommit
+    }
+  };
+  const ambiguousPeer = {
+    ...peer,
+    projectIdentity: {
+      repoUrl: "https://github.com/kundara/renamed-agents-office.git",
+      rootCommit: local.projectIdentity.rootCommit
+    }
+  };
+  const forkedIndex = multiplayer.indexSharedSnapshotsByWorkspaceKey([local, forkWithSameRoot]);
+  assert.equal(multiplayer.matchingLocalSharedSnapshot(forkedIndex, ambiguousPeer), null);
+  assert.equal(multiplayer.matchingLocalSharedSnapshot(forkedIndex, forkWithSameRoot), forkWithSameRoot);
+  const rootOnlyFork = {
+    ...forkWithSameRoot,
+    projectRoot: "/local/RootOnlyFork",
+    projectIdentity: {
+      repoUrl: null,
+      rootCommit: local.projectIdentity.rootCommit
+    }
+  };
+  const mixedIdentityIndex = multiplayer.indexSharedSnapshotsByWorkspaceKey([local, rootOnlyFork]);
+  assert.equal(multiplayer.matchingLocalSharedSnapshot(mixedIdentityIndex, ambiguousPeer), null);
+  assert.equal(multiplayer.matchingLocalSharedSnapshot(mixedIdentityIndex, local), local);
   const legacyRootCommit = "c".repeat(40);
   const legacy = {
     projectRoot: "/legacy/CodexAgentsOffice",

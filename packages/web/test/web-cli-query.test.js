@@ -11,6 +11,9 @@ function snapshot(overrides = {}) {
     projectRoot: overrides.projectRoot ?? "/work/CodexAgentsOffice",
     projectLabel: overrides.projectLabel ?? "Codex Agents Office",
     projectIdentity: overrides.projectIdentity ?? {
+      source: "git",
+      repoUrl: "git@GitHub.com:OpenAI/CodexAgentsOffice.git",
+      rootCommit: "A".repeat(40),
       repoName: "CodexAgentsOffice",
       gitRoot: "/work/CodexAgentsOffice",
       worktreeName: null
@@ -132,9 +135,43 @@ test("web CLI query returns bounded recent local project data by repo name", () 
 
   assert.equal(result.ok, true);
   assert.equal(result.response.dataSource, "local");
+  assert.equal(result.response.matchedProject.repoUrl, "https://github.com/openai/codexagentsoffice");
+  assert.equal(result.response.matchedProject.rootCommit, "a".repeat(40));
+  assert.equal(result.response.matchedProject.identitySource, "git");
   assert.equal(result.response.items.length, 2);
   assert.deepEqual(result.response.items.map((item) => item.id), ["event-new", "agent-new"]);
   assert.equal(result.response.items[1].goal.objective, "Keep the office query API synced");
+});
+
+test("web CLI project candidates expose only sanitized repository identity diagnostics", () => {
+  const fleet = {
+    generatedAt: "2026-05-13T10:04:00.000Z",
+    projects: [
+      snapshot({
+        projectIdentity: {
+          source: "untrusted",
+          repoUrl: "https://user:secret@GitHub.com/OpenAI/CodexAgentsOffice.git?token=hidden#fragment",
+          rootCommit: "not-a-commit",
+          repoName: "CodexAgentsOffice",
+          gitRoot: "/work/CodexAgentsOffice",
+          worktreeName: null
+        }
+      })
+    ]
+  };
+
+  const result = buildWebCliQueryResponse(
+    { repo: "missing", scope: "team", command: "gist", values: {} },
+    fleet,
+    null,
+    Date.parse("2026-05-13T10:05:00.000Z")
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 404);
+  assert.equal(result.candidates[0].repoUrl, "https://github.com/openai/codexagentsoffice");
+  assert.equal(result.candidates[0].rootCommit, null);
+  assert.equal(result.candidates[0].identitySource, null);
 });
 
 test("web CLI last command returns one filtered event", () => {

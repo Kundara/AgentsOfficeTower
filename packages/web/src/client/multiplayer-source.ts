@@ -421,29 +421,31 @@ export const MULTIPLAYER_SCRIPT = `
         for (const key of snapshotWorkspaceKeys(snapshot)) {
           if (!snapshotsByKey.has(key)) {
             snapshotsByKey.set(key, snapshot);
+            continue;
+          }
+          if (key.startsWith("git-repo:git-root-commit:")) {
+            const existing = snapshotsByKey.get(key);
+            const existingRepoUrl = sharedRepoUrlForSnapshot(existing);
+            const candidateRepoUrl = sharedRepoUrlForSnapshot(snapshot);
+            const sameRepoUrl = existingRepoUrl && candidateRepoUrl && existingRepoUrl === candidateRepoUrl;
+            const sameProjectRoot = normalizeSharedPathCandidate(existing && existing.projectRoot) === normalizeSharedPathCandidate(snapshot.projectRoot);
+            if (existing && !sameRepoUrl && !sameProjectRoot) {
+              snapshotsByKey.set(key, null);
+            }
           }
         }
       }
 
       function matchingLocalSharedSnapshot(localProjectsByKey, remoteSnapshot) {
-        const remoteRepoIdentity = sharedRepoIdentityForSnapshot(remoteSnapshot);
-        const candidateKeys = remoteRepoIdentity
-          ? ["git-repo:" + remoteRepoIdentity]
-          : [];
+        const candidateKeys = snapshotWorkspaceKeys(remoteSnapshot)
+          .filter((key) => key.startsWith("git-repo:"));
         for (const key of candidateKeys) {
           const localSnapshot = localProjectsByKey.get(key);
-          if (
-            localSnapshot
-            && (
-              localSnapshot.sharedRemoteOnly !== true
-              || Boolean(remoteRepoIdentity)
-              || normalizeSharedPathCandidate(localSnapshot.projectRoot) === normalizeSharedPathCandidate(remoteSnapshot.projectRoot)
-            )
-          ) {
+          if (localSnapshot) {
             return localSnapshot;
           }
         }
-        if (!remoteRepoIdentity) {
+        if (candidateKeys.length === 0) {
           const remoteRoot = normalizeSharedPathCandidate(remoteSnapshot && remoteSnapshot.projectRoot);
           return (Array.isArray(state.localFleet && state.localFleet.projects) ? state.localFleet.projects : [])
             .find((snapshot) => normalizeSharedPathCandidate(snapshot && snapshot.projectRoot) === remoteRoot) || null;
