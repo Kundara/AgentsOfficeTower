@@ -5,6 +5,17 @@ All notable changes to this project should be recorded in this file.
 This changelog is maintained against the current root `package.json` version.
 Entries stay under the active version until an explicit version bump is requested.
 
+## [Unreleased]
+
+### Added
+
+- Added durable operational history: the fleet publish loop now diffs consecutive fleets and appends wait and session lifecycle events (`wait.opened`, `wait.resolved` with wait duration, `session.started`, `session.finished`) to a bounded, rotating journal under the app data directory, and `aot digest --since 30m|4h|2d` summarizes what happened while you were away alongside the live pulse.
+- Added `aot upgrade [--dry-run]`, a guided global npm upgrade that compares the installed version against the registry, leaves the current install untouched on failure, and prints the exact rollback command.
+
+### Changed
+
+- Changed the README, spec, self-development notes, and both tower skills to document the published npm install path, the health/digest/claims/lifecycle/audit command surface, the coverage drawer and triage lenses, and the new `providerHealth`/`claims` snapshot fields.
+
 ## [0.1.1] - 2026-07-11
 
 ### Added

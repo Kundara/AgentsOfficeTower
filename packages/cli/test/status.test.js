@@ -79,3 +79,27 @@ test("server target resolution honors flags over environment defaults", () => {
 test("cli version reads a semver-looking string", () => {
   assert.match(cliVersion(), /^\d+\.\d+\.\d+/);
 });
+
+const { parseSinceMs, formatHistoryLines } = require("../dist/status.js");
+
+test("--since parses minutes, hours, and days relative to now", () => {
+  const now = 1_000_000_000_000;
+  assert.equal(parseSinceMs(["--since", "30m"], now), now - 30 * 60_000);
+  assert.equal(parseSinceMs(["--since", "4h"], now), now - 4 * 3_600_000);
+  assert.equal(parseSinceMs(["--since", "2d"], now), now - 2 * 86_400_000);
+  assert.equal(parseSinceMs([], now), null);
+});
+
+test("history lines summarize sessions and human wait time honestly", () => {
+  const lines = formatHistoryLines([
+    { at: "2026-07-11T10:00:00Z", kind: "session.started", projectLabel: "P", agentLabel: "A", provenance: "codex", detail: null },
+    { at: "2026-07-11T10:05:00Z", kind: "wait.opened", projectLabel: "P", agentLabel: "A", provenance: "codex", detail: "approval" },
+    { at: "2026-07-11T10:15:00Z", kind: "wait.resolved", projectLabel: "P", agentLabel: "A", provenance: "codex", detail: "approval", waitMs: 10 * 60_000 },
+    { at: "2026-07-11T10:20:00Z", kind: "session.finished", projectLabel: "P", agentLabel: "A", provenance: "codex", detail: null }
+  ], Date.parse("2026-07-11T09:00:00Z"));
+  assert.ok(lines.some((line) => line.includes("sessions: 1 started, 1 finished")));
+  assert.ok(lines.some((line) => line.includes("waits: 1 opened, 1 resolved (10m of human wait time total)")));
+
+  const empty = formatHistoryLines([], Date.parse("2026-07-11T09:00:00Z"));
+  assert.ok(empty.some((line) => line.includes("No recorded wait or session lifecycle events")));
+});

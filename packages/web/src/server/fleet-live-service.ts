@@ -1,6 +1,8 @@
 import type { ServerResponse } from "node:http";
 
 import {
+  appendHistoryEvents,
+  diffFleetForHistory,
   type ApprovalDecision,
   type UserInputAnswers,
   canonicalizeProjectPath,
@@ -456,7 +458,13 @@ export class FleetLiveService {
 
     await this.attachRoamingHermesAgents(snapshotsByRoot);
     await this.attachRoamingOpenClawAgents(snapshotsByRoot);
+    const previousFleet = this.fleet;
     this.fleet = buildFleetResponse(this.projects, snapshotsByRoot, this.accountAgents);
+    try {
+      appendHistoryEvents(diffFleetForHistory(previousFleet, this.fleet));
+    } catch {
+      // History is best-effort; a journal write failure must not break publishing.
+    }
 
     for (const response of Array.from(this.clients)) {
       if (response.destroyed || response.writableEnded) {

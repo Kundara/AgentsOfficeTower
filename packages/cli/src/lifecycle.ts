@@ -6,6 +6,8 @@ import { exit } from "node:process";
 
 import { getAppDataDirectory, readAuditJournal } from "@agents-tower/core";
 
+import { cliVersion } from "./status";
+
 import { resolveServerTarget } from "./status";
 
 const START_POLL_ATTEMPTS = 30;
@@ -219,4 +221,41 @@ export function runServiceInstall(args: string[]): void {
   console.log(`Wrote ${service.path}.`);
   console.log(`Enable it with: ${service.instructions}`);
   console.log("This command writes the service file only; loading it is left to you.");
+}
+
+
+export async function runUpgrade(args: string[]): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+
+  const current = cliVersion();
+  let latest: string;
+  try {
+    const { stdout } = await execFileAsync("npm", ["view", "agents-office-tower", "version"], { timeout: 15_000 });
+    latest = stdout.trim();
+  } catch (error) {
+    console.error(`Could not read the latest version from the registry: ${error instanceof Error ? error.message : String(error)}`);
+    exit(1);
+  }
+
+  if (latest === current) {
+    console.log(`Already on the latest version (${current}).`);
+    return;
+  }
+
+  console.log(`Upgrading agents-office-tower ${current} -> ${latest} …`);
+  if (args.includes("--dry-run")) {
+    console.log("Dry run: would execute `npm install -g agents-office-tower@latest`.");
+    return;
+  }
+  try {
+    await execFileAsync("npm", ["install", "-g", "agents-office-tower@latest"], { timeout: 300_000, maxBuffer: 4 * 1024 * 1024 });
+  } catch (error) {
+    console.error(`Upgrade failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`Your current install (${current}) is untouched.`);
+    exit(1);
+  }
+  console.log(`Upgraded to ${latest}. Roll back anytime with: npm install -g agents-office-tower@${current}`);
+  console.log("Restart the tower to run the new build: aot restart");
 }

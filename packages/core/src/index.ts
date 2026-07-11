@@ -11,6 +11,7 @@ export * from "./claude-home-cache";
 export * from "./codex-command";
 export { normalizeRepositoryUrl } from "./cursor-lib/shared";
 export * from "./domain/workspace-activity";
+export * from "./history";
 export * from "./hermes";
 export * from "./hermes-hook-install";
 export * from "./openclaw";

@@ -56,6 +56,8 @@ The build phases below started executing the same day the plan was drafted. Ship
 - **Phase 5 — contract v1 shipped.** `PROVIDER_CONTRACT_VERSION = 1`, golden contract checks (`runAdapterContractChecks`) that all built-in adapters pass in CI, and [docs/provider-sdk.md](provider-sdk.md). Deferred: out-of-process provider execution.
 - **Phase 6 — bounded v1 shipped.** A fleet pulse on `/api/health` (human waits with ages, churn hotspots, repeated failures in the live event window, instability notes) surfaced in `aot status` and the new `aot digest`. No productivity scoring, by design. Deferred: longitudinal history (current pulse is now-first, from live snapshots only).
 
+- **Phase 7 (follow-on) — shipped.** Durable operational history: the server journals wait/session lifecycle events on every fleet publish (bounded, rotating, app-data local), `aot digest --since` reads it back with total human wait time, and `aot upgrade` performs a guided global upgrade with a printed rollback command. This closes the "pulse is now-first only" weak spot for waits and sessions; per-file/event history remains future work.
+
 ## Phase overview and sequencing
 
 ```

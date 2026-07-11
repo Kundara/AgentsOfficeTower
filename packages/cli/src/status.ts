@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import { env, exit } from "node:process";
 import { promisify } from "node:util";
 
+import { readHistoryEvents, type HistoryEvent } from "@agents-tower/core";
+
 const execFileAsync = promisify(execFile);
 
 const HEALTH_FETCH_TIMEOUT_MS = 3000;
@@ -198,6 +200,12 @@ export async function runDigest(args: string[]): Promise<void> {
     return;
   }
   console.log(`Digest for ${payload.host}:${payload.port} — fleet ${payload.status}, ${payload.projectCount} project${payload.projectCount === 1 ? "" : "s"}.`);
+  const sinceMs = parseSinceMs(args);
+  if (sinceMs !== null) {
+    for (const line of formatHistoryLines(readHistoryEvents(sinceMs), sinceMs)) {
+      console.log(line);
+    }
+  }
   const pulseLines = formatPulseLines(payload.pulse);
   if (pulseLines.length > 0) {
     for (const line of pulseLines) {
@@ -321,4 +329,44 @@ export async function runDoctor(args: string[]): Promise<void> {
   if (checks.some((check) => check.status === "fail")) {
     exit(1);
   }
+}
+
+
+export function parseSinceMs(args: string[], nowMs = Date.now()): number | null {
+  const index = args.indexOf("--since");
+  if (index < 0) {
+    return null;
+  }
+  const raw = args[index + 1];
+  const match = raw ? /^(\d+)([mhd])$/.exec(raw) : null;
+  if (!match) {
+    console.error("--since expects a duration like 30m, 4h, or 2d");
+    exit(1);
+  }
+  const amount = Number.parseInt(match[1], 10);
+  const unitMs = match[2] === "m" ? 60_000 : match[2] === "h" ? 3_600_000 : 86_400_000;
+  return nowMs - amount * unitMs;
+}
+
+export function formatHistoryLines(events: HistoryEvent[], sinceMs: number): string[] {
+  const lines: string[] = ["", `Since ${new Date(sinceMs).toISOString()}:`];
+  if (events.length === 0) {
+    lines.push("  No recorded wait or session lifecycle events. (History records while the tower server runs.)");
+    return lines;
+  }
+  const count = (kind: string) => events.filter((event) => event.kind === kind).length;
+  const resolved = events.filter((event) => event.kind === "wait.resolved");
+  const totalWaitMs = resolved.reduce((sum, event) => sum + (event.waitMs ?? 0), 0);
+  lines.push(
+    `  sessions: ${count("session.started")} started, ${count("session.finished")} finished`,
+    `  waits: ${count("wait.opened")} opened, ${resolved.length} resolved`
+      + (resolved.length > 0 ? ` (${formatAge(totalWaitMs).replace(" ago", "")} of human wait time total)` : "")
+  );
+  for (const event of events.slice(-8)) {
+    lines.push(`  ${event.at} ${event.kind} ${event.agentLabel} in ${event.projectLabel}${event.waitMs ? ` after ${formatAge(event.waitMs).replace(" ago", "")}` : ""}`);
+  }
+  if (events.length > 8) {
+    lines.push(`  … ${events.length - 8} earlier events omitted`);
+  }
+  return lines;
 }
