@@ -183,7 +183,7 @@ export const MULTIPLAYER_SCRIPT = `
           projectRoot,
           projectLabel: sanitizeSharedText(snapshot.projectLabel, 160) || projectRoot.split(/[\\\\/]/).filter(Boolean).pop() || "Shared project",
           projectIdentity: {
-            repoUrl: sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.repoUrl, 2048) || null,
+            repoUrl: normalizeSharedRepoIdentity(sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.repoUrl, 2048)) || null,
             rootCommit: sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.rootCommit, 128) || null
           },
           generatedAt: Number.isFinite(Date.parse(snapshot.generatedAt || "")) ? snapshot.generatedAt : new Date().toISOString(),
@@ -335,20 +335,29 @@ export const MULTIPLAYER_SCRIPT = `
           return "";
         }
         const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
-        const normalized = sshMatch
-          ? "https://" + sshMatch[1] + "/" + sshMatch[2]
-          : trimmed;
-        return normalized
-          .replace(/\\.git$/i, "")
-          .replace(/[\\\\/]+$/g, "")
-          .toLowerCase();
+        if (sshMatch) {
+          return ("https://" + sshMatch[1] + "/" + sshMatch[2])
+            .replace(/\\.git$/i, "")
+            .replace(/[\\\\/]+$/g, "")
+            .toLowerCase();
+        }
+        try {
+          const url = new URL(trimmed);
+          if (!["http:", "https:", "ssh:", "git:"].includes(url.protocol.toLowerCase()) || !url.hostname || !url.pathname.replace(/^\\/+|\\/+$/g, "")) {
+            return "";
+          }
+          const protocol = url.protocol === "ssh:" || url.protocol === "git:" ? "https:" : url.protocol;
+          const pathname = url.pathname.replace(/\\.git$/i, "").replace(/^\\/+|\\/+$/g, "");
+          return (protocol + "//" + url.hostname + "/" + pathname).toLowerCase();
+        } catch {
+          return trimmed
+            .replace(/\\.git$/i, "")
+            .replace(/[\\\\/]+$/g, "")
+            .toLowerCase();
+        }
       }
 
-      function sharedRepoIdentityForSnapshot(snapshot) {
-        const rootCommit = String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.rootCommit || "").trim().toLowerCase();
-        if (/^[a-f0-9]{40,64}$/.test(rootCommit)) {
-          return "git-root-commit:" + rootCommit;
-        }
+      function sharedRepoUrlForSnapshot(snapshot) {
         const explicitRepoUrl = normalizeSharedRepoIdentity(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.repoUrl || "");
         if (explicitRepoUrl) {
           return explicitRepoUrl;
@@ -363,6 +372,17 @@ export const MULTIPLAYER_SCRIPT = `
         return "";
       }
 
+      function sharedRootCommitForSnapshot(snapshot) {
+        const rootCommit = String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.rootCommit || "").trim().toLowerCase();
+        return /^[a-f0-9]{40,64}$/.test(rootCommit) ? rootCommit : "";
+      }
+
+      function sharedRepoIdentityForSnapshot(snapshot) {
+        const repoUrl = sharedRepoUrlForSnapshot(snapshot);
+        const rootCommit = sharedRootCommitForSnapshot(snapshot);
+        return repoUrl || (rootCommit ? "git-root-commit:" + rootCommit : "");
+      }
+
       function snapshotWorkspaceName(snapshot) {
         if (snapshot && typeof snapshot.projectLabel === "string" && snapshot.projectLabel.trim().length > 0) {
           return snapshot.projectLabel.trim();
@@ -374,9 +394,13 @@ export const MULTIPLAYER_SCRIPT = `
 
       function snapshotWorkspaceKeys(snapshot) {
         const keys = [];
-        const repoIdentity = sharedRepoIdentityForSnapshot(snapshot);
-        if (repoIdentity) {
-          keys.push("git-repo:" + repoIdentity);
+        const repoUrl = sharedRepoUrlForSnapshot(snapshot);
+        if (repoUrl) {
+          keys.push("git-repo:" + repoUrl);
+        }
+        const rootCommit = sharedRootCommitForSnapshot(snapshot);
+        if (rootCommit) {
+          keys.push("git-repo:git-root-commit:" + rootCommit);
         }
         const workspaceName = normalizeWorkspaceName(snapshotWorkspaceName(snapshot));
         if (workspaceName) {
@@ -881,7 +905,7 @@ export const MULTIPLAYER_SCRIPT = `
         const remoteIdentity = remoteSnapshot && remoteSnapshot.projectIdentity && typeof remoteSnapshot.projectIdentity === "object" && !Array.isArray(remoteSnapshot.projectIdentity)
           ? remoteSnapshot.projectIdentity
           : null;
-        const repoUrl = sharedRepoIdentityForSnapshot(remoteSnapshot) || null;
+        const repoUrl = sharedRepoUrlForSnapshot(remoteSnapshot) || null;
         const generatedAtValue = sanitizeMultiplayerField(remoteSnapshot && remoteSnapshot.generatedAt);
         const generatedAt = Number.isFinite(Date.parse(generatedAtValue))
           ? generatedAtValue

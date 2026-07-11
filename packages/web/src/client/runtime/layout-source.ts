@@ -461,20 +461,29 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           return "";
         }
         const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
-        const normalized = sshMatch
-          ? "https://" + sshMatch[1] + "/" + sshMatch[2]
-          : trimmed;
-        return normalized
-          .replace(/\.git$/i, "")
-          .replace(/[\\/]+$/g, "")
-          .toLowerCase();
+        if (sshMatch) {
+          return ("https://" + sshMatch[1] + "/" + sshMatch[2])
+            .replace(/\\.git$/i, "")
+            .replace(/[\\\\/]+$/g, "")
+            .toLowerCase();
+        }
+        try {
+          const url = new URL(trimmed);
+          if (!["http:", "https:", "ssh:", "git:"].includes(url.protocol.toLowerCase()) || !url.hostname || !url.pathname.replace(/^\\/+|\\/+$/g, "")) {
+            return "";
+          }
+          const protocol = url.protocol === "ssh:" || url.protocol === "git:" ? "https:" : url.protocol;
+          const pathname = url.pathname.replace(/\\.git$/i, "").replace(/^\\/+|\\/+$/g, "");
+          return (protocol + "//" + url.hostname + "/" + pathname).toLowerCase();
+        } catch {
+          return trimmed
+            .replace(/\\.git$/i, "")
+            .replace(/[\\\\/]+$/g, "")
+            .toLowerCase();
+        }
       }
 
       function repoIdentityForSnapshot(snapshot) {
-        const rootCommit = String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.rootCommit || "").trim().toLowerCase();
-        if (/^[a-f0-9]{40,64}$/.test(rootCommit)) {
-          return "git-root-commit:" + rootCommit;
-        }
         const explicitRepoUrl = normalizeRepoIdentity(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.repoUrl || "");
         if (explicitRepoUrl) {
           return explicitRepoUrl;
@@ -485,6 +494,10 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           if (repoUrl) {
             return repoUrl;
           }
+        }
+        const rootCommit = String(snapshot && snapshot.projectIdentity && snapshot.projectIdentity.rootCommit || "").trim().toLowerCase();
+        if (/^[a-f0-9]{40,64}$/.test(rootCommit)) {
+          return "git-root-commit:" + rootCommit;
         }
         return "";
       }

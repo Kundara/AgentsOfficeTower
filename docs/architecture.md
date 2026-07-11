@@ -429,7 +429,7 @@ Claude support uses a deliberately weaker contract than Codex:
 
 - project discovery merges Codex-discovered roots with roots inferred from `~/.claude/projects`
 - deleted Claude Desktop scratch worktrees under `/private/tmp/claude-*/.../<session>/scratchpad/<worktree>` recover their owning repository from that session's Claude transcript, preserving the scratch leaf as worktree context instead of presenting it as an unrelated project
-- shared-room snapshots match across machines by a Git root-commit fingerprint first and normalized remote URL second, so clones still consolidate after a repository or checkout is renamed; when identity is unavailable, only an exact project-root match is allowed, so coincidentally equal worktree labels cannot merge
+- shared-room snapshots match across machines by normalized repository URL first, with the Git root-commit fingerprint used only when no repository URL is available; this keeps peers on the same repository consolidated even when their histories have different root commits, while identityless snapshots require an exact project-root match so coincidentally equal worktree labels cannot merge
 - Codex fleet startup also seeds workspace discovery from configured roots in `~/.codex/config.toml`, so trusted Codex projects can appear before their first visible thread update
 - when the Anthropic Agent SDK is available, Claude Code project discovery prefers `listSessions()` and per-session `cwd` metadata before falling back to raw directory scanning; this inventory does not represent Claude Home account chats
 - Claude project discovery also reads fresh Agent Teams config under `~/.claude/teams`, using teammate `worktreePath` / `cwd` values as cowork project floors

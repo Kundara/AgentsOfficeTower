@@ -20,6 +20,22 @@ function readRuntimeSource(fileName) {
   return readClientSource("runtime", fileName);
 }
 
+function readTemplateExportValue(...segments) {
+  const source = readClientSource(...segments);
+  const start = source.indexOf("`");
+  const end = source.lastIndexOf("`;");
+  assert.ok(start >= 0 && end > start, `${segments.join("/")} should export a template literal`);
+  return Function(`return ${source.slice(start, end + 1)}`)();
+}
+
+function extractRuntimeFunctions(source, names) {
+  return names.map((name) => {
+    const match = source.match(new RegExp(`      function ${name}\\([^]*?\\n      \\}`));
+    assert.ok(match, `runtime should define ${name}`);
+    return match[0];
+  }).join("\n");
+}
+
 const navigationRuntimeFiles = [
   "navigation-pathing-source.ts",
   "navigation-overlays-source.ts",
@@ -970,8 +986,16 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("nextShares[projectRoot] = true;"));
   assert.ok(multiplayerSource.includes("function isSnapshotSharedWithRoom(snapshot) {"));
   assert.ok(multiplayerSource.includes("function sharedRepoIdentityForSnapshot(snapshot) {"));
-  assert.ok(multiplayerSource.includes('return "git-root-commit:" + rootCommit;'));
+  assert.ok(multiplayerSource.includes("function sharedRepoUrlForSnapshot(snapshot) {"));
+  assert.ok(multiplayerSource.includes("function sharedRootCommitForSnapshot(snapshot) {"));
+  assert.ok(multiplayerSource.includes('return repoUrl || (rootCommit ? "git-root-commit:" + rootCommit : "");'));
   assert.ok(multiplayerSource.includes('rootCommit: sanitizeSharedText(snapshot.projectIdentity && snapshot.projectIdentity.rootCommit, 128) || null'));
+  assert.match(
+    multiplayerSource,
+    /function sharedRepoUrlForSnapshot\(snapshot\) \{[\s\S]*?const explicitRepoUrl = normalizeSharedRepoIdentity[\s\S]*?return explicitRepoUrl;[\s\S]*?agent && agent\.git && agent\.git\.originUrl/
+  );
+  assert.ok(multiplayerSource.includes('keys.push("git-repo:git-root-commit:" + rootCommit);'));
+  assert.ok(multiplayerSource.includes("const repoUrl = sharedRepoUrlForSnapshot(remoteSnapshot) || null;"));
   assert.ok(multiplayerSource.includes("function indexSharedSnapshotsByWorkspaceKey(snapshots) {"));
   assert.ok(multiplayerSource.includes("function indexSharedSnapshotByWorkspaceKey(snapshotsByKey, snapshot) {"));
   assert.ok(multiplayerSource.includes("if (!snapshotsByKey.has(key)) {"));
@@ -1037,6 +1061,73 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   const partyServerSource = readFileSync(join(__dirname, "../../party/src/server.ts"), "utf8");
   assert.ok(partyServerSource.includes("deviceId?: string;"));
   assert.ok(partyServerSource.includes("deviceId: normalizedText(candidate.deviceId, 128) ?? undefined"));
+});
+
+test("shared peers with the same repository URL merge despite different labels and root commits", () => {
+  const multiplayerRuntime = readTemplateExportValue("multiplayer-source.ts");
+  const multiplayerFunctions = extractRuntimeFunctions(multiplayerRuntime, [
+    "normalizeWorkspaceName",
+    "normalizeSharedRepoIdentity",
+    "sharedRepoUrlForSnapshot",
+    "sharedRootCommitForSnapshot",
+    "sharedRepoIdentityForSnapshot",
+    "snapshotWorkspaceName",
+    "snapshotWorkspaceKeys",
+    "indexSharedSnapshotByWorkspaceKey",
+    "indexSharedSnapshotsByWorkspaceKey",
+    "matchingLocalSharedSnapshot",
+    "normalizeSharedPathCandidate"
+  ]);
+  const state = { localFleet: { projects: [] } };
+  const multiplayer = Function("state", `${multiplayerFunctions}\nreturn { sharedRepoIdentityForSnapshot, indexSharedSnapshotsByWorkspaceKey, matchingLocalSharedSnapshot };`)(state);
+  const local = {
+    projectRoot: "/local/AgentsOfficeTower",
+    projectLabel: "Agents Office Tower",
+    projectIdentity: {
+      repoUrl: "https://github.com/kundara/agentsofficetower.git",
+      rootCommit: "a".repeat(40)
+    },
+    agents: []
+  };
+  const peer = {
+    projectRoot: "/peer/CodexAgentsOffice",
+    projectLabel: "Codex Agents Office",
+    projectIdentity: {
+      repoUrl: "git@github.com:kundara/agentsofficetower.git",
+      rootCommit: "b".repeat(40)
+    },
+    agents: []
+  };
+  state.localFleet.projects = [local];
+
+  assert.equal(multiplayer.sharedRepoIdentityForSnapshot(local), "https://github.com/kundara/agentsofficetower");
+  assert.equal(multiplayer.sharedRepoIdentityForSnapshot(peer), "https://github.com/kundara/agentsofficetower");
+  assert.equal(
+    multiplayer.matchingLocalSharedSnapshot(multiplayer.indexSharedSnapshotsByWorkspaceKey([local]), peer),
+    local
+  );
+  const legacyRootCommit = "c".repeat(40);
+  const legacy = {
+    projectRoot: "/legacy/CodexAgentsOffice",
+    projectLabel: "Codex Agents Office",
+    projectIdentity: {
+      repoUrl: `git-root-commit:${legacyRootCommit}`,
+      rootCommit: legacyRootCommit
+    },
+    agents: []
+  };
+  assert.equal(multiplayer.sharedRepoIdentityForSnapshot(legacy), `git-root-commit:${legacyRootCommit}`);
+
+  const layoutRuntime = readTemplateExportValue("runtime", "layout-source.ts");
+  const layoutFunctions = extractRuntimeFunctions(layoutRuntime, [
+    "normalizeRepoIdentity",
+    "repoIdentityForSnapshot",
+    "snapshotGroupKey"
+  ]);
+  const layout = Function(`${layoutFunctions}\nreturn { snapshotGroupKey };`)();
+  assert.equal(layout.snapshotGroupKey(local), "git-repo:https://github.com/kundara/agentsofficetower");
+  assert.equal(layout.snapshotGroupKey(peer), layout.snapshotGroupKey(local));
+  assert.equal(layout.snapshotGroupKey(legacy), `git-repo:git-root-commit:${legacyRootCommit}`);
 });
 
 test("workspace floors show multiplayer participants and expose a shared toggle", () => {
@@ -1384,6 +1475,10 @@ test("runtime source merges worktrees by repo and renders worktree badges in hov
   assert.ok(layoutSource.includes("function snapshotMatchesProjectRoot(snapshot, projectRoot) {"));
   assert.ok(layoutSource.includes("function repoIdentityForSnapshot(snapshot) {"));
   assert.ok(layoutSource.includes('return "git-repo:" + repoIdentity;'));
+  assert.match(
+    layoutSource,
+    /function repoIdentityForSnapshot\(snapshot\) \{[\s\S]*?const explicitRepoUrl = normalizeRepoIdentity[\s\S]*?return explicitRepoUrl;[\s\S]*?agent && agent\.git && agent\.git\.originUrl[\s\S]*?const rootCommit = String/
+  );
   assert.ok(layoutSource.includes('return "git-common:" + commonGitDir;'));
   assert.ok(layoutSource.includes("mergedProjectRoots: bucket.snapshots.map((snapshot) => snapshot.projectRoot),"));
   assert.ok(layoutSource.includes("sourceProjectRoot,"));
