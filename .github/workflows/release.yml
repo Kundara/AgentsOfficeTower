@@ -37,8 +37,8 @@ jobs:
       - run: npm run build
       - run: npm run check
       - name: Publish @agents-tower/core
-        run: npm publish --workspace packages/core --access public
+        run: .github/scripts/publish-if-new.sh packages/core
       - name: Publish @agents-tower/web
-        run: npm publish --workspace packages/web --access public
+        run: .github/scripts/publish-if-new.sh packages/web
       - name: Publish agents-office-tower (CLI)
-        run: npm publish --workspace packages/cli --access public
+        run: .github/scripts/publish-if-new.sh packages/cli
