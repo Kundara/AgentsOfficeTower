@@ -8,7 +8,7 @@ import { applyCurrentWorkloadState } from "../domain/workload-policy";
 import { buildWorkspaceActivitySnapshot } from "../domain/workspace-activity";
 import { summarizeActivityByAgent } from "../snapshot-lib/activity-summary";
 import type { AdapterSnapshot } from "../adapters";
-import type { CloudTask, DashboardAgent, DashboardEvent, DashboardSnapshot } from "../types";
+import type { CloudTask, DashboardAgent, DashboardEvent, DashboardSnapshot, ProviderHealth } from "../types";
 import { projectLabelFromRoot } from "../project-paths";
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +39,17 @@ function aggregateNotes(snapshots: AdapterSnapshot[]): string[] {
 
 function aggregateCloudTasks(snapshots: AdapterSnapshot[]): CloudTask[] {
   return snapshots.flatMap((snapshot) => snapshot.cloudTasks ?? []);
+}
+
+function aggregateProviderHealth(snapshots: AdapterSnapshot[]): ProviderHealth[] {
+  return snapshots.map((snapshot) => ({
+    adapterId: snapshot.adapterId,
+    provider: snapshot.source,
+    status: snapshot.health.status,
+    detail: snapshot.health.detail,
+    lastUpdatedAt: snapshot.health.lastUpdatedAt,
+    snapshotGeneratedAt: snapshot.generatedAt
+  }));
 }
 
 function parseGitStatusPath(line: string): string | null {
@@ -194,7 +205,8 @@ export async function assembleProjectSnapshot(input: {
     cloudTasks,
     events,
     activity,
-    notes: aggregateNotes(input.adapterSnapshots)
+    notes: aggregateNotes(input.adapterSnapshots),
+    providerHealth: aggregateProviderHealth(input.adapterSnapshots)
   }, now);
   const diagnostics = freshUnseatedHotChangeAgentDiagnostics(snapshot, now);
   return diagnostics.length > 0

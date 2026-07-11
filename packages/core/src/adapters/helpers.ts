@@ -17,6 +17,22 @@ export function degradedHealth(detail: string, generatedAt = new Date().toISOStr
   };
 }
 
+export function errorHealth(detail: string, generatedAt = new Date().toISOString()): AdapterHealth {
+  return {
+    status: "error",
+    detail,
+    lastUpdatedAt: generatedAt
+  };
+}
+
+export function unconfiguredHealth(detail: string, generatedAt = new Date().toISOString()): AdapterHealth {
+  return {
+    status: "unconfigured",
+    detail,
+    lastUpdatedAt: generatedAt
+  };
+}
+
 export function emptyAdapterSnapshot(input: {
   adapterId: string;
   source: DashboardAgent["source"];

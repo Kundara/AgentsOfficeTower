@@ -5,6 +5,7 @@ import { cwd, exit } from "node:process";
 import { resolve } from "node:path";
 
 import { runDemoPreview } from "./demo-preview";
+import { cliVersion, runDoctor, runStatus } from "./status";
 import { runWebQuery } from "./web-query";
 import {
   buildAsepriteExportCommand,
@@ -31,6 +32,8 @@ Usage:
   aot watch [projectRoot] [--history]
   aot web [--port 4181] [--host 127.0.0.1] [projectRoot...]
   aot web query <repo> <gist|recent|last> [scope=local|team] [limit=10] [type=agents|events|all] [--json]
+  aot status [--json] [--server http://127.0.0.1:4181]
+  aot doctor [--json] [--server http://127.0.0.1:4181]
   aot demo preview [--port 4181] [--host 127.0.0.1] [--duration 75] [--keep]
   aot aseprite inspect [file]
   aot presence boss [projectRoot]
@@ -247,6 +250,21 @@ async function main(): Promise<void> {
 
   if (!command || command === "--help" || command === "-h") {
     usage();
+    return;
+  }
+
+  if (command === "--version" || command === "-v") {
+    console.log(cliVersion());
+    return;
+  }
+
+  if (command === "status") {
+    await runStatus(args);
+    return;
+  }
+
+  if (command === "doctor") {
+    await runDoctor(args);
     return;
   }
 

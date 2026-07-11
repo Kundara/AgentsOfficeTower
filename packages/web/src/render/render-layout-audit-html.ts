@@ -133,6 +133,7 @@ function mockFleetResponse(): FleetResponse {
       agents: scenarioAgents(scenario),
       cloudTasks: [],
       notes: [],
+      providerHealth: [],
       events: [],
       activity: {
         generatedAt,

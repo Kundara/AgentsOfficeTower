@@ -1,6 +1,6 @@
 import { describeCursorAgentAvailability, loadCursorCloudProjectSnapshotData } from "../cursor";
 import type { ProjectAdapter } from "./types";
-import { emptyAdapterSnapshot, degradedHealth } from "./helpers";
+import { emptyAdapterSnapshot, degradedHealth, unconfiguredHealth } from "./helpers";
 import { StaticProjectSource } from "./static-source";
 
 export const cursorCloudAdapter: ProjectAdapter = {
@@ -20,7 +20,7 @@ export const cursorCloudAdapter: ProjectAdapter = {
             source: "cursor",
             notes: [availabilityNote],
             generatedAt,
-            health: degradedHealth(availabilityNote, generatedAt)
+            health: unconfiguredHealth(availabilityNote, generatedAt)
           });
         }
 

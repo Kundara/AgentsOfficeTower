@@ -1,7 +1,7 @@
-import type { CloudTask, DashboardAgent, DashboardEvent } from "../types";
+import type { CloudTask, DashboardAgent, DashboardEvent, ProviderHealthStatus } from "../types";
 import type { DiscoveredProject } from "../project-paths";
 
-export type AdapterHealthStatus = "ready" | "degraded" | "error";
+export type AdapterHealthStatus = ProviderHealthStatus;
 export type AdapterRefreshReason = "warm" | "startup" | "interval" | "manual" | "event";
 
 export interface AdapterCapabilities {

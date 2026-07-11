@@ -4,7 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { projectPathIdentityKey } from "@agents-tower/core";
 
 import { readJsonBody, notFound, sendAbsoluteFileAsset, sendHtml, sendJson, sendProjectFile, sendStaticAsset } from "../http-helpers";
-import { buildServerMeta } from "./server-metadata";
+import { buildHealthResponse } from "./health";
+import { buildServerMeta, serverBuildIdentity } from "./server-metadata";
 import { renderHtml } from "../render/render-html";
 import { renderIconAuditHtml } from "../render/render-icon-audit-html";
 import { renderLayoutAuditHtml } from "../render/render-layout-audit-html";
@@ -394,6 +395,40 @@ async function handleMultiplayerStatusRoute(context: RequestContext): Promise<bo
   return true;
 }
 
+async function handleHealthLiveRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET") || context.url.pathname !== "/api/health/live") {
+    return false;
+  }
+  sendJson(context.response, 200, { status: "ok", pid: process.pid });
+  return true;
+}
+
+async function handleHealthReadyRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET") || context.url.pathname !== "/api/health/ready") {
+    return false;
+  }
+  const ready = context.service.getPublishedFleet() !== null;
+  sendJson(context.response, ready ? 200 : 503, { status: ready ? "ready" : "starting" });
+  return true;
+}
+
+async function handleHealthRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET") || context.url.pathname !== "/api/health") {
+    return false;
+  }
+  sendJson(
+    context.response,
+    200,
+    buildHealthResponse({
+      options: context.options,
+      fleet: context.service.getPublishedFleet(),
+      multiplayer: context.service.getMultiplayerStatus(),
+      identity: serverBuildIdentity()
+    })
+  );
+  return true;
+}
+
 async function handleWebCliTeamFleetRoute(context: RequestContext): Promise<boolean> {
   if (!matchesMethod(context, "POST") || context.url.pathname !== "/api/web-cli/team-fleet") {
     return false;
@@ -737,6 +772,9 @@ const ROUTES: RouteHandler[] = [
   handleFleetRoute,
   handleServerMetaRoute,
   handleMultiplayerStatusRoute,
+  handleHealthLiveRoute,
+  handleHealthReadyRoute,
+  handleHealthRoute,
   handleWebCliTeamFleetRoute,
   handleWebCliQueryRoute,
   handleIntegrationSettingsRoute,

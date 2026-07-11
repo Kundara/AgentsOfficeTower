@@ -94,6 +94,7 @@ function mockFleetResponse(): FleetResponse {
         agents: Array.from({ length: AUDIT_AGENT_COUNT }, (_, index) => mockAgent(index)),
         cloudTasks: [],
         notes: [],
+        providerHealth: [],
         events: [],
         activity: {
           generatedAt,

@@ -1,13 +1,34 @@
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import type { DashboardAgent, DashboardSnapshot } from "@agents-tower/core";
 
+import type { HealthBuildIdentity } from "./health";
 import type { FleetResponse, MultiplayerStatus, ProjectDescriptor, ServerMeta, ServerOptions } from "./server-types";
 
 const SERVER_ENTRY = resolve(__dirname, "server.js");
 const SERVER_STARTED_AT = new Date().toISOString();
 export const SERVER_BUILD_AT = statSync(SERVER_ENTRY).mtime.toISOString();
+
+function readPackageVersion(): string {
+  try {
+    const parsed = JSON.parse(readFileSync(resolve(__dirname, "../../package.json"), "utf8")) as { version?: string };
+    return typeof parsed.version === "string" ? parsed.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+const SERVER_VERSION = readPackageVersion();
+
+export function serverBuildIdentity(): HealthBuildIdentity {
+  return {
+    pid: process.pid,
+    startedAt: SERVER_STARTED_AT,
+    buildAt: SERVER_BUILD_AT,
+    version: SERVER_VERSION
+  };
+}
 
 function createStartupSnapshot(project: ProjectDescriptor): DashboardSnapshot {
   const generatedAt = new Date().toISOString();
@@ -31,7 +52,8 @@ function createStartupSnapshot(project: ProjectDescriptor): DashboardSnapshot {
       hotTools: [],
       runningCommands: []
     },
-    notes: [`Project ${project.label} is starting up.`]
+    notes: [`Project ${project.label} is starting up.`],
+    providerHealth: []
   };
 }
 

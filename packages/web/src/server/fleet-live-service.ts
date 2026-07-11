@@ -217,6 +217,10 @@ export class FleetLiveService {
     return this.fleet ?? buildFleetResponse(this.projects, new Map(), this.accountAgents);
   }
 
+  getPublishedFleet(): FleetResponse | null {
+    return this.fleet;
+  }
+
   setCoordinatedTeamFleet(fleet: FleetResponse | null, hasSharedData?: boolean): void {
     if (!fleet || hasSharedData === false || !hasSharedFleetData(fleet)) {
       this.coordinatedTeamFleet = null;

@@ -421,6 +421,17 @@ export interface WorkspaceActivitySnapshot {
   runningCommands: RunningCommandSummary[];
 }
 
+export type ProviderHealthStatus = "ready" | "unconfigured" | "degraded" | "error";
+
+export interface ProviderHealth {
+  adapterId: string;
+  provider: DashboardAgent["source"];
+  status: ProviderHealthStatus;
+  detail: string | null;
+  lastUpdatedAt: string | null;
+  snapshotGeneratedAt: string;
+}
+
 export interface DashboardSnapshot {
   projectRoot: string;
   projectLabel: string;
@@ -432,6 +443,7 @@ export interface DashboardSnapshot {
   events: DashboardEvent[];
   activity: WorkspaceActivitySnapshot;
   notes: string[];
+  providerHealth: ProviderHealth[];
 }
 
 export interface SnapshotOptions {

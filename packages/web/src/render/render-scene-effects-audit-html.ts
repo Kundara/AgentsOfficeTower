@@ -600,7 +600,8 @@ function mockFleetResponse(): FleetResponse {
             action: "updated"
           }
         ],
-        notes: ["Audit route uses mocked typed Codex request states for visual validation."]
+        notes: ["Audit route uses mocked typed Codex request states for visual validation."],
+        providerHealth: []
       }
     ]
   };
