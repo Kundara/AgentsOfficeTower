@@ -2,9 +2,7 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function sessionCardState(agent) 
         if (agent && agent.needsUser) {
           return { key: "needs-you", label: "Needs you" };
         }
-        const terminalDisplayState = agent && (agent.state === "done" || agent.state === "idle");
-        const holdsRuntimeOwnership = agent && (agent.isCurrent === true || agent.isOngoing === true);
-        if (terminalDisplayState && holdsRuntimeOwnership) {
+        if (agent && (agent.state === "done" || agent.state === "idle") && (agent.isCurrent === true || agent.isOngoing === true)) {
           return { key: "finishing", label: "Finishing" };
         }
         const key = String(agent && agent.state ? agent.state : "idle")
