@@ -158,7 +158,7 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Fixed
 
 - Fixed shared-room and local floor grouping to prefer the normalized repository URL over the root-commit fallback, so peers on the same repository no longer split into differently named floors when their histories report different root commits.
-- Prevented disconnected HTTP/SSE clients from crashing the Tower process with an unhandled `EPIPE` or `ECONNRESET` socket error.
+- Prevented disconnected HTTP/SSE clients from crashing the Tower process with unhandled `EPIPE` or `ECONNRESET` socket errors, including disconnects that surface outside request ownership.
 - Fixed renamed clones and deleted Claude scratch worktrees appearing as unrelated projects by adding a path/name/remote-rename-stable Git root-commit identity, recovering scratch ownership through the Claude session transcript, and stopping identityless shared-room projects from merging solely because their leaf labels match.
 - Fixed long-lived fleet monitors permanently missing newly started Codex threads after an app-server read, loaded-thread query, or goal lookup stalled; discovery requests are now bounded, timed-out observer connections are replaced before the next discovery pass, a degraded project can no longer block a fleet-wide refresh, and CLI gist counts no longer report stale blocked history as active work.
 - Fixed agent-workflow validation rejecting valid repo skills solely because their frontmatter used Windows CRLF line endings.

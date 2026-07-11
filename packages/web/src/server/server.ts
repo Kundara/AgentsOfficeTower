@@ -6,7 +6,31 @@ import { handleRequest } from "./router";
 import { buildServerMeta } from "./server-metadata";
 import { parseArgs } from "./server-options";
 
+let disconnectExceptionGuardInstalled = false;
+
+function isClientDisconnectError(error: NodeJS.ErrnoException): boolean {
+  return error.code === "EPIPE" || error.code === "ECONNRESET";
+}
+
+function installClientDisconnectExceptionGuard(): void {
+  if (disconnectExceptionGuardInstalled) {
+    return;
+  }
+  disconnectExceptionGuardInstalled = true;
+  process.on("uncaughtException", (error) => {
+    const socketError = error as NodeJS.ErrnoException;
+    if (isClientDisconnectError(socketError)) {
+      console.warn(
+        `Agents Office Tower ignored disconnected client socket error: ${socketError.code}`
+      );
+      return;
+    }
+    throw error;
+  });
+}
+
 export async function startWebServer(argv: string[] = process.argv.slice(2)): Promise<void> {
+  installClientDisconnectExceptionGuard();
   const options = parseArgs(argv);
   const service = new FleetLiveService(options.projects, options.explicitProjects);
   const meta = buildServerMeta(options, options.projects, service.getMultiplayerStatus());
@@ -20,7 +44,7 @@ export async function startWebServer(argv: string[] = process.argv.slice(2)): Pr
 
   server.on("connection", (socket) => {
     socket.on("error", (error: NodeJS.ErrnoException) => {
-      if (error.code === "EPIPE" || error.code === "ECONNRESET") {
+      if (isClientDisconnectError(error)) {
         return;
       }
       console.error(
