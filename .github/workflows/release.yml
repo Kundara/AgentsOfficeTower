@@ -1,9 +1,16 @@
 name: Release
 
-# Publishes on version tags (v0.1.0, v0.2.0, ...).
-# Prerequisites (one-time, manual):
-#   1. Create the `agents-tower` org on npmjs.com.
-#   2. Add an npm automation token as the NPM_TOKEN repository secret.
+# Publishes on version tags (v0.1.0, v0.2.0, ...) via npm trusted
+# publishing (OIDC) — no NPM_TOKEN secret is used or needed.
+#
+# One-time prerequisites per package (after its first manual publish):
+#   npmjs.com package -> Settings -> Trusted Publisher -> GitHub Actions,
+#   repository Kundara/AgentsOfficeTower, workflow release.yml.
+#
+# The first-ever publish of a brand-new package cannot use OIDC
+# (npm requires the package to exist first) and is done locally with
+# a 2FA-enabled account.
+#
 # Publish order matters: core -> web -> cli (dependents last).
 
 on:
@@ -16,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm provenance
+      id-token: write # OIDC for npm trusted publishing + provenance
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -24,18 +31,14 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      - name: Upgrade npm for trusted publishing (needs >= 11.5.1)
+        run: npm install -g npm@11
       - run: npm ci
       - run: npm run build
       - run: npm run check
       - name: Publish @agents-tower/core
-        run: npm publish --workspace packages/core --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace packages/core --access public
       - name: Publish @agents-tower/web
-        run: npm publish --workspace packages/web --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace packages/web --access public
       - name: Publish agents-office-tower (CLI)
-        run: npm publish --workspace packages/cli --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace packages/cli --access public
