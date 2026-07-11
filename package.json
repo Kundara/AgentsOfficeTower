@@ -2,6 +2,10 @@
   "name": "agents-office-tower-workspace",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kundara/AgentsOfficeTower.git"
+  },
   "version": "0.1.2",
   "workspaces": [
     "packages/*"

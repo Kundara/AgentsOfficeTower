@@ -3,6 +3,11 @@
   "version": "0.1.2",
   "description": "Live pixel-office view for agent work across Codex, Claude, Cursor, Hermes, OpenClaw, cloud tasks, and shared rooms.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kundara/AgentsOfficeTower.git",
+    "directory": "packages/cli"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

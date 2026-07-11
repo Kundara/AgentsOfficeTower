@@ -4,6 +4,11 @@
   "description": "Room-based activity view for agent sessions and cloud tasks across supported providers.",
   "version": "0.1.2",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kundara/AgentsOfficeTower.git",
+    "directory": "packages/vscode"
+  },
   "publisher": "local",
   "engines": {
     "vscode": "^1.97.0"
