@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 import { runDemoPreview } from "./demo-preview";
 import { runClaims } from "./claims";
 import { runAudit, runLogs, runRestart, runServiceInstall, runStart, runStop } from "./lifecycle";
-import { cliVersion, runDoctor, runStatus } from "./status";
+import { cliVersion, runDigest, runDoctor, runStatus } from "./status";
 import { runWebQuery } from "./web-query";
 import {
   buildAsepriteExportCommand,
@@ -36,6 +36,7 @@ Usage:
   aot web query <repo> <gist|recent|last> [scope=local|team] [limit=10] [type=agents|events|all] [--json]
   aot status [--json] [--server http://127.0.0.1:4181]
   aot doctor [--json] [--server http://127.0.0.1:4181]
+  aot digest [--json] [--server http://127.0.0.1:4181]
   aot claims start --objective "..." [--paths a,b] [--branch x] [--agent name] [--ttl 20] [--project root]
   aot claims <list|check> [--paths a,b] [--json] [--project root]
   aot claims <heartbeat|release> <id> [--handoff] [--project root]
@@ -274,6 +275,11 @@ async function main(): Promise<void> {
 
   if (command === "doctor") {
     await runDoctor(args);
+    return;
+  }
+
+  if (command === "digest") {
+    await runDigest(args);
     return;
   }
 

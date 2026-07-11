@@ -8,6 +8,7 @@ import { openClawAdapter } from "./openclaw";
 import { presenceAdapter } from "./presence";
 
 export * from "./types";
+export * from "./contract-harness";
 
 export const PROJECT_ADAPTERS = [
   codexLocalAdapter,

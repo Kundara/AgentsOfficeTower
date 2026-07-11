@@ -45,6 +45,17 @@ Decisions made 2026-07-11 (Kundara), resolving the collisions between the two re
 | D6 | npm naming | **CLI publishes as `agents-office-tower`; workspace libraries under `@agents-tower/*`** (core, web, party). Root workspace is `agents-office-tower-workspace` (private). The `agents-tower` npm org must be created before first publish. |
 | D7 | CLI bin | **`aot`**, with `codex-agents-office` retained as a deprecated alias bin for one release. |
 
+## Execution status (updated 2026-07-11)
+
+The build phases below started executing the same day the plan was drafted. Shipped, per phase:
+
+- **Phase 1 — complete.** Provider health flows adapter → snapshot (`providerHealth`, with a fourth `unconfigured` status so absent integrations do not read as broken), `/api/health/live|ready` + `/api/health` with fleet healthy/starting/degraded/stale and build identity, `aot status` / `aot doctor` / `aot --version`, the Active/Done contradiction resolved with a transitional `Finishing` state (spec rule added), fleet-wide terminal notes hoisted to one banner, the hero coverage chip + coverage drawer + degraded/stale floor chips + session stale badges, and the per-session `Why?` evidence view.
+- **Phase 2 — complete.** Sessions search + lenses (needs intervention / live / inferred / remote / overlap / degraded), oldest-wait-first Needs You ranking, time-in-state badges, evidence-backed possible-overlap cards with a Show-sessions action, and opt-in desktop notifications with 10-minute stale-wait escalation. Deferred: the in-scene topology overlay (the lens + cards deliver the value without new scene complexity).
+- **Phase 3 — core complete.** Soft advisory claims (objective/scope/branch/agent, heartbeat, ~20-minute soft expiry, released/handoff/stale lifecycles) stored per project under the app data dir, `aot claims start|list|heartbeat|release|check` with proceed/caution advice that flags stale unreleased claims, claims on every snapshot, Declared-work cards rendered beside detected overlaps without reconciliation, and the coordination skill updated. Deferred: the cross-peer privacy-minimized envelope (multiplayer transport is not yet configured in the fleet service).
+- **Phase 4 — core complete.** `aot start|stop|restart|logs` daemon lifecycle with pidfile + live-pid ownership verification (stop refuses mismatches without `--force`), `aot service install` writing launchd/systemd user units without loading them, and a local audit journal recording every browser approval/input/reply (metadata only, no message bodies) readable via `aot audit`. Deferred: the capability-token gateway and `aot upgrade` rollback — revisit when dispatch/remote answering exist, per D2/D3 gates.
+- **Phase 5 — contract v1 shipped.** `PROVIDER_CONTRACT_VERSION = 1`, golden contract checks (`runAdapterContractChecks`) that all built-in adapters pass in CI, and [docs/provider-sdk.md](provider-sdk.md). Deferred: out-of-process provider execution.
+- **Phase 6 — bounded v1 shipped.** A fleet pulse on `/api/health` (human waits with ages, churn hotspots, repeated failures in the live event window, instability notes) surfaced in `aot status` and the new `aot digest`. No productivity scoring, by design. Deferred: longitudinal history (current pulse is now-first, from live snapshots only).
+
 ## Phase overview and sequencing
 
 ```

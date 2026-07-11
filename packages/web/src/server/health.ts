@@ -1,6 +1,7 @@
 import type { ProviderHealth, ProviderHealthStatus } from "@agents-tower/core";
 
 import type { FleetResponse, MultiplayerStatus, ServerOptions } from "./server-types";
+import { buildFleetPulse, type FleetPulse } from "./pulse";
 
 export type FleetHealthStatus = "healthy" | "starting" | "degraded" | "stale";
 
@@ -41,6 +42,7 @@ export interface HealthResponse extends HealthBuildIdentity {
   projects: ProjectHealthSummary[];
   providers: ProviderHealthRollup[];
   notes: string[];
+  pulse: FleetPulse;
   multiplayer: MultiplayerStatus;
 }
 
@@ -146,6 +148,7 @@ export function buildHealthResponse(input: {
     projects,
     providers: rollupProviders(projects),
     notes,
+    pulse: buildFleetPulse(input.fleet, nowMs),
     multiplayer: input.multiplayer
   };
 }

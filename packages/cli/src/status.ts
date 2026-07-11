@@ -35,6 +35,13 @@ interface HealthProjectSummary {
   status: string;
 }
 
+interface PulsePayload {
+  waitingForHuman: { count: number; oldestWaitMs: number | null; waits: { projectLabel: string; agentLabel: string; kind: string; waitMs: number }[] };
+  churnHotspots: { projectLabel: string; label: string; changeCount: number }[];
+  repeatedFailures: { projectLabel: string; threadId: string; failures: number }[];
+  instabilityNotes: string[];
+}
+
 interface HealthPayload {
   status: string;
   version: string;
@@ -47,6 +54,7 @@ interface HealthPayload {
   projects: HealthProjectSummary[];
   providers: HealthProviderRollup[];
   notes: string[];
+  pulse?: PulsePayload;
 }
 
 function normalizeHost(host: string): string {
@@ -141,7 +149,69 @@ export function formatStatusLines(health: HealthPayload): string[] {
     }
   }
 
+  lines.push(...formatPulseLines(health.pulse));
+
   return lines;
+}
+
+export function formatPulseLines(pulse: PulsePayload | undefined): string[] {
+  if (!pulse) {
+    return [];
+  }
+  const lines: string[] = [];
+  const signals: string[] = [];
+  if (pulse.waitingForHuman.count > 0) {
+    signals.push(
+      `  waiting on you: ${pulse.waitingForHuman.count} (oldest ${formatAge(pulse.waitingForHuman.oldestWaitMs ?? 0)})`
+    );
+    for (const wait of pulse.waitingForHuman.waits) {
+      signals.push(`    - ${wait.agentLabel} in ${wait.projectLabel}: ${wait.kind} for ${formatAge(wait.waitMs)}`);
+    }
+  }
+  for (const churn of pulse.churnHotspots) {
+    signals.push(`  churn: ${churn.label} in ${churn.projectLabel} changed ${churn.changeCount} times recently`);
+  }
+  for (const failure of pulse.repeatedFailures) {
+    signals.push(`  repeated failures: thread ${failure.threadId} in ${failure.projectLabel} failed ${failure.failures} times in the live event window`);
+  }
+  for (const note of pulse.instabilityNotes) {
+    signals.push(`  instability: ${note}`);
+  }
+  if (signals.length === 0) {
+    return [];
+  }
+  lines.push("", "Pulse:");
+  lines.push(...signals);
+  return lines;
+}
+
+export async function runDigest(args: string[]): Promise<void> {
+  const target = resolveServerTarget(args);
+  const health = await fetchJson(`${target.serverBase}/api/health`);
+  if (!health || !health.payload) {
+    console.error(`Could not reach Agents Office Tower at ${target.serverBase}. Start it with \`aot start\`.`);
+    exit(1);
+  }
+  const payload = health.payload as HealthPayload;
+  if (target.json) {
+    console.log(JSON.stringify({ generatedAt: new Date().toISOString(), status: payload.status, pulse: payload.pulse, projects: payload.projects, notes: payload.notes }, null, 2));
+    return;
+  }
+  console.log(`Digest for ${payload.host}:${payload.port} — fleet ${payload.status}, ${payload.projectCount} project${payload.projectCount === 1 ? "" : "s"}.`);
+  const pulseLines = formatPulseLines(payload.pulse);
+  if (pulseLines.length > 0) {
+    for (const line of pulseLines) {
+      console.log(line);
+    }
+  } else {
+    console.log("No attention signals: nothing waiting on you, no churn hotspots, no repeated failures observed.");
+  }
+  if (payload.notes.length > 0) {
+    console.log("", "Coverage notes:");
+    for (const note of payload.notes) {
+      console.log(`  ! ${note}`);
+    }
+  }
 }
 
 export function formatDoctorLines(checks: DoctorCheck[]): string[] {
