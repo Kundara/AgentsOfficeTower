@@ -373,7 +373,8 @@ Worktree identity rules:
 - The browser should broadcast only local project roots whose `Shared` floor toggle is on and whose snapshot has active agents.
 - Remote workspace activity should merge into locally matching workspaces regardless of the receiver's local `Shared` toggle; the toggle controls outbound publishing. If weekly local retention has hidden the matching project, current active peer activity should create a temporary read-only remote-only floor.
 - A newly observed peer payload should trigger one debounced local fleet reply so late joiners receive already-published activity without waiting for the next unrelated fleet refresh; replies must not form a broadcast loop.
-- Shared workspace matching should prefer Git repository identity whenever the sender provides it and use normalized workspace names only when repository identity is unavailable, preventing unrelated same-named projects from merging.
+- Shared workspace matching should prefer Git repository identity whenever the sender provides it, and fall back to exact normalized project-root equality when repository identity is unavailable. Normalized workspace-name matching is intentionally not used, so unrelated same-named projects can never merge; the accepted cost is that identity-less checkouts at different paths appear as separate remote-only floors.
+- Team-scope CLI reads must treat a shared cache older than five minutes as unavailable and fall back to local scope with `teamDataAvailable: false`, rather than silently serving stale team data.
 - Remote snapshots without active agents should stay hidden instead of creating or preserving a room/floor.
 - Each floor header should list the active participant nicknames currently visible in that workspace.
 - Remote shared-room agents should preserve peer labeling and shared-room context so they remain visibly distinct from local sessions.

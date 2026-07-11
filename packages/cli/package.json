@@ -1,6 +1,6 @@
 {
   "name": "agents-office-tower",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Live pixel-office view for agent work across Codex, Claude, Cursor, Hermes, OpenClaw, cloud tasks, and shared rooms.",
   "license": "MIT",
   "main": "dist/index.js",

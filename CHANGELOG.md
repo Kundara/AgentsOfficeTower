@@ -5,7 +5,7 @@ All notable changes to this project should be recorded in this file.
 This changelog is maintained against the current root `package.json` version.
 Entries stay under the active version until an explicit version bump is requested.
 
-## [Unreleased]
+## [0.1.2] - 2026-07-11
 
 ### Added
 
@@ -14,6 +14,9 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed team-scope CLI reads to reject a shared team cache older than five minutes, falling back to local scope with `teamDataAvailable: false` instead of silently serving stale team data, and aligned the spec's shared-workspace matching rule with the implemented Git-identity-then-exact-root behavior (both from the Codex coordination review).
+- Changed the Sessions panel per tester feedback: the header stacks heading and filter bar so they no longer overlap, Recent rows are compact single lines (ellipsized title with the full text in the tooltip, state, age), and the Cycle look and Why? card actions were removed along with the browser Map/Terminal toggle — the terminal surface lives in the CLI.
+- Changed `aot stop` to wait up to 20 seconds for the server to drain observers before reporting an unresolved stop.
 - Changed the README, spec, self-development notes, and both tower skills to document the published npm install path, the health/digest/claims/lifecycle/audit command surface, the coverage drawer and triage lenses, and the new `providerHealth`/`claims` snapshot fields.
 
 ## [0.1.1] - 2026-07-11

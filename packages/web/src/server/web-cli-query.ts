@@ -486,8 +486,18 @@ function buildItems(snapshot: DashboardSnapshot, values: WebCliQueryValues): Web
     .sort((left, right) => itemTimeMs(right) - itemTimeMs(left));
 }
 
-function teamFleet(localFleet: FleetResponse, teamCache: WebCliTeamFleetCache | null): FleetResponse {
-  return teamCache?.hasSharedData ? teamCache.fleet : localFleet;
+export const TEAM_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+
+function teamCacheFresh(teamCache: WebCliTeamFleetCache | null, nowMs: number): boolean {
+  if (!teamCache?.hasSharedData) {
+    return false;
+  }
+  const receivedMs = Date.parse(teamCache.receivedAt);
+  return Number.isFinite(receivedMs) && nowMs - receivedMs <= TEAM_CACHE_MAX_AGE_MS;
+}
+
+function teamFleet(localFleet: FleetResponse, teamCache: WebCliTeamFleetCache | null, nowMs: number): FleetResponse {
+  return teamCacheFresh(teamCache, nowMs) ? teamCache!.fleet : localFleet;
 }
 
 export function buildWebCliQueryResponse(
@@ -496,7 +506,7 @@ export function buildWebCliQueryResponse(
   teamCache: WebCliTeamFleetCache | null,
   nowMs = Date.now()
 ): WebCliQueryResult {
-  const fleet = query.scope === "team" ? teamFleet(localFleet, teamCache) : localFleet;
+  const fleet = query.scope === "team" ? teamFleet(localFleet, teamCache, nowMs) : localFleet;
   const project = chooseProject(fleet, query.repo);
   if ("ok" in project) {
     return project;
@@ -507,7 +517,7 @@ export function buildWebCliQueryResponse(
   const items = query.command === "gist" ? [] : buildItems(project, { ...query.values, limit, type }).slice(0, limit);
   const gist = query.command === "gist" ? buildGist(project, limit) : undefined;
   const cacheReceivedMs = teamCache ? Date.parse(teamCache.receivedAt) : NaN;
-  const teamDataAvailable = query.scope === "team" && Boolean(teamCache?.hasSharedData);
+  const teamDataAvailable = query.scope === "team" && teamCacheFresh(teamCache, nowMs);
   const teamCacheAgeMs = query.scope === "team" && Number.isFinite(cacheReceivedMs)
     ? Math.max(0, nowMs - cacheReceivedMs)
     : null;

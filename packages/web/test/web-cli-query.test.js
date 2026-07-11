@@ -397,3 +397,31 @@ test("shared fleet guard only accepts snapshots with multiplayer data", () => {
     true
   );
 });
+
+test("team scope rejects a stale shared cache and falls back to local with teamDataAvailable false", () => {
+  const { TEAM_CACHE_MAX_AGE_MS } = require("../dist/server/web-cli-query.js");
+  const nowMs = Date.parse("2026-07-11T12:00:00.000Z");
+  const localFleet = {
+    generatedAt: new Date(nowMs).toISOString(),
+    accountAgents: [],
+    projects: [snapshot({ projectRoot: "/tmp/local-project", projectLabel: "Local Project" })]
+  };
+  const staleCache = {
+    fleet: {
+      generatedAt: new Date(nowMs - TEAM_CACHE_MAX_AGE_MS - 60_000).toISOString(),
+      accountAgents: [],
+      projects: [snapshot({ projectRoot: "/tmp/team-project", projectLabel: "Team Project" })]
+    },
+    receivedAt: new Date(nowMs - TEAM_CACHE_MAX_AGE_MS - 60_000).toISOString(),
+    hasSharedData: true
+  };
+  const result = buildWebCliQueryResponse(
+    { repo: "local-project", command: "gist", scope: "team", values: {} },
+    localFleet,
+    staleCache,
+    nowMs
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.response.teamDataAvailable, false);
+  assert.equal(result.response.dataSource, "local");
+});
