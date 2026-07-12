@@ -7,10 +7,24 @@ import type { CodexThread } from "./types";
 const APP_SERVER_THREAD_LIST_TIMEOUT_MS = 15000;
 const APP_SERVER_THREAD_READ_TIMEOUT_MS = 15000;
 
-function mergeThreadLists(...threadLists: CodexThread[][]): CodexThread[] {
+export function mergeThreadLists(...threadLists: CodexThread[][]): CodexThread[] {
   const byId = new Map<string, CodexThread>();
   for (const thread of threadLists.flat()) {
     const existing = byId.get(thread.id);
+    const liveSessionFallback = thread.turns.some((turn) => turn.id === `session-live-${thread.id}`);
+    if (existing && liveSessionFallback) {
+      byId.set(thread.id, {
+        ...existing,
+        status: thread.status,
+        updatedAt: Math.max(existing.updatedAt, thread.updatedAt),
+        path: thread.path ?? existing.path,
+        turns: [
+          ...existing.turns.filter((turn) => turn.id !== `session-live-${thread.id}`),
+          ...thread.turns
+        ]
+      });
+      continue;
+    }
     if (
       !existing
       || thread.updatedAt > existing.updatedAt
@@ -19,7 +33,16 @@ function mergeThreadLists(...threadLists: CodexThread[][]): CodexThread[] {
         && thread.turns.length > existing.turns.length
       )
     ) {
-      byId.set(thread.id, thread);
+      byId.set(thread.id, existing
+        ? {
+          ...existing,
+          ...thread,
+          preview: existing.preview || thread.preview,
+          name: existing.name ?? thread.name,
+          source: existing.source ?? thread.source,
+          gitInfo: existing.gitInfo ?? thread.gitInfo
+        }
+        : thread);
     }
   }
   return [...byId.values()].sort((left, right) => right.updatedAt - left.updatedAt);

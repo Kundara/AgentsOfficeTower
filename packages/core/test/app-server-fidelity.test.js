@@ -1377,6 +1377,58 @@ test("confirmed notLoaded without a final answer keeps an ongoing monitored thre
   assert.equal(monitor.stoppedAtByThreadId.has(thread.id), false);
 });
 
+test("superseded notLoaded confirmation cannot resurrect a newly completed thread", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const thread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor(Date.now() / 1000)
+  };
+  const finalThread = {
+    ...thread,
+    turns: [
+      {
+        ...thread.turns[0],
+        status: "completed",
+        items: [
+          {
+            id: "item_final",
+            type: "agentMessage",
+            text: "Done.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+  let resolveOlderRead;
+  const olderRead = new Promise((resolve) => {
+    resolveOlderRead = resolve;
+  });
+  let readCount = 0;
+
+  monitor.threads.set(thread.id, thread);
+  monitor.markThreadLive(thread.id);
+  monitor.client = {
+    readThread: async () => {
+      readCount += 1;
+      return readCount === 1 ? olderRead : finalThread;
+    }
+  };
+
+  const confirmation = monitor.confirmDormantNotLoadedThread(thread.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  await monitor.refreshThread(thread.id);
+  resolveOlderRead(thread);
+  await confirmation;
+
+  assert.equal(monitor.ongoingThreadIds.has(thread.id), false);
+  assert.equal(monitor.stoppedAtByThreadId.has(thread.id), true);
+});
+
 test("confirmed notLoaded with a final answer stops an ongoing monitored thread", async () => {
   const monitor = new ProjectLiveMonitor({
     projectRoot: "/tmp/CodexAgentsOffice",
@@ -1416,6 +1468,48 @@ test("confirmed notLoaded with a final answer stops an ongoing monitored thread"
 
   assert.equal(monitor.ongoingThreadIds.has(thread.id), false);
   assert.equal(monitor.stoppedAtByThreadId.has(thread.id), true);
+});
+
+test("failed notLoaded confirmation preserves the authoritative running signal", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const thread = {
+    ...sampleThread(),
+    status: { type: "notLoaded" },
+    updatedAt: Math.floor(Date.now() / 1000),
+    turns: [
+      {
+        ...sampleThread().turns[0],
+        status: "completed",
+        items: [
+          {
+            id: "item_stale_final",
+            type: "agentMessage",
+            text: "Previous turn finished.",
+            phase: "final_answer"
+          }
+        ]
+      }
+    ]
+  };
+
+  monitor.threads.set(thread.id, thread);
+  monitor.markThreadLive(thread.id);
+  monitor.client = {
+    readThread: async () => {
+      throw new Error("thread/read timed out after 15ms");
+    },
+    close: () => {}
+  };
+
+  await monitor.confirmDormantNotLoadedThread(thread.id);
+
+  assert.equal(monitor.ongoingThreadIds.has(thread.id), true);
+  assert.equal(monitor.stoppedAtByThreadId.has(thread.id), false);
+  assert.equal(monitor.pendingNotLoadedStopTimers.has(thread.id), true);
+  monitor.clearPendingNotLoadedStop(thread.id);
 });
 
 test("pending notLoaded cooldown suppresses an early stop during reread confirmation", async () => {
@@ -1703,6 +1797,47 @@ test("read-only Codex hydration preserves fresh list timestamps for current work
   assert.equal(agent.updatedAt, new Date(freshUpdatedAt * 1000).toISOString());
   assert.equal(agent.state, "thinking");
   assert.equal(agent.isCurrent, true);
+});
+
+test("stale thread hydration cannot erase a fresher active session-file sentinel", async () => {
+  const monitor = new ProjectLiveMonitor({
+    projectRoot: "/tmp/CodexAgentsOffice",
+    includeCloud: false
+  });
+  const now = Math.floor(Date.now() / 1000);
+  const listedThread = {
+    ...sampleThread(),
+    status: { type: "active", activeFlags: [] },
+    updatedAt: now,
+    turns: [{
+      id: `session-live-${sampleThread().id}`,
+      status: "inProgress",
+      error: null,
+      items: []
+    }]
+  };
+  const staleHydration = {
+    ...listedThread,
+    status: { type: "idle" },
+    updatedAt: now - 5,
+    turns: [{
+      id: "turn_old",
+      status: "completed",
+      error: null,
+      items: [{ type: "agentMessage", text: "Old answer", phase: "final_answer" }]
+    }]
+  };
+
+  monitor.client = { readThread: async () => staleHydration };
+  await monitor.refreshThread(listedThread.id, listedThread);
+  await monitor.rebuildSnapshot();
+
+  const agent = monitor.getSnapshot().agents.find((entry) => entry.threadId === listedThread.id);
+  assert.ok(agent);
+  assert.equal(agent.statusText, "active");
+  assert.equal(agent.state, "planning");
+  assert.equal(agent.isCurrent, true);
+  assert.equal(agent.isOngoing, true);
 });
 
 test("fresh interrupted read-only turns without a final answer remain live through text gaps", () => {

@@ -5,7 +5,8 @@ const { tmpdir } = require("node:os");
 const { basename, join } = require("node:path");
 
 const {
-  listCodexProjectThreadCandidates
+  listCodexProjectThreadCandidates,
+  mergeThreadLists
 } = require("../dist/codex-thread-query.js");
 const {
   discoverCodexSessionThreads,
@@ -146,6 +147,35 @@ test("Codex project thread query keeps scoped results when they match", async ()
   assert.equal(result.usedUnscopedFallback, false);
   assert.deepEqual(result.trackedThreads.map((entry) => entry.id), ["match"]);
   assert.equal(calls.length, 1);
+});
+
+test("active session fallback wins timestamp ties without discarding listed identity or history", () => {
+  const listed = thread({
+    id: "thr_live",
+    preview: "Choose next work",
+    name: "Choose next work",
+    source: "vscode",
+    status: { type: "notLoaded" },
+    updatedAt: 200,
+    turns: [{ id: "turn_old", status: "completed", error: null, items: [] }]
+  });
+  const sessionFallback = thread({
+    id: "thr_live",
+    preview: "Codex session",
+    name: null,
+    source: "vscode",
+    status: { type: "active", activeFlags: [] },
+    updatedAt: 200,
+    turns: [{ id: "session-live-thr_live", status: "inProgress", error: null, items: [] }]
+  });
+
+  const [merged] = mergeThreadLists([listed], [sessionFallback]);
+
+  assert.equal(merged.status.type, "active");
+  assert.equal(merged.preview, "Choose next work");
+  assert.equal(merged.name, "Choose next work");
+  assert.equal(merged.source, "vscode");
+  assert.deepEqual(merged.turns.map((turn) => turn.id), ["turn_old", "session-live-thr_live"]);
 });
 
 test("Codex project thread query groups projectless desktop chats on the Chat floor", async () => {
@@ -291,7 +321,7 @@ test("Codex session parser reads multiagents v2 subagent JSONL", () => {
   assert.equal(summary.activityEvent.title, "rg Firebase Assets");
 });
 
-test("Codex session discovery reads full bodies only for matching subagents and bounded malformed compatibility files", async () => {
+test("Codex session discovery reads matching subagents, fresh top-level sessions, and bounded malformed compatibility files", async () => {
   const directory = await fsPromises.mkdtemp(join(tmpdir(), "agents-office-session-filter-"));
   const projectRoot = join(directory, "project");
   const otherRoot = join(directory, "other");
@@ -302,7 +332,11 @@ test("Codex session discovery reads full bodies only for matching subagents and 
     malformedPrefix: join(directory, "malformed-prefix.jsonl")
   };
   await Promise.all([
-    fsPromises.writeFile(files.topLevel, `${sessionMetaLine({ id: "top", cwd: projectRoot, subagent: false })}\nignored body\n`),
+    fsPromises.writeFile(files.topLevel, [
+      sessionMetaLine({ id: "top", cwd: projectRoot, subagent: false }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", text: '{"type":"task_complete"}' } })
+    ].join("\n") + "\n"),
     fsPromises.writeFile(files.otherProject, `${sessionMetaLine({ id: "other", cwd: otherRoot })}\n`),
     fsPromises.writeFile(files.matching, `${sessionMetaLine({ id: "match", cwd: projectRoot })}\n`),
     fsPromises.writeFile(files.malformedPrefix, `not-json\n${sessionMetaLine({ id: "compat", cwd: projectRoot })}\n`)
@@ -320,14 +354,29 @@ test("Codex session discovery reads full bodies only for matching subagents and 
       sessionDirectories: [directory],
       now: new Date()
     });
-    assert.deepEqual(threads.map((entry) => entry.id).sort(), ["compat", "match"]);
-    assert.deepEqual(fullReads.sort(), ["malformed-prefix.jsonl", "matching.jsonl"]);
+    assert.deepEqual(threads.map((entry) => entry.id).sort(), ["compat", "match", "top"]);
+    const topLevel = threads.find((entry) => entry.id === "top");
+    assert.ok(topLevel);
+    assert.equal(topLevel.status.type, "active");
+    assert.equal(topLevel.turns.at(-1).status, "inProgress");
+    assert.equal(parseThreadSourceMeta(topLevel).parentThreadId, null);
+    assert.equal(fullReads.includes("top-level.jsonl"), false);
+    await fsPromises.appendFile(
+      files.topLevel,
+      `${JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } })}\n`
+    );
+    const completedThreads = await discoverCodexSessionThreads({
+      projectRoot,
+      sessionDirectories: [directory],
+      now: new Date()
+    });
+    assert.equal(completedThreads.some((entry) => entry.id === "top"), false);
     await discoverCodexSessionThreads({
       projectRoot: join(directory, "unmatched"),
       sessionDirectories: [directory],
       now: new Date()
     });
-    assert.deepEqual(fullReads.sort(), ["malformed-prefix.jsonl", "matching.jsonl"]);
+    assert.equal(fullReads.includes("top-level.jsonl"), false);
   } finally {
     fsPromises.readFile = originalReadFile;
     await fsPromises.rm(directory, { recursive: true, force: true });

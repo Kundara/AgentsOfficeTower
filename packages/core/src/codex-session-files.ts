@@ -8,10 +8,14 @@ import type { CodexThread, CodexTurn, ThreadItem } from "./types";
 const DEFAULT_MAX_SESSION_FILES = 240;
 const DEFAULT_SESSION_LOOKBACK_DAYS = 2;
 const SESSION_FILE_RECENCY_MS = 24 * 60 * 60 * 1000;
+const ACTIVE_TOP_LEVEL_SESSION_FILE_WINDOW_MS = 20 * 60 * 1000;
 const SESSION_META_PREFIX_BYTES = 64 * 1024;
 const SESSION_META_CACHE_LIMIT = 512;
 const SESSION_META_READ_CONCURRENCY = 12;
 const SESSION_FULL_READ_CONCURRENCY = 3;
+const SESSION_LIFECYCLE_READ_CHUNK_BYTES = 256 * 1024;
+const SESSION_LIFECYCLE_LINE_LIMIT = 64 * 1024;
+const SESSION_LIFECYCLE_CACHE_LIMIT = 512;
 
 type RecentSessionFile = {
   filePath: string;
@@ -20,7 +24,14 @@ type RecentSessionFile = {
 };
 
 type SessionMetaProbe =
-  | { kind: "known"; cwd: string | null; isSubagent: boolean }
+  | {
+    kind: "known";
+    id: string | null;
+    cwd: string | null;
+    isSubagent: boolean;
+    source: string | Record<string, unknown>;
+    modelProvider: string;
+  }
   | { kind: "unknown" };
 
 type SessionMetaCacheEntry = {
@@ -30,6 +41,12 @@ type SessionMetaCacheEntry = {
 
 const sessionMetaCache = new Map<string, SessionMetaCacheEntry>();
 const fullSessionReadInFlight = new Map<string, Promise<CodexThread | null>>();
+const sessionLifecycleCache = new Map<string, {
+  size: number;
+  partialLine: string;
+  discardingLongLine: boolean;
+  latestEvent: "started" | "complete" | "aborted" | null;
+}>();
 const fullSessionReadWaiters: Array<() => void> = [];
 let activeFullSessionReads = 0;
 
@@ -128,6 +145,90 @@ function sessionFileSignature(file: RecentSessionFile): string {
   return `${file.mtimeMs}:${file.size}`;
 }
 
+function scanSessionLifecycleLines(
+  text: string,
+  initial: "started" | "complete" | "aborted" | null,
+  discardingLongLine: boolean
+): {
+  latestEvent: "started" | "complete" | "aborted" | null;
+  partialLine: string;
+  discardingLongLine: boolean;
+} {
+  let latest = initial;
+  let remaining = text;
+  if (discardingLongLine) {
+    const newlineIndex = remaining.indexOf("\n");
+    if (newlineIndex < 0) {
+      return { latestEvent: latest, partialLine: "", discardingLongLine: true };
+    }
+    remaining = remaining.slice(newlineIndex + 1);
+    discardingLongLine = false;
+  }
+  const lines = remaining.split(/\r?\n/);
+  let partialLine = lines.pop() ?? "";
+  for (const line of lines) {
+    if (line.length > SESSION_LIFECYCLE_LINE_LIMIT) {
+      continue;
+    }
+    const entry = parseJsonLine(line);
+    const payload = asRecord(entry?.payload);
+    if (entry?.type !== "event_msg" || !payload) {
+      continue;
+    }
+    const lifecycle = asString(payload.type);
+    if (lifecycle === "task_started") {
+      latest = "started";
+    } else if (lifecycle === "task_complete") {
+      latest = "complete";
+    } else if (lifecycle === "turn_aborted") {
+      latest = "aborted";
+    }
+  }
+  if (partialLine.length > SESSION_LIFECYCLE_LINE_LIMIT) {
+    partialLine = "";
+    discardingLongLine = true;
+  }
+  return { latestEvent: latest, partialLine, discardingLongLine };
+}
+
+async function latestSessionLifecycle(file: RecentSessionFile): Promise<"started" | "complete" | "aborted" | null> {
+  const cached = sessionLifecycleCache.get(file.filePath);
+  const canContinue = Boolean(cached && cached.size <= file.size);
+  let offset = canContinue ? cached?.size ?? 0 : 0;
+  let partialLine = canContinue ? cached?.partialLine ?? "" : "";
+  let discardingLongLine = canContinue ? cached?.discardingLongLine ?? false : false;
+  let latestEvent = canContinue ? cached?.latestEvent ?? null : null;
+  const handle = await open(file.filePath, "r");
+  try {
+    const buffer = Buffer.alloc(SESSION_LIFECYCLE_READ_CHUNK_BYTES);
+    while (offset < file.size) {
+      const length = Math.min(buffer.length, file.size - offset);
+      const { bytesRead } = await handle.read(buffer, 0, length, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const text = partialLine + buffer.subarray(0, bytesRead).toString("utf8");
+      const scanned = scanSessionLifecycleLines(text, latestEvent, discardingLongLine);
+      latestEvent = scanned.latestEvent;
+      partialLine = scanned.partialLine;
+      discardingLongLine = scanned.discardingLongLine;
+      offset += bytesRead;
+    }
+  } finally {
+    await handle.close();
+  }
+  sessionLifecycleCache.delete(file.filePath);
+  sessionLifecycleCache.set(file.filePath, { size: offset, partialLine, discardingLongLine, latestEvent });
+  while (sessionLifecycleCache.size > SESSION_LIFECYCLE_CACHE_LIMIT) {
+    const oldestKey = sessionLifecycleCache.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    sessionLifecycleCache.delete(oldestKey);
+  }
+  return latestEvent;
+}
+
 function fullSessionReadKey(file: RecentSessionFile): string {
   return `${file.filePath}\u0000${sessionFileSignature(file)}`;
 }
@@ -164,8 +265,11 @@ async function readSessionMetaPrefix(file: RecentSessionFile): Promise<SessionMe
     }
     return {
       kind: "known",
+      id: asString(payload.id),
       cwd: asString(payload.cwd),
-      isSubagent: sessionSourceIsSubagent(payload.source, asString(payload.thread_source))
+      isSubagent: sessionSourceIsSubagent(payload.source, asString(payload.thread_source)),
+      source: asRecord(payload.source) ?? asString(payload.source) ?? "unknown",
+      modelProvider: asString(payload.model_provider) ?? "openai"
     };
   } finally {
     await handle.close();
@@ -220,7 +324,14 @@ async function readAndParseSessionFile(file: RecentSessionFile): Promise<CodexTh
       if (thread) {
         sessionMetaCache.set(file.filePath, {
           signature: sessionFileSignature(file),
-          promise: Promise.resolve({ kind: "known", cwd: thread.cwd, isSubagent: true })
+          promise: Promise.resolve({
+            kind: "known",
+            id: thread.id,
+            cwd: thread.cwd,
+            isSubagent: sessionSourceIsSubagent(thread.source, null),
+            source: thread.source,
+            modelProvider: thread.modelProvider
+          })
         });
         pruneSessionMetaCache();
       }
@@ -569,6 +680,45 @@ export async function discoverCodexSessionThreads(input: {
     SESSION_META_READ_CONCURRENCY,
     async (file) => ({ file, probe: await getSessionMetaProbe(file) })
   );
+  const nowMs = (input.now ?? new Date()).getTime();
+  const activeTopLevelThreads = (await mapWithConcurrency(
+    probes,
+    SESSION_META_READ_CONCURRENCY,
+    async ({ file, probe }): Promise<CodexThread[]> => {
+    if (
+      probe.kind !== "known"
+      || probe.isSubagent
+      || !probe.id
+      || !probe.cwd
+      || !sameProjectPath(probe.cwd, canonicalProjectRoot)
+      || nowMs - file.mtimeMs > ACTIVE_TOP_LEVEL_SESSION_FILE_WINDOW_MS
+    ) {
+      return [];
+    }
+    if (await latestSessionLifecycle(file) !== "started") {
+      return [];
+    }
+    const updatedAt = Math.floor(file.mtimeMs / 1000);
+    return [{
+      id: probe.id,
+      preview: "Codex session",
+      ephemeral: false,
+      modelProvider: probe.modelProvider,
+      createdAt: updatedAt,
+      updatedAt,
+      status: { type: "active", activeFlags: [] },
+      path: file.filePath,
+      cwd: probe.cwd,
+      cliVersion: "",
+      source: probe.source,
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [{ id: `session-live-${probe.id}`, status: "inProgress", error: null, items: [] }]
+    }];
+    }
+  )).flat();
   const candidates = probes
     .filter(({ probe }) => {
       if (probe.kind === "unknown") {
@@ -586,7 +736,7 @@ export async function discoverCodexSessionThreads(input: {
     readAndParseSessionFile
   );
 
-  return threads
+  return [...threads, ...activeTopLevelThreads]
     .filter((thread): thread is CodexThread => Boolean(thread))
     .filter((thread) => sameProjectPath(thread.cwd, canonicalProjectRoot))
     .sort((left, right) => right.updatedAt - left.updatedAt);

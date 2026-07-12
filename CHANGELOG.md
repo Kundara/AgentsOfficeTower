@@ -12,6 +12,10 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed fleet discovery to drop projects whose root directory no longer exists, so deleted session worktrees (for example agent scratchpad checkouts) stop appearing as ghost floors stuck in a permanent starting-up state.
 - Changed server shutdown to exit within a five-second grace period when observer connections or SSE clients would otherwise keep the process alive after SIGTERM, so `aot stop` and `aot restart` complete reliably.
 
+### Fixed
+
+- Fixed active Codex avatars disappearing when a `notLoaded` confirmation reread times out: Tower now preserves the last authoritative running signal until a successful reread confirms completion, and uses fresh top-level Codex session logs as a typed cold-start fallback when app-server hydration stalls.
+
 ## [0.1.2] - 2026-07-11
 
 ### Added

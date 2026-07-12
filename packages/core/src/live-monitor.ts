@@ -163,6 +163,10 @@ function upsertThreadTurn(thread: CodexThread, turn: CodexThread["turns"][number
   };
 }
 
+function liveSessionFallbackTurn(thread: CodexThread | null): CodexThread["turns"][number] | null {
+  return thread?.turns.find((turn) => turn.id === `session-live-${thread.id}`) ?? null;
+}
+
 function threadStillAwaitsFinalAnswer(thread: CodexThread): boolean {
   if (thread.status.type === "systemError") {
     return false;
@@ -221,6 +225,8 @@ export interface ProjectLiveMonitorOptions {
   includeCloud?: boolean;
   appServerRequestTimeoutMs?: number;
 }
+
+type ThreadRefreshResult = "refreshed" | "unavailable" | "superseded";
 
 export class ProjectLiveMonitor extends EventEmitter {
   private readonly projectRoot: string;
@@ -1190,9 +1196,12 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
   }
 
-  private async refreshThread(threadId: string, listedThread: CodexThread | null = null): Promise<void> {
+  private async refreshThread(
+    threadId: string,
+    listedThread: CodexThread | null = null
+  ): Promise<ThreadRefreshResult> {
     if (!this.client) {
-      return;
+      return "unavailable";
     }
     const refreshGeneration = (this.threadRefreshGenerations.get(threadId) ?? 0) + 1;
     this.threadRefreshGenerations.set(threadId, refreshGeneration);
@@ -1219,18 +1228,32 @@ export class ProjectLiveMonitor extends EventEmitter {
         readThread = listedThread;
       }
       if (this.threadRefreshGenerations.get(threadId) !== refreshGeneration) {
-        return;
+        return "superseded";
       }
       // A file-watch reread may arrive immediately after thread/list hydration.
       // Preserve the freshest known list metadata instead of letting an older
       // thread/read payload move the workload backwards in time.
       const freshestKnownThread = listedThread ?? previousThread;
+      const fallbackTurn = liveSessionFallbackTurn(freshestKnownThread);
+      const preserveLiveSessionFallback = Boolean(
+        fallbackTurn
+        && freshestKnownThread
+        && freshestKnownThread.updatedAt >= readThread.updatedAt
+      );
       const thread = freshestKnownThread
         ? {
           ...readThread,
-          status: listedThread ? listedThread.status : readThread.status,
+          status: listedThread || preserveLiveSessionFallback
+            ? freshestKnownThread.status
+            : readThread.status,
           updatedAt: Math.max(readThread.updatedAt, freshestKnownThread.updatedAt),
-          path: freshestKnownThread.path ?? readThread.path
+          path: freshestKnownThread.path ?? readThread.path,
+          turns: preserveLiveSessionFallback && fallbackTurn
+            ? [
+              ...readThread.turns.filter((turn) => turn.id !== fallbackTurn.id),
+              fallbackTurn
+            ]
+            : readThread.turns
         }
         : readThread;
       this.clearMatchingNote(`Thread refresh failed (${threadId.slice(0, 8)}):`);
@@ -1289,10 +1312,12 @@ export class ProjectLiveMonitor extends EventEmitter {
       }
       this.hydratedThreadIds.add(threadId);
       this.scheduleSnapshot();
+      return "refreshed";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.addNote(`Thread refresh failed (${threadId.slice(0, 8)}): ${message}`);
       this.scheduleSnapshot();
+      return "unavailable";
     }
   }
 
@@ -1541,7 +1566,19 @@ export class ProjectLiveMonitor extends EventEmitter {
       return;
     }
 
-    await this.refreshThread(threadId);
+    const confirmation = await this.refreshThread(threadId);
+    if (confirmation === "superseded") {
+      return;
+    }
+    if (confirmation === "unavailable") {
+      // A transport failure is not evidence that Codex stopped. Preserve the
+      // last authoritative running signal until a reread actually confirms
+      // the notLoaded transition.
+      this.markThreadLive(threadId);
+      this.schedulePendingNotLoadedStop(threadId);
+      this.scheduleSnapshot();
+      return;
+    }
     const thread = this.threads.get(threadId) ?? null;
     if (!thread) {
       return;
