@@ -74,6 +74,15 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
       function activityWallItemName(value, fallback) {
         const text = String(value || fallback || "").trim();
         const parts = text.split(/[\\\\/]/).filter(Boolean);
+        if (/^skill\.md$/i.test(parts[parts.length - 1] || "")) {
+          const fallbackParts = String(fallback || "").trim().split(/[\\\\/]/).filter(Boolean);
+          const skillParts = fallbackParts.length > 1 && /^skill\.md$/i.test(fallbackParts[fallbackParts.length - 1] || "")
+            ? fallbackParts
+            : parts;
+          if (skillParts.length > 1) {
+            return skillParts.slice(-2).join("/");
+          }
+        }
         return parts[parts.length - 1] || text || "";
       }
 
@@ -266,6 +275,9 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
           return projectLabel(projectRoot) || "workspace";
         }
         const parts = normalized.split(/[\\\\/]/).filter(Boolean);
+        if (parts.length > 1 && /^skill\.md$/i.test(parts[parts.length - 1] || "")) {
+          return parts.slice(-2).join("/");
+        }
         return parts[parts.length - 1] || normalized;
       }
 

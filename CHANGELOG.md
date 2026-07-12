@@ -14,6 +14,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed skill manifest activity labels to show `skill-name/SKILL.md` instead of the ambiguous `SKILL.md` basename on the office wall and file-change notifications.
 - Fixed active Codex avatars disappearing when a `notLoaded` confirmation reread times out: Tower now preserves the last authoritative running signal until a successful reread confirms completion, and uses fresh top-level Codex session logs as a typed cold-start fallback when app-server hydration stalls.
 
 ## [0.1.2] - 2026-07-11

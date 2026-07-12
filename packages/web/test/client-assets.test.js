@@ -36,6 +36,20 @@ function extractRuntimeFunctions(source, names) {
   }).join("\n");
 }
 
+test("skill manifest changes include the skill folder in file labels", () => {
+  const renderSource = readTemplateExportValue("runtime", "render-source.ts");
+  const activityWallItemName = Function(`${extractRuntimeFunctions(renderSource, ["activityWallItemName"])}\nreturn activityWallItemName;`)();
+  const notificationFileName = Function(
+    "cleanReportedPath",
+    "projectLabel",
+    `${extractRuntimeFunctions(renderSource, ["notificationFileName"])}\nreturn notificationFileName;`
+  )((projectRoot, location) => String(location || "").replace(projectRoot + "/", ""), () => "workspace");
+
+  assert.equal(activityWallItemName("SKILL.md", ".claude/skills/platform-tooling-base-scenes/SKILL.md"), "platform-tooling-base-scenes/SKILL.md");
+  assert.equal(notificationFileName("/repo", "/repo/.agents/skills/agents-tower/SKILL.md"), "agents-tower/SKILL.md");
+  assert.equal(notificationFileName("/repo", "/repo/packages/web/src/server.ts"), "server.ts");
+});
+
 const navigationRuntimeFiles = [
   "navigation-pathing-source.ts",
   "navigation-overlays-source.ts",
