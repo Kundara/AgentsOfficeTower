@@ -9,6 +9,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Changed server metadata and health reporting to reflect persisted PartyKit shared-room configuration, distinguishing a configured browser-side room from a genuinely unconfigured installation instead of always reporting multiplayer as disabled.
 - Changed fleet discovery to drop projects whose root directory no longer exists, so deleted session worktrees (for example agent scratchpad checkouts) stop appearing as ghost floors stuck in a permanent starting-up state.
 - Changed server shutdown to exit within a five-second grace period when observer connections or SSE clients would otherwise keep the process alive after SIGTERM, so `aot stop` and `aot restart` complete reliably.
 

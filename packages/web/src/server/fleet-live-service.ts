@@ -11,6 +11,7 @@ import {
   describeStoredAppearanceSettings,
   describeCursorIntegrationSettings,
   describeStoredMultiplayerSettings,
+  getStoredMultiplayerSettingsSync,
   discoverProjects,
   listCloudTasks,
   loadClaudeHomeAccountAgents,
@@ -242,12 +243,25 @@ export class FleetLiveService {
   }
 
   getMultiplayerStatus(): MultiplayerStatus {
+    const multiplayer = getStoredMultiplayerSettingsSync();
+    if (!multiplayer.enabled) {
+      return {
+        enabled: false,
+        transport: null,
+        secure: false,
+        peerCount: 0,
+        note: multiplayer.configured
+          ? "Shared room is configured but sharing is off."
+          : "Multiplayer transport not configured."
+      };
+    }
+
     return {
-      enabled: false,
-      transport: null,
-      secure: false,
+      enabled: true,
+      transport: "partykit",
+      secure: true,
       peerCount: 0,
-      note: "Multiplayer transport not configured."
+      note: `Shared room configured for ${multiplayer.room} on ${multiplayer.host}; live browser connection status is reported in the office UI.`
     };
   }
 
