@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-const { statSync } = require("node:fs");
-const { join, relative } = require("node:path");
+const { readFileSync } = require("node:fs");
+const { join, relative, sep } = require("node:path");
 const { listSourceFiles } = require("./list-source-files");
 
 const repoRoot = join(__dirname, "..");
@@ -25,12 +25,15 @@ const files = listSourceFiles(
     "packages/vscode/src"
   ],
   [".ts", ".tsx", ".js", ".mjs", ".cjs", ".css"]
-).map((filePath) => relative(repoRoot, filePath));
+).map((filePath) => relative(repoRoot, filePath).split(sep).join("/"));
 
 const violations = files
   .map((filePath) => ({
     filePath,
-    size: statSync(join(repoRoot, filePath)).size,
+    size: Buffer.byteLength(
+      readFileSync(join(repoRoot, filePath), "utf8").replace(/\r\n/g, "\n"),
+      "utf8"
+    ),
     limit: perFileMaxBytes.has(filePath) ? perFileMaxBytes.get(filePath) : maxBytes
   }))
   .filter((entry) => entry.limit !== 0 && entry.size > entry.limit);

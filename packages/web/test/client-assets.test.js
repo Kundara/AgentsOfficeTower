@@ -12,7 +12,7 @@ const { renderZOrderAuditHtml } = require("../dist/render-z-order-audit-html.js"
 function readClientSource(...segments) {
   const source = readFileSync(join(__dirname, "../src/client", ...segments), "utf8");
   return segments.length === 1 && segments[0] === "styles.css"
-    ? `${source}\n${readFileSync(join(__dirname, "../src/client/tower-visuals.css"), "utf8")}\n${readFileSync(join(__dirname, "../src/client/notifications.css"), "utf8")}`
+    ? `${source}\n${readFileSync(join(__dirname, "../src/client/file-format-icons.css"), "utf8")}\n${readFileSync(join(__dirname, "../src/client/tower-visuals.css"), "utf8")}\n${readFileSync(join(__dirname, "../src/client/notifications.css"), "utf8")}`
     : source;
 }
 
@@ -253,10 +253,17 @@ test("layout audit injects all synthetic scenarios before the normal client bund
 test("client build assembles the runtime in memory without eval or a tracked generated module", () => {
   const buildSource = readFileSync(join(__dirname, "../scripts/build-client.mjs"), "utf8");
   const generatorSource = readFileSync(join(__dirname, "../scripts/generate-runtime-module.mjs"), "utf8");
+  const baseStylesIndex = buildSource.indexOf('import "./src/client/styles.css";');
+  const fileFormatStylesIndex = buildSource.indexOf('import "./src/client/file-format-icons.css";');
+  const towerVisualsIndex = buildSource.indexOf('import "./src/client/tower-visuals.css";');
 
   assert.match(buildSource, /const runtimeModuleSource = await generateRuntimeModuleSource\(\);/);
   assert.match(buildSource, /stdin: \{/);
   assert.match(buildSource, /startClientApp\(\);/);
+  assert.ok(
+    baseStylesIndex >= 0 && fileFormatStylesIndex > baseStylesIndex && towerVisualsIndex > fileFormatStylesIndex,
+    "the client build should bundle file-format icons between base styles and tower visuals"
+  );
   assert.doesNotMatch(buildSource, /entryPoints:/);
   assert.doesNotMatch(generatorSource, /\bFunction\(/);
   assert.match(generatorSource, /ts\.createSourceFile/);
