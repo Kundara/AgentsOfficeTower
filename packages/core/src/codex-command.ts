@@ -9,6 +9,19 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const CODEX_OPTIONAL_RESOLUTION_TIMEOUT_MS = 3000;
 
+export const CODEX_BACKGROUND_EXEC_OPTIONS = Object.freeze({
+  windowsHide: true
+});
+
+export interface CodexExecDependencies {
+  candidates?: CodexCommandCandidate[];
+  executeFile?: (
+    command: string,
+    args: string[],
+    options: typeof CODEX_BACKGROUND_EXEC_OPTIONS
+  ) => Promise<{ stdout: string; stderr: string }>;
+}
+
 export interface CodexCommandCandidate {
   command: string;
   label: string;
@@ -265,13 +278,24 @@ export async function spawnCodexProcess(
   throw buildResolutionError(errors);
 }
 
-export async function execCodex(args: string[]): Promise<{ stdout: string; stderr: string; candidate: CodexCommandCandidate }> {
-  const candidates = await listCodexCommandCandidates();
+export async function execCodex(
+  args: string[],
+  dependencies: CodexExecDependencies = {}
+): Promise<{ stdout: string; stderr: string; candidate: CodexCommandCandidate }> {
+  const candidates = dependencies.candidates ?? await listCodexCommandCandidates();
+  const executeFile = dependencies.executeFile ?? (async (command, commandArgs, options) => {
+    const result = await execFileAsync(command, commandArgs, options);
+    return { stdout: result.stdout, stderr: result.stderr };
+  });
   const errors: string[] = [];
 
   for (const candidate of candidates) {
     try {
-      const result = await execFileAsync(candidate.command, [...(candidate.argsPrefix ?? []), ...args]);
+      const result = await executeFile(
+        candidate.command,
+        [...(candidate.argsPrefix ?? []), ...args],
+        CODEX_BACKGROUND_EXEC_OPTIONS
+      );
       return {
         stdout: result.stdout,
         stderr: result.stderr,

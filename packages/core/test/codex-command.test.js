@@ -3,8 +3,29 @@ const assert = require("node:assert/strict");
 
 const {
   buildCodexCommandCandidates,
+  CODEX_BACKGROUND_EXEC_OPTIONS,
+  execCodex,
   windowsPathToWslPath
 } = require("../dist/codex-command.js");
+
+test("background Codex executions pass hidden-window options to execFile", async () => {
+  const calls = [];
+  const result = await execCodex(["cloud", "list", "--json"], {
+    candidates: [{ command: "codex-fixture", label: "fixture", argsPrefix: ["--prefix"] }],
+    async executeFile(command, args, options) {
+      calls.push({ command, args, options });
+      return { stdout: '{"tasks":[]}', stderr: "" };
+    }
+  });
+
+  assert.deepEqual(calls, [{
+    command: "codex-fixture",
+    args: ["--prefix", "cloud", "list", "--json"],
+    options: { windowsHide: true }
+  }]);
+  assert.equal(result.stdout, '{"tasks":[]}');
+  assert.equal(result.candidate.label, "fixture");
+});
 
 test("candidate list prefers explicit override before PATH", () => {
   assert.deepEqual(

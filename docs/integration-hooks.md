@@ -561,6 +561,7 @@ Resolution details:
 
 - `cloud list` uses the same Codex-command resolution path as `app-server`
 - Windows Store app installs can provide cloud task visibility through the same extracted-binary fallback
+- background `cloud list` executions request hidden Windows console handling, matching observer app-server launches so the 30-second fleet poll does not activate Windows Terminal
 
 How we use it:
 
