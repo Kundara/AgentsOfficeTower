@@ -7,6 +7,7 @@ import { readJsonBody, notFound, sendAbsoluteFileAsset, sendHtml, sendJson, send
 import { buildHealthResponse } from "./health";
 import { buildServerMeta, serverBuildIdentity } from "./server-metadata";
 import { renderHtml } from "../render/render-html";
+import { renderFileFormatAuditHtml } from "../render/render-file-format-audit-html";
 import { renderIconAuditHtml } from "../render/render-icon-audit-html";
 import { renderLayoutAuditHtml } from "../render/render-layout-audit-html";
 import { renderSceneEffectsAuditHtml } from "../render/render-scene-effects-audit-html";
@@ -290,6 +291,24 @@ async function handleIconAuditRoute(context: RequestContext): Promise<boolean> {
   }
 
   sendHtml(context.response, renderIconAuditHtml());
+  return true;
+}
+
+async function handleFileFormatAuditRoute(context: RequestContext): Promise<boolean> {
+  if (!matchesMethod(context, "GET", "HEAD") || context.url.pathname !== "/file-format-audit") {
+    return false;
+  }
+
+  if (requestMethod(context) === "HEAD") {
+    context.response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    context.response.end();
+    return true;
+  }
+
+  sendHtml(context.response, renderFileFormatAuditHtml());
   return true;
 }
 
@@ -811,6 +830,7 @@ const ROUTES: RouteHandler[] = [
   handleVendorRoute,
   handleHomeRoute,
   handleIconAuditRoute,
+  handleFileFormatAuditRoute,
   handleSceneEffectsAuditRoute,
   handleWideOfficeAuditRoute,
   handleLayoutAuditRoute,

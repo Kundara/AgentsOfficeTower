@@ -556,6 +556,8 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes("function renderWallDashboardHotHover(row)"));
   assert.ok(fileFormatsSource.includes("function hotChangePresentation(entry)"));
   assert.ok(fileFormatsSource.includes("function renderHotFileIcon(entry, className)"));
+  assert.ok(fileFormatsSource.includes("function hotFileInkForColor(color)"));
+  assert.ok(fileFormatsSource.includes("HOT_FILE_FORMAT_MARKS"));
   assert.ok(fileFormatsSource.includes('"code", "markup", "style", "data", "config", "docs", "image", "audio", "video"'));
   assert.ok(fileFormatsSource.includes("hot-file-change-badge is-added"));
   assert.ok(fileFormatsSource.includes("hot-file-change-badge is-deleted"));
@@ -618,7 +620,9 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(stylesSource.includes("transform: translate(0, 4px);"));
   assert.ok(stylesSource.includes(".office-wall-hot-heat-track"));
   assert.ok(stylesSource.includes(".office-wall-hot-cell-icon"));
-  assert.ok(stylesSource.includes(".hot-file-format-sheet"));
+  assert.ok(stylesSource.includes(".hot-file-format-surface"));
+  assert.ok(stylesSource.includes(".hot-file-format-mark"));
+  assert.ok(stylesSource.includes(".hot-file-change-badge.is-modified + .hot-file-change-mark"));
   assert.ok(stylesSource.includes(".office-wall-hot-format"));
   assert.ok(servedStyles.includes(".office-map-wall-hot-hit .office-wall-hot-hover"));
   assert.ok(servedStyles.includes("left: 0;"));
@@ -626,6 +630,16 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(servedStyles.includes("width: min(460px, calc(100vw - 24px));"));
   assert.ok(servedStyles.includes("transform: translate(0, 4px);"));
   assert.ok(navigationSource.includes('typeof officeWallDashboardSceneToken === "function" ? officeWallDashboardSceneToken(snapshot) : ""'));
+});
+
+test("file format icons choose readable ink for light and dark brand colors", () => {
+  const fileFormatsSource = readTemplateExportValue("runtime", "file-formats-source.ts");
+  const hotFileInkForColor = Function(
+    `${extractRuntimeFunctions(fileFormatsSource, ["hotFileInkForColor"])}\nreturn hotFileInkForColor;`
+  )();
+
+  assert.equal(hotFileInkForColor("#53a4ff"), "#071018");
+  assert.equal(hotFileInkForColor("#512bd4"), "#ffffff");
 });
 
 test("runtime source rerenders dragged furniture immediately without per-move storage writes", () => {

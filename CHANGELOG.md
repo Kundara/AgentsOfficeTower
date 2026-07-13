@@ -10,9 +10,11 @@ Entries stay under the active version until an explicit version bump is requeste
 ### Added
 
 - Added compact per-format SVG file badges to the in-scene hot-change board and hover cards. Badges use recognizable format colors, family-specific vector marks, and added/modified/deleted/renamed/mixed change indicators across code, markup, styles, data, configuration, docs, images, audio, video, fonts, archives, Unity/project files, binaries, and unknown formats.
+- Added `/file-format-audit`, an interactive visual-review gallery driven by the production icon renderer and the complete recognized-extension catalog, with search, change-state switching, adjustable sizing, light/dark surfaces, and a 9–32px legibility strip.
 
 ### Changed
 
+- Changed hot-file icons from one repeated folded-paper outline to brand-colored format marks on family-specific silhouettes, with automatic light/dark mark contrast and a separate compact change-state corner badge.
 - Changed hot-change ranking from three fixed script/doc/media columns to one score-ranked nine-file grid with a three-per-family diversity cap, including deduplicated shared-room merges, while preserving the legacy broad `fileType` field and adding `fileFamily`, `fileFormat`, `formatColor`, and `changeKind` metadata to snapshots, multiplayer normalization, and CLI gist output.
 - Changed server metadata and health reporting to reflect persisted PartyKit shared-room configuration, distinguishing a configured browser-side room from a genuinely unconfigured installation instead of always reporting multiplayer as disabled.
 - Changed fleet discovery to drop projects whose root directory no longer exists, so deleted session worktrees (for example agent scratchpad checkouts) stop appearing as ghost floors stuck in a permanent starting-up state.

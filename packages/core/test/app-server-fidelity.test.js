@@ -36,7 +36,8 @@ const {
 } = require("../dist/adapters/codex-local.js");
 const {
   buildWorkspaceActivitySnapshot,
-  describeHotFile
+  describeHotFile,
+  listHotFileFormats
 } = require("../dist/domain/workspace-activity.js");
 const { filesystemPathForProjectRoot } = require("../dist/project-paths.js");
 const {
@@ -244,6 +245,18 @@ test("hot file metadata distinguishes Unity UI, code, data, project, and unknown
     fileFamily: "other",
     fileFormat: "WIDGET",
     formatColor: "#8a9ba8"
+  });
+});
+
+test("hot file format catalog exposes every recognized extension for visual audits", () => {
+  const catalog = listHotFileFormats();
+  assert.ok(catalog.length > 100);
+  assert.equal(new Set(catalog.map((entry) => entry.extension)).size, catalog.length);
+  assert.deepEqual(catalog.find((entry) => entry.extension === "spriteatlas"), {
+    extension: "spriteatlas",
+    fileFamily: "project",
+    fileFormat: "ATLAS",
+    formatColor: "#53a4ff"
   });
 });
 

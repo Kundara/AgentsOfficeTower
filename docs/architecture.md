@@ -372,6 +372,8 @@ Current mapping:
   generic item fallbacks and the visual audit page resolve from `/assets/pixel-office/sprites/icons/thread-item/*.svg` plus reused exact-method icons where appropriate
 - icon audit route
   `/icon-audit` renders the current official thread-item list and every exact method icon for visual inspection
+- file-format audit route
+  `/file-format-audit` runs the production hot-file SVG renderer against the complete core format catalog, including interactive change-state, scale, surface, and search controls for visual review before office-map changes ship
 - scene effects audit route
   `/scene-effects-audit` serves the normal client bundle against mocked typed approval/input fleet data so workstation request signatures can be visually validated without waiting for a live `Needs You` case
 

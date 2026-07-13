@@ -209,6 +209,17 @@ const HOT_FILE_FORMATS: Record<string, Omit<HotFileDescriptor, "fileType">> = {
   bin: { fileFamily: "binary", fileFormat: "BIN", formatColor: "#6b7280" }
 };
 
+export interface HotFileFormatCatalogEntry extends Omit<HotFileDescriptor, "fileType"> {
+  extension: string;
+}
+
+export function listHotFileFormats(): HotFileFormatCatalogEntry[] {
+  return Object.entries(HOT_FILE_FORMATS).map(([extension, descriptor]) => ({
+    extension,
+    ...descriptor
+  }));
+}
+
 function legacyFileTypeForFamily(fileFamily: HotChangeSummary["fileFamily"]): HotChangeSummary["fileType"] {
   if (["code", "markup", "style", "data", "config", "project"].includes(fileFamily)) {
     return "script";

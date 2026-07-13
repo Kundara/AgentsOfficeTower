@@ -155,6 +155,27 @@ test("layout audit route serves GET and HEAD without consulting the live fleet",
   }
 });
 
+test("file format audit route serves the production icon gallery for GET and HEAD", async (t) => {
+  const testServer = await startTestServer(t);
+  if (!testServer) return;
+
+  try {
+    const getResponse = await rawRequest(testServer.baseUrl, "/file-format-audit");
+    assert.equal(getResponse.status, 200);
+    assert.match(getResponse.body, /File format icons/);
+    assert.match(getResponse.body, /Production-size check/);
+    assert.match(getResponse.body, /background: #0b1b21; border: 1px solid #31515a; color: #eaf8f5/);
+    assert.match(getResponse.body, /spriteatlas/);
+    assert.match(getResponse.body, /function renderHotFileIcon/);
+
+    const headResponse = await rawRequest(testServer.baseUrl, "/file-format-audit", { method: "HEAD" });
+    assert.equal(headResponse.status, 200);
+    assert.equal(headResponse.body, "");
+  } finally {
+    await testServer.close();
+  }
+});
+
 test("project file route only serves images from a current configured project", async (t) => {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "agents-office-router-project-"));
   const projectRoot = join(temporaryRoot, "project");
