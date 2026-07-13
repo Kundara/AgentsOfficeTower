@@ -101,7 +101,7 @@ aot claims start --objective "Refactor drawer" --paths packages/web/src
 aot claims check --paths packages/web/src   # proceed/caution before editing
 ```
 
-`web query` is read-only and loopback-only. `gist` is the light state-sync command for a quick checkup before deeper inspection: it returns top hot file changes plus active agents with their last message and last file change. `scope=local` reads the server's fleet snapshot. `scope=team` reads the coordinated shared-room cache when an open browser page is connected to sharing.
+`web query` is read-only and loopback-only. `gist` is the light state-sync command for a quick checkup before deeper inspection: it returns top hot file changes with format, family, brand color, and change-kind metadata plus active agents with their last message and last file change. `scope=local` reads the server's fleet snapshot. `scope=team` reads the coordinated shared-room cache when an open browser page is connected to sharing.
 
 ## Skills
 

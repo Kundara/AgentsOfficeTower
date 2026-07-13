@@ -221,18 +221,16 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
         const counts = countsForSnapshot(snapshot);
         const activity = activityWallSnapshot(snapshot);
         const hotChanges = activity.hotChanges;
-        const hotGrid = [];
-        const columns = ["script", "doc", "media"];
-
-        columns.forEach((column) => {
-          hotChanges
-            .filter((entry) => (entry && entry.fileType) === column)
-            .slice(0, 3)
-            .forEach((entry, index) => {
+        const hotGrid = hotChanges
+          .filter(Boolean)
+          .slice(0, 9)
+          .map((entry, index) => {
+              const presentation = hotChangePresentation(entry);
               const label = activityWallItemName(entry.label || entry.path, activityWallPath(snapshot, entry.path));
-              hotGrid.push({
+              return {
                 kind: "file",
-                column,
+                column: presentation.family,
+                fileFamily: presentation.family,
                 label,
                 path: entry.path || "",
                 displayPath: activityWallPath(snapshot, entry.path),
@@ -240,14 +238,17 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
                 branches: Array.isArray(entry.branches) ? entry.branches : [],
                 users: Array.isArray(entry.users) ? entry.users : [],
                 updatedAt: entry.lastChangedAt || "",
-                tone: column,
+                tone: presentation.family,
+                fileFormat: presentation.fileFormat,
+                formatColor: presentation.formatColor,
+                changeKind: presentation.changeKind,
+                familyLabel: presentation.label,
                 heat: officeWallDecayedHeat(snapshot, entry),
                 score: Number(entry.score) || 0,
                 generatedAtMs: officeWallGeneratedAtMs(snapshot),
                 colorIndex: index
-              });
+              };
             });
-        });
 
         return {
           title: "Hot",
@@ -289,6 +290,7 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
           hotGrid: data.hotGrid.map((row) => ({
             kind: row.kind,
             column: row.column,
+            fileFamily: row.fileFamily,
             label: row.label,
             path: row.path,
             displayPath: row.displayPath,
@@ -297,6 +299,10 @@ export const CLIENT_RUNTIME_SCENE_SOURCE = `      function buildLeadClusters(occ
             users: row.users,
             updatedAt: row.updatedAt,
             tone: row.tone,
+            fileFormat: row.fileFormat,
+            formatColor: row.formatColor,
+            changeKind: row.changeKind,
+            familyLabel: row.familyLabel,
             score: row.score,
             colorIndex: row.colorIndex
           }))

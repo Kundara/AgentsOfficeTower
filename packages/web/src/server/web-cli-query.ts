@@ -57,6 +57,10 @@ export interface WebCliGistHotChange {
   path: string;
   label: string;
   fileType: HotChangeSummary["fileType"];
+  fileFamily: HotChangeSummary["fileFamily"];
+  fileFormat: string;
+  formatColor: string;
+  changeKind: HotChangeSummary["changeKind"];
   branch: string | null;
   branches: string[];
   users: string[];
@@ -372,6 +376,10 @@ function hotChangeToGist(change: HotChangeSummary): WebCliGistHotChange {
     path: change.path,
     label: change.label,
     fileType: change.fileType,
+    fileFamily: change.fileFamily,
+    fileFormat: change.fileFormat,
+    formatColor: change.formatColor,
+    changeKind: change.changeKind,
     branch: change.branch,
     branches: change.branches,
     users: change.users,

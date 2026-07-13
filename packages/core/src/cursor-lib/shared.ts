@@ -88,7 +88,7 @@ export function sourceKindFromModel(model: string | null | undefined): string {
 
 export async function gitRemoteOriginUrl(projectRoot: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", projectRoot, "config", "--get", "remote.origin.url"]);
+    const { stdout } = await execFileAsync("git", ["-C", projectRoot, "config", "--get", "remote.origin.url"], { windowsHide: true });
     return normalizeRepositoryUrl(stdout);
   } catch {
     return null;

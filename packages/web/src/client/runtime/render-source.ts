@@ -99,21 +99,15 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         const users = Array.isArray(entry.users) && entry.users.length > 0
           ? \` · by \${entry.users.join(", ")}\`
           : "";
-        const fileType = ["script", "doc", "media"].includes(entry.fileType) ? entry.fileType : "script";
-        return \`<div class="office-wall-row office-wall-hot-row is-\${escapeHtml(fileType)}" title="\${escapeHtml(path + branches + agents + users)}" style="--heat: \${heat}%;"><div class="office-wall-row-main"><span class="office-wall-row-label">\${escapeHtml(activityWallShortText(label, 22))}</span></div></div>\`;
+        const presentation = hotChangePresentation(entry);
+        return \`<div class="office-wall-row office-wall-hot-row is-\${escapeHtml(presentation.family)}" title="\${escapeHtml(path + branches + agents + users)}" style="--heat: \${heat}%;"><div class="office-wall-row-main">\${renderHotFileIcon(entry, "office-wall-row-file-icon")}<span class="office-wall-row-label">\${escapeHtml(activityWallShortText(label, 22))}</span></div></div>\`;
       }
 
       function renderActivityWallDashboard(snapshot, wall) {
         const activity = activityWallSnapshot(snapshot);
-        const columns = ["script", "doc", "media"].map((fileType) =>
-          activity.hotChanges
-            .filter((entry) => entry && entry.fileType === fileType)
-            .slice(0, 3)
-        );
-        const hasActivity = columns.some((entries) => entries.length > 0);
-        const hotHtml = columns
-          .map((entries) => \`<div class="office-wall-section">\${entries.map((entry) => renderActivityWallHotChange(snapshot, entry)).join("")}</div>\`)
-          .join("");
+        const entries = activity.hotChanges.filter(Boolean).slice(0, 9);
+        const hasActivity = entries.length > 0;
+        const hotHtml = \`<div class="office-wall-section">\${entries.map((entry) => renderActivityWallHotChange(snapshot, entry)).join("")}</div>\`;
         return \`<div class="office-wall-dashboard\${hasActivity ? " has-activity" : ""}" aria-label="Workspace activity wall"><div class="office-wall-hot-grid">\${hotHtml}</div></div>\`;
       }
 

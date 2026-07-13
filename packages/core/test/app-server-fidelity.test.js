@@ -1,7 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { appServerCwdParam, CodexAppServerClient, parseAppServerMessage } = require("../dist/app-server.js");
+const {
+  appServerCwdParam,
+  CodexAppServerClient,
+  codexObserverAppServerArgs,
+  parseAppServerMessage
+} = require("../dist/app-server.js");
 const {
   buildAppServerDiagnosticNote,
   buildDashboardEventFromAppServerMessage,
@@ -30,8 +35,10 @@ const {
   selectProjectThreadsWithParents
 } = require("../dist/adapters/codex-local.js");
 const {
-  buildWorkspaceActivitySnapshot
+  buildWorkspaceActivitySnapshot,
+  describeHotFile
 } = require("../dist/domain/workspace-activity.js");
+const { filesystemPathForProjectRoot } = require("../dist/project-paths.js");
 const {
   emptyAdapterSnapshot
 } = require("../dist/adapters/helpers.js");
@@ -79,6 +86,16 @@ function deferred() {
   const promise = new Promise((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+test("Tower Codex observers do not boot user MCP or plugin processes", () => {
+  assert.deepEqual(codexObserverAppServerArgs(), [
+    "-c",
+    "mcp_servers={}",
+    "-c",
+    "plugins={}",
+    "app-server"
+  ]);
+});
 
 test("concurrent thread rereads cannot let an older result overwrite a newer result", async () => {
   const monitor = new ProjectLiveMonitor({
@@ -193,6 +210,194 @@ test("app-server cwd filters use Windows paths for Windows-backed WSL project ro
       ? "C:\\Users\\User\\AgentsOfficeTower"
       : "/mnt/c/Users/User/AgentsOfficeTower"
   );
+});
+
+test("filesystem project roots use host-native paths for git and other local tools", () => {
+  assert.equal(
+    filesystemPathForProjectRoot("/mnt/f/Unity/ChickenCoop"),
+    process.platform === "win32" ? "F:\\Unity\\ChickenCoop" : "/mnt/f/Unity/ChickenCoop"
+  );
+});
+
+test("hot file metadata distinguishes Unity UI, code, data, project, and unknown formats", () => {
+  assert.deepEqual(describeHotFile("Assets/UI/RemoteContentManagerWindow.uxml"), {
+    fileType: "script",
+    fileFamily: "markup",
+    fileFormat: "UXML",
+    formatColor: "#53a4ff"
+  });
+  assert.equal(describeHotFile("Assets/UI/RemoteContentManagerWindow.uss").fileFamily, "style");
+  assert.equal(describeHotFile("Assets/Scripts/RemoteContentService.cs").fileFormat, "C#");
+  assert.equal(describeHotFile("Assets/Scenes/Explore.unity").fileFamily, "project");
+  assert.deepEqual(describeHotFile("Assets/Atlas/BAKERYBUILD_INTRO_Atlas.spriteatlas"), {
+    fileType: "script",
+    fileFamily: "project",
+    fileFormat: "ATLAS",
+    formatColor: "#53a4ff"
+  });
+  assert.equal(describeHotFile("Artifacts/state.json").fileFamily, "data");
+  assert.equal(describeHotFile("Artifacts/table.csv").fileType, "doc");
+  assert.equal(describeHotFile("Config/release.yaml").fileType, "doc");
+  assert.equal(describeHotFile("Art/logo.svg").fileType, "media");
+  assert.deepEqual(describeHotFile("Artifacts/custom.widget"), {
+    fileType: "media",
+    fileFamily: "other",
+    fileFormat: "WIDGET",
+    formatColor: "#8a9ba8"
+  });
+});
+
+test("git fallback changes include untracked Unity formats and preserve change kind", () => {
+  const now = Date.now();
+  const activity = buildWorkspaceActivitySnapshot({
+    now,
+    generatedAt: new Date(now).toISOString(),
+    agents: [],
+    events: [],
+    changedPaths: [
+      { path: "Assets/UI/RemoteContentManagerWindow.uxml", action: "created" },
+      { path: "Assets/Scenes/Explore.unity", action: "moved" },
+      { path: "Artifacts/custom.widget", action: "deleted" }
+    ]
+  });
+
+  assert.equal(activity.hotChanges.length, 3);
+  assert.equal(activity.hotChanges[0].fileFormat, "UXML");
+  assert.equal(activity.hotChanges[0].changeKind, "added");
+  assert.equal(activity.hotChanges[1].fileFamily, "project");
+  assert.equal(activity.hotChanges[1].changeKind, "renamed");
+  assert.equal(activity.hotChanges[2].changeKind, "deleted");
+});
+
+test("git fallback changes avoid typed path duplicates and retain family diversity", () => {
+  const now = Date.now();
+  const activity = buildWorkspaceActivitySnapshot({
+    now,
+    generatedAt: new Date(now).toISOString(),
+    agents: [],
+    events: [{
+      id: "typed-doc",
+      source: "codex",
+      confidence: "typed",
+      threadId: "thr_docs",
+      createdAt: new Date(now - 1_000).toISOString(),
+      method: "item/fileChange/patchUpdated",
+      kind: "fileChange",
+      phase: "updated",
+      title: "Patch updated",
+      detail: "/repo/docs/current.md",
+      path: "/repo/docs/current.md",
+      action: "edited",
+      linesAdded: 4,
+      linesRemoved: 0
+    }],
+    changedPaths: [
+      { path: "docs/current.md", action: "edited" },
+      { path: "docs/first.md", action: "edited" },
+      { path: "docs/second.md", action: "created" },
+      { path: "docs/third.md", action: "edited" },
+      { path: "src/fallback.ts", action: "edited" }
+    ]
+  });
+
+  assert.equal(activity.hotChanges.filter((entry) => entry.label === "current.md").length, 1);
+  assert.equal(activity.hotChanges.filter((entry) => entry.fileFamily === "docs").length, 3);
+  assert.ok(activity.hotChanges.some((entry) => entry.path === "src/fallback.ts"));
+});
+
+test("git fallback changes keep distinct nested relative paths", () => {
+  const now = Date.now();
+  const activity = buildWorkspaceActivitySnapshot({
+    now,
+    generatedAt: new Date(now).toISOString(),
+    agents: [],
+    events: [],
+    changedPaths: [
+      { path: "src/index.ts", action: "edited" },
+      { path: "packages/foo/src/index.ts", action: "edited" }
+    ]
+  });
+
+  assert.deepEqual(activity.hotChanges.map((entry) => entry.path), [
+    "src/index.ts",
+    "packages/foo/src/index.ts"
+  ]);
+});
+
+test("snapshot hot changes recover the typed latest agent file when raw events are missing or stale", async () => {
+  const now = Date.now();
+  const changedPath = "/tmp/HotSummary/Assets/UI/RemoteContentManagerWindow.uxml";
+  const agent = {
+    id: "hot-summary-thread",
+    label: "Builder",
+    source: "local",
+    sourceKind: "vscode",
+    parentThreadId: null,
+    depth: 0,
+    isCurrent: true,
+    isOngoing: true,
+    statusText: "active",
+    role: null,
+    nickname: null,
+    isSubagent: false,
+    state: "editing",
+    detail: `Editing ${changedPath}`,
+    cwd: "/tmp/HotSummary",
+    roomId: null,
+    appearance: { id: "fern", label: "Fern", body: "#7fbf5b", accent: "#eef8e6", shadow: "#476d31" },
+    updatedAt: new Date(now - 1000).toISOString(),
+    stoppedAt: null,
+    paths: [changedPath],
+    activityEvent: { type: "fileChange", action: "edited", path: changedPath, title: `Edited ${changedPath}`, isImage: false },
+    latestMessage: null,
+    threadId: "hot-summary-thread",
+    taskId: null,
+    resumeCommand: "codex resume hot-summary-thread",
+    url: null,
+    git: null,
+    provenance: "codex",
+    confidence: "typed",
+    needsUser: null,
+    liveSubscription: "readOnly",
+    network: null
+  };
+  const assemble = (events) => assembleProjectSnapshot({
+    projectRoot: "/tmp/HotSummary",
+    generatedAt: new Date(now).toISOString(),
+    currentnessNow: now,
+    adapterSnapshots: [
+      emptyAdapterSnapshot({
+        adapterId: "codex-local",
+        source: "local",
+        generatedAt: new Date(now).toISOString(),
+        agents: [agent],
+        events
+      })
+    ]
+  });
+
+  const snapshot = await assemble([]);
+  const snapshotWithStaleRawEvent = await assemble([{
+    id: "stale-relative-file",
+    source: "codex",
+    confidence: "typed",
+    threadId: "hot-summary-thread",
+    createdAt: new Date(now - 25 * 60 * 1000).toISOString(),
+    method: "item/fileChange/patchUpdated",
+    kind: "fileChange",
+    phase: "updated",
+    title: "Old patch update",
+    detail: "Assets/UI/RemoteContentManagerWindow.uxml",
+    path: "Assets/UI/RemoteContentManagerWindow.uxml",
+    action: "edited"
+  }]);
+
+  assert.equal(snapshot.activity.hotChanges[0].path, changedPath);
+  assert.equal(snapshot.activity.hotChanges[0].fileFormat, "UXML");
+  assert.deepEqual(snapshot.activity.hotChanges[0].agents, ["Builder"]);
+  assert.equal(snapshotWithStaleRawEvent.activity.hotChanges.length, 1);
+  assert.equal(snapshotWithStaleRawEvent.activity.hotChanges[0].path, changedPath);
+  assert.deepEqual(snapshotWithStaleRawEvent.activity.hotChanges[0].agents, ["Builder"]);
 });
 
 test("workspace activity summarizes decayed hot changes and long-running commands", () => {

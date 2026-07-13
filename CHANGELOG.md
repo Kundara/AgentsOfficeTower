@@ -7,14 +7,21 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ## [Unreleased]
 
+### Added
+
+- Added compact per-format SVG file badges to the in-scene hot-change board and hover cards. Badges use recognizable format colors, family-specific vector marks, and added/modified/deleted/renamed/mixed change indicators across code, markup, styles, data, configuration, docs, images, audio, video, fonts, archives, Unity/project files, binaries, and unknown formats.
+
 ### Changed
 
+- Changed hot-change ranking from three fixed script/doc/media columns to one score-ranked nine-file grid with a three-per-family diversity cap, including deduplicated shared-room merges, while preserving the legacy broad `fileType` field and adding `fileFamily`, `fileFormat`, `formatColor`, and `changeKind` metadata to snapshots, multiplayer normalization, and CLI gist output.
 - Changed server metadata and health reporting to reflect persisted PartyKit shared-room configuration, distinguishing a configured browser-side room from a genuinely unconfigured installation instead of always reporting multiplayer as disabled.
 - Changed fleet discovery to drop projects whose root directory no longer exists, so deleted session worktrees (for example agent scratchpad checkouts) stop appearing as ghost floors stuck in a permanent starting-up state.
 - Changed server shutdown to exit within a five-second grace period when observer connections or SSE clients would otherwise keep the process alive after SIGTERM, so `aot stop` and `aot restart` complete reliably.
 
 ### Fixed
 
+- Fixed managed Tower server, Codex observer, and Git inspection child processes opening visible Windows Terminal windows during background startup and refresh work. Tower's read-only Codex observers now also skip the user's MCP and plugin configuration, preventing observer refreshes from launching unnecessary `cmd`, `npx`, and tool-server grandchildren that can create additional Terminal windows on Windows.
+- Fixed active file edits missing from hot changes when Windows-hosted fleet roots use canonical `/mnt/...` paths, when files are untracked, when raw file-event history drops or is stale but typed activity identifies a fresher edit, or when Unity formats such as `.uxml` and `.uss` were previously unsupported. Absolute, canonical, and relative spellings now deduplicate without conflating distinct nested relative files.
 - Fixed skill manifest activity labels to show `skill-name/SKILL.md` instead of the ambiguous `SKILL.md` basename on the office wall and file-change notifications.
 - Fixed active Codex avatars disappearing when a `notLoaded` confirmation reread times out: Tower now preserves the last authoritative running signal until a successful reread confirms completion, and uses fresh top-level Codex session logs as a typed cold-start fallback when app-server hydration stalls.
 

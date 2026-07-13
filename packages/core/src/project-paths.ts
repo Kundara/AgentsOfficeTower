@@ -92,7 +92,7 @@ function isWindowsBackedWslPath(value: string): boolean {
   return /^\/mnt\/[a-z]\//i.test(value);
 }
 
-function filesystemPathForProjectRoot(root: string): string {
+export function filesystemPathForProjectRoot(root: string): string {
   const match = root.match(/^\/mnt\/([a-zA-Z])\/(.*)$/);
   if (platform !== "win32" || !match) {
     return root;

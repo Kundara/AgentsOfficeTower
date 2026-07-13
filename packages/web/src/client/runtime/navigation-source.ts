@@ -179,6 +179,18 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
 
         function wallDashboardPalette(row) {
           const tone = row && row.tone ? row.tone : row && row.kind ? row.kind : "quiet";
+          if (typeof HOT_FILE_FAMILIES !== "undefined" && HOT_FILE_FAMILIES.has(tone)) {
+            const family = hotFileFamilyMeta(tone);
+            const familyColor = parseSceneColor(family.color, 0x8a9ba8);
+            const formatColor = parseSceneColor(row && row.formatColor, familyColor);
+            return {
+              fill: mixColor(familyColor, 0x071018, 0.68),
+              stroke: familyColor,
+              text: 0xf4fbff,
+              accent: formatColor,
+              label: ""
+            };
+          }
           if (tone === "script") {
             return {
               fill: 0x1d5c8f,
@@ -323,6 +335,15 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
         function wallDashboardHeatPalette(row, fallback) {
           const heat = Number.isFinite(row && row.heat) ? Math.max(0, Math.min(100, Number(row.heat))) : 25;
           const amount = heat / 100;
+          if (row && HOT_FILE_FAMILIES.has(row.column)) {
+            const accent = parseSceneColor(row.formatColor, fallback.accent);
+            return {
+              ...fallback,
+              fill: mixColor(fallback.fill, accent, 0.12 + amount * 0.28),
+              text: 0xf7fbff,
+              accent
+            };
+          }
           const baseFill =
             row && row.column === "doc" ? 0x5f4a16
             : row && row.column === "media" ? 0x184d2f
@@ -421,12 +442,13 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
             const path = wallDashboardTextValue(row.path || row.label || "");
             const label = wallDashboardTextValue(row.label || path);
             const type = wallDashboardTextValue(row.column || row.kind || "file");
+            const format = wallDashboardTextValue(row.fileFormat || "FILE");
             const heat = Number.isFinite(row.heat) ? Math.round(row.heat) : null;
             const heatRatio = heat === null ? 0 : Math.max(0, Math.min(1, heat / 100));
             const branchLabel = wallDashboardBranchLabel(row);
             const titleText = createPixiText(renderer, label, tooltipTextStyle);
             const metaBits = [
-              type,
+              format + " " + type,
               heat === null ? null : \`heat \${heat}%\`,
               formatDashboardTime(row.updatedAt)
             ].filter(Boolean);
@@ -515,7 +537,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
               .rect(cellX, 0, columnWidth, cellHeight)
               .fill({ color: palette.fill, alpha: 0.96 });
             rowContainer.addChild(body);
-            const textInset = 2;
+            const textInset = 10;
             const maskedTextWidth = Math.max(1, columnWidth - textInset * 2);
             const rowText = createPixiText(renderer, wallDashboardTextValue(row.label || ""), {
               fill: palette.text,

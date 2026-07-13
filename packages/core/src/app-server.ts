@@ -214,7 +214,7 @@ export class CodexAppServerClient {
   }
 
   static async create(): Promise<CodexAppServerClient> {
-    const { child } = await spawnCodexProcess(["app-server"]);
+    const { child } = await spawnCodexProcess(codexObserverAppServerArgs());
     const client = new CodexAppServerClient(child);
     try {
       await withTimeout(client.request("initialize", {
@@ -237,7 +237,7 @@ export class CodexAppServerClient {
   }
 
   static async createWithCandidateLabel(): Promise<{ client: CodexAppServerClient; candidateLabel: string }> {
-    const { child, candidate } = await spawnCodexProcess(["app-server"]);
+    const { child, candidate } = await spawnCodexProcess(codexObserverAppServerArgs());
     const client = new CodexAppServerClient(child);
     try {
       await withTimeout(client.request("initialize", {
@@ -499,6 +499,16 @@ export class CodexAppServerClient {
       this.child.kill();
     }
   }
+}
+
+export function codexObserverAppServerArgs(): string[] {
+  return [
+    "-c",
+    "mcp_servers={}",
+    "-c",
+    "plugins={}",
+    "app-server"
+  ];
 }
 
 function textUserInput(text: string): TextUserInput {

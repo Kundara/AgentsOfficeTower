@@ -517,6 +517,7 @@ test("runtime source keeps typed plan, command, file, and tool events out of moc
 
 test("runtime source renders a scene-native office wall dashboard from snapshot activity", () => {
   const renderSource = readRuntimeSource("render-source.ts");
+  const fileFormatsSource = readRuntimeSource("file-formats-source.ts");
   const sceneSource = readSceneRuntime();
   const navigationSource = readNavigationRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
@@ -530,9 +531,14 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(sceneSource.includes("const OFFICE_WALL_HEAT_HALF_LIFE_MS = 3 * 60 * 1000;"));
   assert.ok(sceneSource.includes("function buildOfficeWallDashboardData(snapshot"));
   assert.ok(sceneSource.includes("const activity = activityWallSnapshot(snapshot);"));
-  assert.ok(sceneSource.includes('const columns = ["script", "doc", "media"];'));
+  assert.ok(sceneSource.includes(".slice(0, 9)"));
+  assert.ok(sceneSource.includes("const presentation = hotChangePresentation(entry);"));
+  assert.ok(sceneSource.includes("fileFamily: presentation.family,"));
+  assert.ok(sceneSource.includes("fileFormat: presentation.fileFormat,"));
+  assert.ok(sceneSource.includes("formatColor: presentation.formatColor,"));
+  assert.ok(sceneSource.includes("changeKind: presentation.changeKind,"));
   assert.ok(sceneSource.includes('kind: "file",'));
-  assert.ok(sceneSource.includes("tone: column,"));
+  assert.ok(sceneSource.includes("tone: presentation.family,"));
   assert.ok(sceneSource.includes("displayPath: activityWallPath(snapshot, entry.path),"));
   assert.ok(sceneSource.includes("branch: entry.branch || null,"));
   assert.ok(sceneSource.includes("branches: Array.isArray(entry.branches) ? entry.branches : [],"));
@@ -548,6 +554,11 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes("function addWallDashboardNode(dashboard)"));
   assert.ok(navigationSource.includes("(model.wallDashboards || []).forEach((dashboard) =>"));
   assert.ok(navigationSource.includes("function renderWallDashboardHotHover(row)"));
+  assert.ok(fileFormatsSource.includes("function hotChangePresentation(entry)"));
+  assert.ok(fileFormatsSource.includes("function renderHotFileIcon(entry, className)"));
+  assert.ok(fileFormatsSource.includes('"code", "markup", "style", "data", "config", "docs", "image", "audio", "video"'));
+  assert.ok(fileFormatsSource.includes("hot-file-change-badge is-added"));
+  assert.ok(fileFormatsSource.includes("hot-file-change-badge is-deleted"));
   assert.ok(renderSource.includes('class="agent-hover-worktree"'));
   assert.ok(navigationSource.includes('data-wall-hot-meta'));
   assert.ok(navigationSource.includes("function collectReusableOfficeOverlayNodes(layer, selector, datasetKey)"));
@@ -581,9 +592,9 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes('node.dataset.wallHotGeneratedAt = String(Number(row.generatedAtMs || dashboard.generatedAtMs) || 0);'));
   assert.ok(navigationSource.includes('node.dataset.wallHotUsers = Array.isArray(row.users) ? row.users.join(",") : "";'));
   assert.ok(navigationSource.includes('data-wall-hot-heat-fill'));
-  assert.ok(navigationSource.includes('if (tone === "script") {'));
-  assert.ok(navigationSource.includes('if (tone === "doc") {'));
-  assert.ok(navigationSource.includes('if (tone === "media") {'));
+  assert.ok(navigationSource.includes("HOT_FILE_FAMILIES.has(tone)"));
+  assert.ok(navigationSource.includes("parseSceneColor(row && row.formatColor"));
+  assert.ok(navigationSource.includes("renderHotFileIcon({ ...row"));
   assert.ok(navigationSource.includes("function wallDashboardHeatPalette(row, fallback)"));
   assert.ok(navigationSource.includes("Number.isFinite(row.heat)"));
   assert.ok(navigationSource.includes("dashboardTooltip.zIndex = 21000;"));
@@ -592,7 +603,7 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes("const heatTrack = new PIXI.Graphics()"));
   assert.ok(navigationSource.includes("const heatFill = new PIXI.Graphics()"));
   assert.ok(navigationSource.includes("renderer.root.toLocal(event.global)"));
-  assert.ok(navigationSource.includes("const textInset = 2;"));
+  assert.ok(navigationSource.includes("const textInset = 10;"));
   assert.ok(navigationSource.includes("rowText.x = cellX + textInset;"));
   assert.ok(navigationSource.includes("rowText.width > maskedTextWidth"));
   assert.ok(uiSource.includes("window.setInterval(() => {"));
@@ -606,6 +617,9 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(stylesSource.includes("box-shadow: 2px 2px 0 rgba(0,0,0,0.28);"));
   assert.ok(stylesSource.includes("transform: translate(0, 4px);"));
   assert.ok(stylesSource.includes(".office-wall-hot-heat-track"));
+  assert.ok(stylesSource.includes(".office-wall-hot-cell-icon"));
+  assert.ok(stylesSource.includes(".hot-file-format-sheet"));
+  assert.ok(stylesSource.includes(".office-wall-hot-format"));
   assert.ok(servedStyles.includes(".office-map-wall-hot-hit .office-wall-hot-hover"));
   assert.ok(servedStyles.includes("left: 0;"));
   assert.ok(servedStyles.includes("bottom: calc(100% + 26px);"));
@@ -1048,6 +1062,13 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(!multiplayerSource.includes("MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS"));
   assert.ok(!multiplayerSource.includes("function cooledRemoteProjectSnapshot(entry) {"));
   assert.ok(multiplayerSource.includes("function mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer)"));
+  assert.ok(multiplayerSource.includes("function selectSharedHotChanges(changes)"));
+  assert.ok(multiplayerSource.includes("function sharedHotChangePathsMatch(left, right)"));
+  assert.ok(multiplayerSource.includes("if (leftAbsolute === rightAbsolute)"));
+  assert.ok(multiplayerSource.includes("Array.from(byPath.keys()).find((candidate) => sharedHotChangePathsMatch(candidate, key))"));
+  assert.ok(multiplayerSource.includes("const familyCounts = new Map();"));
+  assert.ok(multiplayerSource.includes("if (selected.length < 12 && familyCount < 3)"));
+  assert.ok(multiplayerSource.includes("changeKind: existingKind === changeKind ? existingKind : \"mixed\""));
   assert.ok(multiplayerSource.includes("function mergeSharedActivity(localSnapshot, remoteSnapshot, peer)"));
   assert.ok(multiplayerSource.includes("const users = uniqueSharedList([...(change && Array.isArray(change.users) ? change.users : []), peer.peerLabel]);"));
   assert.ok(multiplayerSource.includes("hotChanges: []"));

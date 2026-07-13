@@ -79,6 +79,7 @@ export async function runStart(args: string[]): Promise<void> {
   const entry = resolve(__dirname, "index.js");
   const child = spawn(process.execPath, [entry, "web", "--port", port], {
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", logFd, logFd]
   });
   child.unref();

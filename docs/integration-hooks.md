@@ -55,7 +55,7 @@ Primary code path:
 
 Current use:
 
-- resolves a runnable Codex command, then spawns `codex app-server`
+- resolves a runnable Codex command, then spawns `codex app-server` with empty `mcp_servers` and `plugins` overrides; observation only needs the typed thread protocol, so this avoids booting the user's configured tool subprocesses or their console windows without changing interactive Codex sessions
 - initializes a JSON-RPC-like session
 - opts into `experimentalApi`
 - keeps streamed `item/agentMessage/delta` notifications enabled so Codex reply toasts can update immediately from the typed live feed
@@ -517,7 +517,7 @@ Why it matters:
 
 - the browser can react to real event boundaries instead of only snapshot diffs
 - command, file, approval, input, subagent, and turn lifecycle transitions now arrive as typed events
-- file-change transitions can also be summarized as decayed script/doc/media hot changes without scraping terminal transcripts as a primary source; command and tool transitions remain event/history cues rather than hot-stuff board rows
+- file-change transitions can also be summarized as decayed hot changes without scraping terminal transcripts as a primary source. The wire model preserves the broad script/doc/media compatibility type while adding format, detailed family, brand color, and added/modified/deleted/renamed/mixed state; typed latest-file activity and host-native tracked/untracked Git status provide bounded recovery when raw event history is incomplete. Command and tool transitions remain event/history cues rather than hot-stuff board rows
 - the durable "needs you" queue now comes from real request hooks and `serverRequest/resolved`
 
 Verified `tool/requestUserInput` contract:

@@ -212,7 +212,10 @@ export const CLIENT_RUNTIME_NAVIGATION_OVERLAYS_SOURCE = `
       function renderWallDashboardHotHover(row) {
         const label = String(row && row.label || "Hot file");
         const path = String(row && (row.displayPath || row.path) || label);
-        const type = String(row && (row.column || row.kind) || "file");
+        const presentation = hotChangePresentation({
+          ...(row || {}),
+          fileFamily: row && (row.fileFamily || row.column)
+        });
         const branches = Array.isArray(row && row.branches)
           ? row.branches.filter((value) => typeof value === "string" && value.trim().length > 0)
           : (row && row.branch ? [String(row.branch)] : []);
@@ -231,8 +234,8 @@ export const CLIENT_RUNTIME_NAVIGATION_OVERLAYS_SOURCE = `
           ? '<div class="agent-hover-meta office-wall-hot-footer"><span class="office-wall-hot-path-text">' + escapeHtml(path && path !== label ? path : "") + '</span>' + branchHtml + '</div>'
           : "";
         return '<div class="agent-hover office-wall-hot-hover">'
-          + '<div class="agent-hover-title"><strong>' + escapeHtml(label) + '</strong></div>'
-          + '<div class="agent-hover-meta" data-wall-hot-meta>' + escapeHtml(type + " · heat " + heat + "% · " + time + userText) + '</div>'
+          + '<div class="agent-hover-title office-wall-hot-title">' + renderHotFileIcon(presentation, "office-wall-hot-hover-icon") + '<strong>' + escapeHtml(label) + '</strong><span class="office-wall-hot-format" style="--file-format-color:' + escapeHtml(presentation.formatColor) + '">' + escapeHtml(presentation.fileFormat) + '</span></div>'
+          + '<div class="agent-hover-meta" data-wall-hot-meta>' + escapeHtml(presentation.label + " · " + presentation.changeKind + " · heat " + heat + "% · " + time + userText) + '</div>'
           + '<div class="office-wall-hot-heat-track"><span data-wall-hot-heat-fill style="width: ' + heatWidth + '%"></span></div>'
           + footerHtml
           + '</div>';
@@ -273,12 +276,13 @@ export const CLIENT_RUNTIME_NAVIGATION_OVERLAYS_SOURCE = `
           }
           const meta = root.querySelector("[data-wall-hot-meta]");
           if (meta) {
-            const type = node.dataset.wallHotType || "file";
+            const familyLabel = node.dataset.wallHotFamilyLabel || node.dataset.wallHotType || "File";
+            const changeKind = node.dataset.wallHotChangeKind || "modified";
             const updatedAt = node.dataset.wallHotUpdatedAt || "";
             const time = updatedAt ? formatUpdatedAt(updatedAt) : "recent";
             const users = node.dataset.wallHotUsers ? node.dataset.wallHotUsers.split(",").filter(Boolean) : [];
             const userText = users.length > 0 ? " · by " + users.join(", ") : "";
-            meta.textContent = type + " · heat " + heat + "% · " + time + userText;
+            meta.textContent = familyLabel + " · " + changeKind + " · heat " + heat + "% · " + time + userText;
           }
           const fill = root.querySelector("[data-wall-hot-heat-fill]");
           if (fill instanceof HTMLElement) {
@@ -317,6 +321,9 @@ export const CLIENT_RUNTIME_NAVIGATION_OVERLAYS_SOURCE = `
           String(row && row.label || "Hot file"),
           String(row && (row.displayPath || row.path) || ""),
           String(row && (row.column || row.kind) || "file"),
+          String(row && row.fileFormat || ""),
+          String(row && row.formatColor || ""),
+          String(row && row.changeKind || ""),
           Array.isArray(row && row.branches) ? row.branches.join(",") : String(row && row.branch || ""),
           Array.isArray(row && row.users) ? row.users.join(",") : ""
         ]);
@@ -328,6 +335,8 @@ export const CLIENT_RUNTIME_NAVIGATION_OVERLAYS_SOURCE = `
         node.className = "office-map-wall-hot-hit";
         node.dataset.wallHotKey = wallDashboardHotNodeKey(dashboard, row, itemIndex);
         node.dataset.wallHotType = String(row.column || row.kind || "file");
+        node.dataset.wallHotFamilyLabel = String(row.familyLabel || row.column || "File");
+        node.dataset.wallHotChangeKind = String(row.changeKind || "modified");
         node.dataset.wallHotScore = String(Number(row.score) || 0);
         node.dataset.wallHotGeneratedAt = String(Number(row.generatedAtMs || dashboard.generatedAtMs) || 0);
         node.dataset.wallHotHeat = String(wallDashboardHotHeat(row));
@@ -339,9 +348,8 @@ export const CLIENT_RUNTIME_NAVIGATION_OVERLAYS_SOURCE = `
         node.style.height = Math.max(8, Math.round(layout.cellHeight * scale)) + "px";
         const renderKey = wallDashboardHotNodeRenderKey(row);
         setOfficeMapHoverHtml(node, renderWallDashboardHotHover(row), "hot");
+        setOfficeOverlayHtml(node, renderHotFileIcon({ ...row, fileFamily: row.fileFamily || row.column }, "office-wall-hot-cell-icon"));
         if (node.dataset.wallHotRenderKey !== renderKey) {
-          node.innerHTML = "";
-          node.dataset.renderHtml = "";
           node.dataset.wallHotRenderKey = renderKey;
         }
         syncOfficeWallDashboardHeatNode(node);

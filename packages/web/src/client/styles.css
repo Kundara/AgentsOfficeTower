@@ -1177,6 +1177,87 @@
         z-index: 285;
       }
 
+      .hot-file-format-icon {
+        display: inline-block;
+        flex: 0 0 auto;
+        overflow: visible;
+      }
+
+      .hot-file-format-sheet {
+        fill: color-mix(in srgb, var(--file-format-color) 82%, #071018);
+        stroke: var(--file-family-color);
+        stroke-width: 1;
+        stroke-linejoin: round;
+      }
+
+      .hot-file-format-fold {
+        fill: none;
+        stroke: rgba(255,255,255,0.72);
+        stroke-width: 1;
+        stroke-linejoin: round;
+      }
+
+      .hot-file-family-glyph,
+      .hot-file-change-mark {
+        fill: none;
+        stroke: #fff;
+        stroke-width: 1.15;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .hot-file-change-badge {
+        stroke: rgba(3,10,14,0.9);
+        stroke-width: 0.8;
+      }
+
+      .hot-file-change-badge.is-added { fill: #35c77a; }
+      .hot-file-change-badge.is-modified { fill: #f2b84b; }
+      .hot-file-change-badge.is-deleted { fill: #ef665f; }
+      .hot-file-change-badge.is-renamed { fill: #53a4ff; }
+      .hot-file-change-badge.is-mixed { fill: #b982f2; }
+
+      .office-wall-hot-cell-icon {
+        position: absolute;
+        left: 2px;
+        top: 50%;
+        width: clamp(9px, 26%, 15px);
+        height: clamp(9px, 90%, 15px);
+        transform: translateY(-50%);
+        pointer-events: none;
+        filter: drop-shadow(1px 1px 0 rgba(0,0,0,0.45));
+      }
+
+      .office-wall-row-file-icon {
+        width: 14px;
+        height: 14px;
+        margin-right: 4px;
+        vertical-align: middle;
+      }
+
+      .office-wall-hot-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .office-wall-hot-hover-icon {
+        width: 24px;
+        height: 24px;
+      }
+
+      .office-wall-hot-format {
+        margin-left: auto;
+        padding: 2px 6px;
+        border: 1px solid var(--file-format-color);
+        color: #f7fbff;
+        background: color-mix(in srgb, var(--file-format-color) 34%, #071018);
+        font-family: "IBM Plex Mono", "Cascadia Code", monospace;
+        font-size: 0.68em;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
       .office-map-wall-hot-hit:hover,
       .office-map-wall-hot-hit:focus-within {
         z-index: 320;

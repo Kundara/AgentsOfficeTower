@@ -1815,7 +1815,7 @@ function cursorLocalPromptEvent(
 
 async function gitCurrentBranch(projectRoot: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", projectRoot, "rev-parse", "--abbrev-ref", "HEAD"]);
+    const { stdout } = await execFileAsync("git", ["-C", projectRoot, "rev-parse", "--abbrev-ref", "HEAD"], { windowsHide: true });
     const branch = stdout.trim();
     return branch.length > 0 && branch !== "HEAD" ? branch : null;
   } catch {

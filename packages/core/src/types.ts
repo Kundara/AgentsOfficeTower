@@ -363,6 +363,24 @@ export interface HotChangeSummary {
   path: string;
   label: string;
   fileType: "script" | "doc" | "media";
+  fileFamily:
+    | "code"
+    | "markup"
+    | "style"
+    | "data"
+    | "config"
+    | "docs"
+    | "image"
+    | "audio"
+    | "video"
+    | "font"
+    | "archive"
+    | "project"
+    | "binary"
+    | "other";
+  fileFormat: string;
+  formatColor: string;
+  changeKind: "added" | "modified" | "deleted" | "renamed" | "mixed";
   branch: string | null;
   branches: string[];
   users: string[];

@@ -140,6 +140,11 @@ export const MULTIPLAYER_SCRIPT = `
           return null;
         }
         const fileType = ["script", "doc", "media"].includes(change.fileType) ? change.fileType : "script";
+        const legacyFamily = fileType === "doc" ? "docs" : fileType === "media" ? "image" : "code";
+        const allowedFamilies = ["code", "markup", "style", "data", "config", "docs", "image", "audio", "video", "font", "archive", "project", "binary", "other"];
+        const fileFamily = allowedFamilies.includes(change.fileFamily) ? change.fileFamily : legacyFamily;
+        const formatColor = /^#[0-9a-f]{6}$/i.test(String(change.formatColor || "")) ? String(change.formatColor) : "#8a9ba8";
+        const changeKind = ["added", "modified", "deleted", "renamed", "mixed"].includes(change.changeKind) ? change.changeKind : "modified";
         const provenance = ["codex", "claude", "cursor", "openclaw", "hermes", "cloud", "shared"].includes(change.provenance)
           ? change.provenance
           : "shared";
@@ -148,6 +153,10 @@ export const MULTIPLAYER_SCRIPT = `
           score: Number.isFinite(Number(change.score)) ? Number(change.score) : 0,
           heat: Math.max(0, Math.min(100, Number.isFinite(Number(change.heat)) ? Number(change.heat) : 0)),
           fileType,
+          fileFamily,
+          fileFormat: sanitizeSharedText(change.fileFormat, 24) || "FILE",
+          formatColor,
+          changeKind,
           label: sanitizeSharedText(change.label, 512) || path.split(/[\\\\/]/).filter(Boolean).pop() || path,
           lastChangedAt: Number.isFinite(Date.parse(change.lastChangedAt || "")) ? change.lastChangedAt : null,
           provenance,
@@ -849,6 +858,83 @@ export const MULTIPLAYER_SCRIPT = `
         };
       }
 
+      function sharedHotChangeFamily(change) {
+        const allowedFamilies = ["code", "markup", "style", "data", "config", "docs", "image", "audio", "video", "font", "archive", "project", "binary", "other"];
+        if (allowedFamilies.includes(change && change.fileFamily)) {
+          return change.fileFamily;
+        }
+        return change && change.fileType === "doc" ? "docs"
+          : change && change.fileType === "media" ? "image"
+          : "code";
+      }
+
+      function sharedHotChangePathKey(change) {
+        const normalized = String(change && change.path || "")
+          .replace(/\\\\/g, "/")
+          .replace(/\\/+/g, "/")
+          .replace(/^\\.\\//, "")
+          .toLowerCase();
+        const windowsDrive = normalized.match(/^([a-z]):\\/(.*)$/);
+        return windowsDrive ? "/mnt/" + windowsDrive[1] + "/" + windowsDrive[2] : normalized;
+      }
+
+      function sharedHotChangePathsMatch(left, right) {
+        if (left === right) {
+          return true;
+        }
+        const leftAbsolute = left.startsWith("/");
+        const rightAbsolute = right.startsWith("/");
+        if (leftAbsolute === rightAbsolute) {
+          return false;
+        }
+        const absolutePath = leftAbsolute ? left : right;
+        const relativePath = leftAbsolute ? right : left;
+        return absolutePath.endsWith("/" + relativePath);
+      }
+
+      function selectSharedHotChanges(changes) {
+        const byPath = new Map();
+        for (const change of Array.isArray(changes) ? changes : []) {
+          const key = sharedHotChangePathKey(change);
+          if (!key) {
+            continue;
+          }
+          const matchingKey = Array.from(byPath.keys()).find((candidate) => sharedHotChangePathsMatch(candidate, key));
+          const existing = matchingKey ? byPath.get(matchingKey) : null;
+          if (!existing) {
+            byPath.set(key, change);
+            continue;
+          }
+          const existingScore = Number(existing && existing.score || 0);
+          const changeScore = Number(change && change.score || 0);
+          const preferred = changeScore > existingScore ? change : existing;
+          const existingKind = existing && existing.changeKind || "modified";
+          const changeKind = change && change.changeKind || "modified";
+          byPath.set(matchingKey, {
+            ...preferred,
+            branches: uniqueSharedList([...(existing.branches || []), ...(change.branches || [])]),
+            users: uniqueSharedList([...(existing.users || []), ...(change.users || [])]),
+            agents: uniqueSharedList([...(existing.agents || []), ...(change.agents || [])]),
+            heat: Math.max(Number(existing.heat || 0), Number(change.heat || 0)),
+            score: Math.max(existingScore, changeScore),
+            changeKind: existingKind === changeKind ? existingKind : "mixed"
+          });
+        }
+
+        const familyCounts = new Map();
+        return Array.from(byPath.values())
+          .sort((left, right) => Number(right && right.score || 0) - Number(left && left.score || 0))
+          .reduce((selected, change) => {
+            const family = sharedHotChangeFamily(change);
+            const familyCount = familyCounts.get(family) || 0;
+            if (selected.length < 12 && familyCount < 3) {
+              selected.push(change);
+              familyCounts.set(family, familyCount + 1);
+            }
+            return selected;
+          }, []);
+      }
+
       function mergeSharedActivity(localSnapshot, remoteSnapshot, peer) {
         const remoteHotChanges = remoteSnapshot && remoteSnapshot.activity && Array.isArray(remoteSnapshot.activity.hotChanges)
           ? remoteSnapshot.activity.hotChanges
@@ -865,10 +951,9 @@ export const MULTIPLAYER_SCRIPT = `
           };
         }
         const currentHotChanges = Array.isArray(localSnapshot.activity.hotChanges) ? localSnapshot.activity.hotChanges : [];
-        localSnapshot.activity.hotChanges = currentHotChanges
-          .concat(remoteHotChanges.map((change) => mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer)))
-          .sort((left, right) => Number(right && right.score || 0) - Number(left && left.score || 0))
-          .slice(0, 12);
+        localSnapshot.activity.hotChanges = selectSharedHotChanges(
+          currentHotChanges.concat(remoteHotChanges.map((change) => mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer)))
+        );
       }
 
       function sharedAgentIdentityKeys(agent) {

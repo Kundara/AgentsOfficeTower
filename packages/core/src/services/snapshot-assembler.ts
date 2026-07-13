@@ -10,7 +10,7 @@ import { buildWorkspaceActivitySnapshot } from "../domain/workspace-activity";
 import { summarizeActivityByAgent } from "../snapshot-lib/activity-summary";
 import type { AdapterSnapshot } from "../adapters";
 import type { CloudTask, DashboardAgent, DashboardEvent, DashboardSnapshot, ProviderHealth } from "../types";
-import { projectLabelFromRoot } from "../project-paths";
+import { canonicalizeProjectPath, filesystemPathForProjectRoot, projectLabelFromRoot } from "../project-paths";
 
 const execFileAsync = promisify(execFile);
 
@@ -53,36 +53,129 @@ function aggregateProviderHealth(snapshots: AdapterSnapshot[]): ProviderHealth[]
   }));
 }
 
-function parseGitStatusPath(line: string): string | null {
+function parseGitStatusChange(line: string): { path: string; action: DashboardEvent["action"] } | null {
+  const status = line.slice(0, 2);
   const rawPath = line.slice(3).trim();
   if (!rawPath) {
     return null;
   }
   const renamedPath = rawPath.includes(" -> ") ? rawPath.split(" -> ").pop() : rawPath;
-  return renamedPath?.replace(/^"|"$/g, "") || null;
+  const path = renamedPath?.replace(/^"|"$/g, "") || null;
+  if (!path) {
+    return null;
+  }
+  const action: DashboardEvent["action"] =
+    status.includes("R") ? "moved"
+    : status.includes("D") ? "deleted"
+    : status.includes("A") || status === "??" ? "created"
+    : "edited";
+  return { path, action };
 }
 
-async function changedProjectPaths(projectRoot: string): Promise<string[]> {
+async function changedProjectPaths(projectRoot: string): Promise<Array<{ path: string; action: DashboardEvent["action"] }>> {
   try {
     const { stdout } = await execFileAsync(
       "git",
-      ["-C", projectRoot, "status", "--porcelain=v1", "--untracked-files=no"],
-      { timeout: 750, maxBuffer: 256 * 1024 }
+      ["-C", filesystemPathForProjectRoot(projectRoot), "status", "--porcelain=v1", "--untracked-files=all"],
+      { timeout: 750, maxBuffer: 256 * 1024, windowsHide: true }
     );
     return stdout
       .split(/\r?\n/)
-      .map((line) => parseGitStatusPath(line))
-      .filter((path): path is string => Boolean(path))
-      .slice(0, 12);
+      .map((line) => parseGitStatusChange(line))
+      .filter((change): change is { path: string; action: DashboardEvent["action"] } => Boolean(change))
+      .slice(0, 48);
   } catch {
     return [];
   }
 }
 
+function addAgentHotFileEvents(
+  events: DashboardEvent[],
+  agents: DashboardAgent[],
+  projectRoot: string
+): DashboardEvent[] {
+  const result = [...events];
+  const existing = events
+    .filter((event): event is DashboardEvent & { path: string } => event.kind === "fileChange" && Boolean(event.path))
+    .map((event) => ({ threadId: event.threadId, path: event.path, createdAtMs: Date.parse(event.createdAt) }));
+  const freshestExistingAt = (threadId: string, path: string): number => existing.reduce((freshest, entry) =>
+    entry.threadId === threadId
+      && pathsReferToSameFile(entry.path, path, projectRoot)
+      && Number.isFinite(entry.createdAtMs)
+      ? Math.max(freshest, entry.createdAtMs)
+      : freshest
+  , Number.NEGATIVE_INFINITY);
+  const remember = (threadId: string, path: string, createdAtMs: number): void => {
+    existing.push({ threadId, path, createdAtMs });
+  };
+
+  for (const agent of agents) {
+    if (!agent.threadId) {
+      continue;
+    }
+    for (const hotFile of agent.activitySummary?.hotFiles ?? []) {
+      const hotFileUpdatedAtMs = Date.parse(hotFile.lastUpdatedAt);
+      if (!hotFile.path || !Number.isFinite(hotFileUpdatedAtMs)) {
+        continue;
+      }
+      if (freshestExistingAt(agent.threadId, hotFile.path) >= hotFileUpdatedAtMs) {
+        continue;
+      }
+      remember(agent.threadId, hotFile.path, hotFileUpdatedAtMs);
+      result.push({
+        id: `agent-hot-file::${agent.threadId}::${normalizePathForMatch(hotFile.path)}`,
+        source: agent.provenance,
+        confidence: agent.confidence,
+        threadId: agent.threadId,
+        createdAt: hotFile.lastUpdatedAt,
+        method: "agent/activitySummary/hotFile",
+        kind: "fileChange",
+        phase: "updated",
+        title: hotFile.label,
+        detail: hotFile.path,
+        path: hotFile.path,
+        action: hotFile.action,
+        linesAdded: hotFile.linesAdded,
+        linesRemoved: hotFile.linesRemoved,
+        isImage: false
+      });
+    }
+    const latest = agent.activityEvent;
+    const agentUpdatedAtMs = Date.parse(agent.updatedAt);
+    if (latest?.type === "fileChange" && latest.path && Number.isFinite(agentUpdatedAtMs)) {
+      if (freshestExistingAt(agent.threadId, latest.path) < agentUpdatedAtMs) {
+        remember(agent.threadId, latest.path, agentUpdatedAtMs);
+        result.push({
+          id: `agent-latest-file::${agent.threadId}::${normalizePathForMatch(latest.path)}`,
+          source: agent.provenance,
+          confidence: agent.confidence,
+          threadId: agent.threadId,
+          createdAt: agent.updatedAt,
+          method: "agent/activityEvent/fileChange",
+          kind: "fileChange",
+          phase: "updated",
+          title: latest.title,
+          detail: latest.path,
+          path: latest.path,
+          action: latest.action,
+          linesAdded: latest.linesAdded,
+          linesRemoved: latest.linesRemoved,
+          isImage: latest.isImage
+        });
+      }
+    }
+  }
+  return result;
+}
+
 const HOT_CHANGE_AGENT_DIAGNOSTIC_WINDOW_MS = 3 * 60 * 1000;
 
 function normalizePathForMatch(value: string | null | undefined): string {
-  return typeof value === "string" ? value.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/g, "") : "";
+  if (typeof value !== "string") {
+    return "";
+  }
+  const canonical = canonicalizeProjectPath(value) ?? value;
+  return canonical.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/g, "");
 }
 
 function pathRelativeToProject(path: string, projectRoot: string): string {
@@ -110,9 +203,7 @@ function pathsReferToSameFile(left: string, right: string, projectRoot: string):
   }
   const leftLower = leftRelative.toLowerCase();
   const rightLower = rightRelative.toLowerCase();
-  return leftLower === rightLower
-    || leftLower.endsWith(`/${rightLower}`)
-    || rightLower.endsWith(`/${leftLower}`);
+  return leftLower === rightLower;
 }
 
 function freshUnseatedHotChangeAgentDiagnostics(snapshot: DashboardSnapshot, now: number): string[] {
@@ -185,7 +276,11 @@ export async function assembleProjectSnapshot(input: {
   );
   const agentsWithActivitySummary = summarizeActivityByAgent(agents, events, now);
   const cloudTasks = aggregateCloudTasks(input.adapterSnapshots);
-  const rawEvents = input.adapterSnapshots.flatMap((snapshot) => snapshot.events);
+  const rawEvents = addAgentHotFileEvents(
+    input.adapterSnapshots.flatMap((snapshot) => snapshot.events),
+    agentsWithActivitySummary,
+    projectRoot
+  );
   const changedPaths = await changedProjectPaths(projectRoot);
   const activity = buildWorkspaceActivitySnapshot({
     events: rawEvents,

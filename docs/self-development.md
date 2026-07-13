@@ -108,9 +108,9 @@ A good iteration improves at least one of these:
 - verify desk pods start on tile columns and their workstation seat cells remain aligned to the same grid contract as rec-strip furniture
 - verify global text scale changes hover/toast/map text without changing room geometry or desk assignment
 - verify approval, input-wait, file-change, command-run, and turn lifecycle states have clear visible notification paths
-- verify the Ops Wall shows decayed hottest script/doc/media file changes from real typed events, cools quiet changes naturally, and excludes tool/command activity from the hot-stuff board
+- verify the Ops Wall shows the decayed hottest file changes from real typed events, uses format-colored family SVGs and change-kind badges, preserves family diversity, cools quiet changes naturally, and excludes tool/command activity from the hot-stuff board
 - verify the primary room wall dashboard stays subtle, title-free, and animates file leaderboard row changes without becoming a detached admin panel
-- verify `web query <repo> gist` returns the same hot-change signal plus active-agent last message and last file change as a light state sync before deeper `recent` / `last` reads
+- verify `web query <repo> gist` returns the same hot-change family, format, color, and change-kind signal plus active-agent last message and last file change as a light state sync before deeper `recent` / `last` reads
 - verify recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events raise distinct short above-head badges in the map scene
 - verify recent typed plan, command, file/diff, and tool-call events stay on toast/event, hover, and session-history surfaces without raising mock-style `PLAN`, `RUN`, `EDIT`, or `TOOL` labels in the map scene
 - verify patch-update, MCP-progress, terminal-interaction, and hook-run notifications land in the same event/history paths as their corresponding file, tool, command, and hook activity

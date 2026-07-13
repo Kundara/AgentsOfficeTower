@@ -31,7 +31,7 @@ It should show:
 - direct local session reply controls in session cards when the source is an app-server-owned typed Codex thread
 - observed desktop, VS Code, and CLI Codex threads must stay view-only for generic browser chat, and the scene thread panel must not expose Send, resume, launch, or copy controls
 - local Codex reply controls must steer active in-flight turns and must not call `turn/start` for an active thread just because the observer row has not loaded its turn list yet
-- a subtle in-scene Ops Wall between the primary room's left edge and door, showing decayed hot script, doc, and media file changes
+- a subtle in-scene Ops Wall between the primary room's left edge and door, showing decayed hot file changes with compact family/format icons and change-state badges
 - subtle in-scene motion and placement cues rather than a detached dashboard
 - transient above-head turn badges for recent typed `turn/started`, `turn/completed`, `turn/interrupted`, and `turn/failed` events
 
@@ -80,7 +80,7 @@ All renderers should consume the same normalized snapshot model.
 - `providerHealth` carries one row per adapter (`ready`, `unconfigured`, `degraded`, or `error` with detail and freshness); `unconfigured` means intentionally absent and must not degrade fleet health. `claims` carries advisory coordination claims with their derived lifecycle (`active`, `stale`, `released`, `handoff`).
 - A `DashboardAgent` represents one visible session or agent and carries identity, currentness, room placement, state, detail text, latest useful message, resume/open affordances, provenance/confidence, and optional `needsUser`, `hatId`, or shared-room `network` metadata.
 - A `DashboardEvent` is the normalized event log used for browser notifications and event-native state surfaces such as approvals, input waits, command/file activity, delegated-agent or subagent events, and typed messages.
-- `activity` is a derived workspace-level summary for the scene Ops Wall. It contains decayed `hotChanges` from typed file-change events, grouped as script, doc, or media changes for display; tool and command activity should stay out of the hot-stuff board data path.
+- `activity` is a derived workspace-level summary for the scene Ops Wall. It contains decayed `hotChanges` from typed file-change events, each retaining the legacy script/doc/media type while adding a detailed family, format label, format color, and change kind; tool and command activity should stay out of the hot-stuff board data path.
 - `needsUser` is the durable per-agent approval/input state used by the browser `Needs You` queue and raised-hand desk marker.
 - `network` marks a remote shared-room agent and should preserve peer label and peer host metadata distinctly from local sessions.
 
@@ -165,7 +165,8 @@ Workspace Ops Wall handling:
 - The primary room should reserve the wall span between the left edge and the door for a compact scene-native activity board when there is enough space.
 - The wall should show the hottest recent file/workspace changes with time decay, so repeated edits raise heat and quiet files cool naturally until they disappear.
 - Hotness should come from typed file-change events and line deltas where available; generated/transient display should stay item-name-first with longer paths in hover/details surfaces.
-- The scene wall should stay minimal: a title-free 3x3 file grid with script, doc, and media columns, using compact text treatment rather than separate progress or heat bars.
+- The scene wall should stay minimal: a title-free 3x3 file grid ranked across detailed file families, capped at three entries per family, with compact format-colored SVG marks and added/modified/deleted/renamed/mixed badges rather than separate progress or heat bars.
+- Snapshot recovery may add at most three diverse tracked or untracked Git fallback files when typed history is incomplete. It must deduplicate absolute, canonical, and relative spellings of the same file; shared-room merges must deduplicate paths and reapply the same family cap.
 - Leaderboard row changes should animate in-place so rank changes are visible without turning the wall into a separate dashboard.
 - Empty activity sections should stay visually clean instead of printing placeholder text such as "no changes".
 - The wall is a transparency cue, not a detached dashboard. It should stay compact, readable at scene scale, and subordinate to agent placement, hover cards, the session panel, and the durable `Needs You` queue.
@@ -383,7 +384,7 @@ Worktree identity rules:
 - Screenshot mode should disable shared-room sync.
 - `/api/multiplayer` should expose the current server multiplayer transport status even when the transport is currently disabled.
 - The CLI should be able to read the running local web server's shared model with `web query <repo> <gist|recent|last>`, scoped to `local` or `team`, without gaining any write, reply, file-read, or arbitrary-command capability.
-- `web query <repo> gist` is the dedicated light checkup path before deeper inspection. It should return a short state sync containing top hot file changes from `activity.hotChanges` plus active agents with state, last message, and last file change.
+- `web query <repo> gist` is the dedicated light checkup path before deeper inspection. It should return a short state sync containing top hot file changes from `activity.hotChanges`, including family, format, color, and change kind, plus active agents with state, last message, and last file change.
 - `recent` and `last` are deeper bounded projections for agents/events when the gist suggests overlap, blockers, or missing detail.
 - `scope=team` should use only the coordinated multiplayer fleet already rendered by an open browser client; if no shared-room cache exists, it should report local data rather than attempting to connect directly to the shared-room transport.
 - Web CLI APIs should be loopback-only, bounded, projected to recent agent/event data, and should not expose raw shared-room credentials or mutable browser action surfaces.

@@ -228,6 +228,7 @@ async function spawnCandidate(
 ): Promise<ChildProcessWithoutNullStreams> {
   return await new Promise<ChildProcessWithoutNullStreams>((resolve, reject) => {
     const child = spawn(candidate.command, [...(candidate.argsPrefix ?? []), ...args], {
+      windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
     });
 

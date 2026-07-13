@@ -28,7 +28,7 @@ function repoNameFromUrl(repoUrl: string | null): string | null {
 
 async function gitOutput(projectRoot: string, args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", projectRoot, ...args]);
+    const { stdout } = await execFileAsync("git", ["-C", projectRoot, ...args], { windowsHide: true });
     const trimmed = stdout.trim();
     return trimmed.length > 0 ? trimmed : null;
   } catch {
