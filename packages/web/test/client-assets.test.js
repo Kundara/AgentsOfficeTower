@@ -8,6 +8,7 @@ const { renderSceneEffectsAuditHtml } = require("../dist/render/render-scene-eff
 const { renderLayoutAuditHtml } = require("../dist/render/render-layout-audit-html.js");
 const { renderWideOfficeAuditHtml } = require("../dist/render/render-wide-office-audit-html.js");
 const { renderZOrderAuditHtml } = require("../dist/render-z-order-audit-html.js");
+const { listHotFileFormats } = require("@agents-tower/core");
 
 function readClientSource(...segments) {
   const source = readFileSync(join(__dirname, "../src/client", ...segments), "utf8");
@@ -563,6 +564,8 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes("function renderWallDashboardHotHover(row)"));
   assert.ok(fileFormatsSource.includes("function hotChangePresentation(entry)"));
   assert.ok(fileFormatsSource.includes("function renderHotFileIcon(entry, className)"));
+  assert.ok(fileFormatsSource.includes("function hotFileIconKind(formatKey, family)"));
+  assert.ok(fileFormatsSource.includes("function hotFileIconBodySvg(presentation)"));
   assert.ok(fileFormatsSource.includes("function hotFileInkForColor(color)"));
   assert.ok(fileFormatsSource.includes("HOT_FILE_FORMAT_MARKS"));
   assert.ok(fileFormatsSource.includes('"code", "markup", "style", "data", "config", "docs", "image", "audio", "video"'));
@@ -627,7 +630,9 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(stylesSource.includes("transform: translate(0, 4px);"));
   assert.ok(stylesSource.includes(".office-wall-hot-heat-track"));
   assert.ok(stylesSource.includes(".office-wall-hot-cell-icon"));
-  assert.ok(stylesSource.includes(".hot-file-format-surface"));
+  assert.ok(stylesSource.includes(".hot-file-icon-photo-land"));
+  assert.ok(stylesSource.includes(".hot-file-icon-vector-node"));
+  assert.ok(stylesSource.includes(".hot-file-icon-paper"));
   assert.ok(stylesSource.includes(".hot-file-format-mark"));
   assert.ok(stylesSource.includes(".hot-file-change-badge.is-modified + .hot-file-change-mark"));
   assert.ok(stylesSource.includes(".office-wall-hot-format"));
@@ -647,6 +652,111 @@ test("file format icons choose readable ink for light and dark brand colors", ()
 
   assert.equal(hotFileInkForColor("#53a4ff"), "#071018");
   assert.equal(hotFileInkForColor("#512bd4"), "#ffffff");
+});
+
+test("file format icon text meets contrast and Markdown uses white on dark blue", () => {
+  const fileFormatsSource = readTemplateExportValue("runtime", "file-formats-source.ts");
+  const iconStyles = readClientSource("file-format-icons.css");
+  const renderer = Function(
+    `${fileFormatsSource}\nreturn { hotChangePresentation, hotFileContrastRatio };`
+  )();
+
+  const markdown = renderer.hotChangePresentation({
+    path: "README.md",
+    fileFamily: "docs",
+    fileFormat: "MD",
+    formatColor: "#519aba"
+  });
+  assert.equal(markdown.formatLabelColor, "#2f6f9f");
+  assert.equal(markdown.formatLabelInk, "#ffffff");
+  assert.ok(renderer.hotFileContrastRatio(markdown.formatLabelColor, markdown.formatLabelInk) >= 4.5);
+
+  listHotFileFormats().forEach((item) => {
+    const presentation = renderer.hotChangePresentation({
+      path: `review/sample.${item.extension}`,
+      fileExtension: item.extension,
+      fileFamily: item.fileFamily,
+      fileFormat: item.fileFormat,
+      formatColor: item.formatColor
+    });
+    if (!presentation.formatMark) return;
+    const ratio = renderer.hotFileContrastRatio(presentation.formatLabelColor, presentation.formatLabelInk);
+    assert.ok(ratio >= 4.5, `.${item.extension} text contrast should be at least 4.5:1, received ${ratio.toFixed(2)}:1`);
+  });
+
+  assert.ok(iconStyles.includes('.hot-file-icon-jsonl { fill:#24333c;'));
+  assert.ok(iconStyles.includes('.hot-file-icon-font-big,.hot-file-icon-font-small { fill:#24333c;'));
+  assert.ok(renderer.hotFileContrastRatio("#eef3f5", "#24333c") >= 4.5);
+});
+
+test("file format icons use semantic pictograms and reserve labels for document subtypes", () => {
+  const fileFormatsSource = readTemplateExportValue("runtime", "file-formats-source.ts");
+  const renderer = Function(
+    "escapeHtml",
+    `${fileFormatsSource}\nreturn { hotChangePresentation, renderHotFileIcon };`
+  )((value) => String(value));
+
+  const javascript = renderer.renderHotFileIcon({ path: "src/app.js", fileFamily: "code", fileFormat: "JS", formatColor: "#f7df1e" });
+  const raster = renderer.renderHotFileIcon({ path: "art/photo.png", fileFamily: "image", fileFormat: "PNG", formatColor: "#4caf50" });
+  const vector = renderer.renderHotFileIcon({ path: "art/logo.svg", fileFamily: "image", fileFormat: "SVG", formatColor: "#ffb13b" });
+  const atlas = renderer.renderHotFileIcon({ path: "art/ui.spriteatlas", fileFamily: "project", fileFormat: "ATLAS", formatColor: "#53a4ff" });
+  const semanticOnly = [
+    ["audio/theme.mp3", "audio", "MP3", "#1db954", "audio"],
+    ["video/intro.mp4", "video", "MP4", "#e91e63", "video"],
+    ["data/game.db", "data", "DB", "#003b57", "database"],
+    ["data/table.xlsx", "data", "XLSX", "#217346", "table"],
+    ["config/release.yaml", "config", "YAML", "#cb171e", "config"],
+    ["fonts/ui.woff2", "font", "WOFF2", "#f4a261", "font"],
+    ["build/release.zip", "archive", "ZIP", "#f4c430", "archive"],
+    ["bin/plugin.dll", "binary", "DLL", "#6b7280", "library"],
+    ["bin/app.exe", "binary", "EXE", "#2f7ed8", "executable"],
+    ["bin/blob.bin", "binary", "BIN", "#6b7280", "binary"]
+  ];
+
+  assert.match(javascript, /data-icon-kind="document"/);
+  assert.match(javascript, />JS<\/text>/);
+  assert.match(renderer.renderHotFileIcon({ path: "src/native.cpp", fileFamily: "code", fileFormat: "C++", formatColor: "#00599c" }), />C\+\+<\/text>/);
+  assert.match(raster, /data-icon-kind="image"/);
+  assert.match(raster, /hot-file-icon-photo-land/);
+  assert.doesNotMatch(raster, /hot-file-format-mark/);
+  assert.match(vector, /data-icon-kind="vector"/);
+  assert.match(vector, /hot-file-icon-vector-node/);
+  assert.doesNotMatch(vector, /hot-file-format-mark/);
+  assert.match(atlas, /data-icon-kind="atlas"/);
+  assert.match(atlas, /hot-file-icon-atlas-grid/);
+  assert.doesNotMatch(atlas, /hot-file-format-mark/);
+  semanticOnly.forEach(([path, fileFamily, fileFormat, formatColor, iconKind]) => {
+    const icon = renderer.renderHotFileIcon({ path, fileFamily, fileFormat, formatColor });
+    assert.match(icon, new RegExp(`data-icon-kind="${iconKind}"`));
+    assert.doesNotMatch(icon, /hot-file-format-mark/);
+  });
+
+  const semanticCases = [
+    ["scripts/build.ps1", "code", "PS1", "terminal"],
+    ["data/config.json", "data", "JSON", "json"],
+    ["data/events.jsonl", "data", "JSONL", "json"],
+    ["data/schema.graphql", "data", "GRAPHQL", "graph-data"],
+    ["shaders/water.shadergraph", "project", "SHADERGRAPH", "shader"],
+    ["scenes/Main.unity", "project", "SCENE", "scene"],
+    ["prefabs/Player.prefab", "project", "PREFAB", "prefab"],
+    ["materials/Grass.mat", "project", "MATERIAL", "material"],
+    ["terrain/World.terrainlayer", "project", "TERRAIN", "terrain"],
+    ["settings/Day.lighting", "project", "LIGHTING", "lighting"],
+    ["settings/Input.inputactions", "project", "INPUT", "input"],
+    ["ui/Editor.guiskin", "project", "GUI", "ui"],
+    ["Assets.meta", "project", "META", "metadata"],
+    ["Game.sln", "project", "SOLUTION", "solution"]
+  ];
+  semanticCases.forEach(([path, fileFamily, fileFormat, iconKind]) => {
+    const icon = renderer.renderHotFileIcon({ path, fileFamily, fileFormat, formatColor: "#53a4ff" });
+    assert.match(icon, new RegExp(`data-icon-kind="${iconKind}"`));
+  });
+
+  const shaderSource = renderer.renderHotFileIcon({ path: "shaders/water.shader", fileFamily: "project", fileFormat: "SHADER", formatColor: "#53a4ff" });
+  assert.match(shaderSource, /data-icon-kind="document"/);
+  assert.match(shaderSource, />SHD<\/text>/);
+  assert.match(renderer.renderHotFileIcon({ path: "data/events.jsonl", fileFamily: "data", fileFormat: "JSONL", formatColor: "#e0b84d" }), /hot-file-icon-jsonl/);
+  assert.doesNotMatch(renderer.renderHotFileIcon({ path: "data/config.json", fileFamily: "data", fileFormat: "JSON", formatColor: "#e0b84d" }), /hot-file-format-mark/);
 });
 
 test("runtime source rerenders dragged furniture immediately without per-move storage writes", () => {

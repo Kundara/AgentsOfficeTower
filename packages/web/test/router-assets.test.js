@@ -167,6 +167,9 @@ test("file format audit route serves the production icon gallery for GET and HEA
     assert.match(getResponse.body, /background: #0b1b21; border: 1px solid #31515a; color: #eaf8f5/);
     assert.match(getResponse.body, /spriteatlas/);
     assert.match(getResponse.body, /function renderHotFileIcon/);
+    assert.match(getResponse.body, /new URLSearchParams\(window\.location\.search\)\.get\("q"\)/);
+    assert.match(getResponse.body, /id="icon-size" type="range" min="9"/);
+    assert.match(getResponse.body, /format-card-size-strip/);
 
     const headResponse = await rawRequest(testServer.baseUrl, "/file-format-audit", { method: "HEAD" });
     assert.equal(headResponse.status, 200);

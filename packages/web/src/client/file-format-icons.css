@@ -1,109 +1,102 @@
-      .hot-file-format-icon {
-        display: inline-block;
-        flex: 0 0 auto;
-        overflow: visible;
-      }
+      .hot-file-format-icon { display:inline-block; flex:0 0 auto; overflow:visible; }
+      .hot-file-icon-paper-shadow,.hot-file-icon-frame-shadow { fill:rgba(0,0,0,.4); stroke:rgba(0,0,0,.55); stroke-width:.65; }
+      .hot-file-icon-paper { fill:#eef3f5; stroke:color-mix(in srgb,var(--file-format-color) 72%,#24333c); stroke-width:.8; stroke-linejoin:round; }
+      .hot-file-icon-fold { fill:#d6e0e4; stroke:color-mix(in srgb,var(--file-format-color) 64%,#24333c); stroke-width:.7; stroke-linejoin:round; }
+      .hot-file-icon-label { fill:var(--file-format-label-color); stroke:color-mix(in srgb,var(--file-format-label-color) 55%,#071018); stroke-width:.45; }
+      .hot-file-format-mark { fill:var(--file-format-label-ink); font-family:"Arial Narrow","IBM Plex Sans Condensed","Segoe UI",sans-serif; font-size:3.85px; font-weight:900; letter-spacing:-.18px; }
+      .hot-file-format-mark.is-length-1 { font-size:5.2px; }
+      .hot-file-format-mark.is-length-2 { font-size:4.65px; }
+      .hot-file-format-mark.is-length-3 { font-size:4.05px; }
+      .hot-file-format-mark.is-length-4 { font-size:3.35px; }
+      .hot-file-icon-paper-lines,.hot-file-icon-semantic-stroke,.hot-file-icon-table-grid { fill:none; stroke:#667983; stroke-width:.75; stroke-linecap:round; stroke-linejoin:round; }
+      .hot-file-icon-data-brace { fill:none; stroke:var(--file-format-color); stroke-width:.85; stroke-linecap:round; }
+      .hot-file-icon-accent { fill:var(--file-format-color); stroke:#43535b; stroke-width:.35; }
+      .hot-file-icon-terminal { fill:#17232a; stroke:var(--file-format-color); stroke-width:.65; }
+      .hot-file-icon-terminal-prompt { fill:none; stroke:var(--file-format-color); stroke-width:.85; stroke-linecap:round; stroke-linejoin:round; }
+      .hot-file-icon-json-braces { fill:none; stroke:var(--file-format-color); stroke-width:1.05; stroke-linecap:round; }
+      .hot-file-icon-jsonl { fill:#24333c; font:800 3.4px "IBM Plex Mono",monospace; }
+      .hot-file-icon-graph-link { fill:none; stroke:var(--file-format-color); stroke-width:.75; }
+      .hot-file-icon-graph-node { fill:#fff; stroke:var(--file-format-color); stroke-width:.8; }
 
-      .hot-file-format-shadow {
-        fill: rgba(0, 0, 0, 0.42);
-        stroke: rgba(0, 0, 0, 0.64);
-        stroke-width: 0.7;
-        stroke-linejoin: round;
-      }
+      .hot-file-icon-frame { fill:#f5fafb; stroke:color-mix(in srgb,var(--file-format-color) 70%,#24333c); stroke-width:.85; }
+      .hot-file-icon-photo-sky { fill:color-mix(in srgb,var(--file-format-color) 30%,#dff3ff); }
+      .hot-file-icon-photo-sun { fill:#ffd166; stroke:#9c7416; stroke-width:.35; }
+      .hot-file-icon-photo-land { fill:color-mix(in srgb,var(--file-format-color) 78%,#245a3a); stroke:color-mix(in srgb,var(--file-format-color) 48%,#17382a); stroke-width:.35; }
+      .hot-file-icon-pixels { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 50%,#071018); stroke-width:.22; }
+      .hot-file-icon-vector-path,.hot-file-icon-vector-handle { fill:none; stroke:var(--file-format-color); stroke-width:.8; stroke-linecap:round; }
+      .hot-file-icon-vector-handle { stroke-width:.45; stroke-dasharray:.7 .5; }
+      .hot-file-icon-vector-node { fill:#fff; stroke:var(--file-format-color); stroke-width:.8; }
+      .hot-file-icon-layer { stroke:color-mix(in srgb,var(--file-format-color) 48%,#071018); stroke-width:.55; stroke-linejoin:round; }
+      .hot-file-icon-layer.back { fill:color-mix(in srgb,var(--file-format-color) 88%,#fff); }
+      .hot-file-icon-layer.middle { fill:none; stroke:var(--file-format-color); stroke-width:1.4; }
+      .hot-file-icon-layer.front { fill:none; stroke:color-mix(in srgb,var(--file-format-color) 70%,#071018); stroke-width:1.4; }
 
-      .hot-file-format-surface {
-        fill: var(--file-format-color);
-        stroke: color-mix(in srgb, var(--file-format-color) 52%, #f5fbff);
-        stroke-width: 0.75;
-        stroke-linejoin: round;
-      }
+      .hot-file-icon-media { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 52%,#071018); stroke-width:.85; }
+      .hot-file-icon-media-mark,.hot-file-icon-film-holes { fill:none; stroke:var(--file-format-ink); stroke-width:.9; stroke-linecap:round; }
+      .hot-file-icon-film-holes { stroke-width:.75; }
+      .hot-file-icon-play { fill:var(--file-format-ink); stroke:color-mix(in srgb,var(--file-format-ink) 75%,transparent); stroke-width:.3; }
+      .hot-file-icon-font-big,.hot-file-icon-font-small { fill:#24333c; font-family:Georgia,"Times New Roman",serif; font-weight:700; }
+      .hot-file-icon-font-big { font-size:8px; }
+      .hot-file-icon-font-small { font-size:5.2px; }
 
-      .hot-file-family-detail {
-        fill: none;
-        stroke: var(--file-format-ink);
-        stroke-opacity: 0.22;
-        stroke-width: 0.72;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-      }
+      .hot-file-icon-archive-lid,.hot-file-icon-archive-box { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 50%,#071018); stroke-width:.8; stroke-linejoin:round; }
+      .hot-file-icon-archive-lid { fill:color-mix(in srgb,var(--file-format-color) 74%,#fff); }
+      .hot-file-icon-archive-zip { fill:none; stroke:var(--file-format-ink); stroke-width:.75; stroke-linejoin:round; }
+      .hot-file-icon-database { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 50%,#071018); stroke-width:.8; }
+      .hot-file-icon-database-lines { fill:none; stroke:var(--file-format-ink); stroke-opacity:.75; stroke-width:.7; }
+      .hot-file-icon-table { fill:#f4f8f8; stroke:color-mix(in srgb,var(--file-format-color) 62%,#24333c); stroke-width:.75; }
+      .hot-file-icon-table-head { fill:var(--file-format-color); }
 
-      .hot-file-format-mark {
-        fill: var(--file-format-ink);
-        stroke: color-mix(in srgb, var(--file-format-color) 60%, transparent);
-        stroke-width: 0.16;
-        paint-order: stroke fill;
-        font-family: "Arial Narrow", "IBM Plex Sans Condensed", "Segoe UI", sans-serif;
-        font-size: 4.55px;
-        font-weight: 900;
-        letter-spacing: -0.2px;
-      }
+      .hot-file-icon-atlas-back { fill:color-mix(in srgb,var(--file-format-color) 45%,#edf8ff); stroke:color-mix(in srgb,var(--file-format-color) 55%,#24333c); stroke-width:.7; }
+      .hot-file-icon-atlas-front { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 48%,#071018); stroke-width:.8; }
+      .hot-file-icon-atlas-grid,.hot-file-icon-timeline { fill:none; stroke:var(--file-format-ink); stroke-opacity:.72; stroke-width:.55; }
+      .hot-file-icon-keyframe { fill:var(--file-format-ink); }
+      .hot-file-icon-node { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 48%,#071018); stroke-width:.65; }
+      .hot-file-icon-node-link { fill:none; stroke:var(--file-format-color); stroke-width:.85; }
+      .hot-file-icon-cube { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 46%,#071018); stroke-width:.8; stroke-linejoin:round; }
+      .hot-file-icon-cube-lines { fill:none; stroke:var(--file-format-ink); stroke-opacity:.78; stroke-width:.7; stroke-linejoin:round; }
+      .hot-file-icon-scene-frame { fill:#eaf5f8; stroke:var(--file-format-color); stroke-width:.75; }
+      .hot-file-icon-scene-ground { fill:none; stroke:#5a8b68; stroke-width:.7; stroke-linejoin:round; }
+      .hot-file-icon-scene-cube { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 46%,#071018); stroke-width:.55; }
+      .hot-file-icon-scene-cube-lines { fill:none; stroke:var(--file-format-ink); stroke-width:.45; }
+      .hot-file-icon-prefab-link { fill:#fff; stroke:var(--file-format-color); stroke-width:.65; }
+      .hot-file-icon-asset-box { fill:#eaf1f4; stroke:var(--file-format-color); stroke-width:.8; }
+      .hot-file-icon-asset-tab { fill:none; stroke:var(--file-format-color); stroke-width:.85; stroke-linejoin:round; }
+      .hot-file-icon-asset-gem { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 45%,#071018); stroke-width:.5; }
+      .hot-file-icon-material-sphere { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 45%,#071018); stroke-width:.8; }
+      .hot-file-icon-material-shade { fill:color-mix(in srgb,var(--file-format-color) 58%,#071018); opacity:.48; }
+      .hot-file-icon-material-shine { fill:#fff; opacity:.72; }
+      .hot-file-icon-terrain { fill:color-mix(in srgb,var(--file-format-color) 70%,#4e9a55); stroke:#2c6539; stroke-width:.7; }
+      .hot-file-icon-terrain-grid { fill:none; stroke:#e9f6d4; stroke-width:.45; opacity:.85; }
+      .hot-file-icon-light-sun { fill:#ffd15c; stroke:#b07812; stroke-width:.7; }
+      .hot-file-icon-light-rays { fill:none; stroke:#ffd15c; stroke-width:.9; stroke-linecap:round; }
+      .hot-file-icon-controller { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 45%,#071018); stroke-width:.75; }
+      .hot-file-icon-controller-mark { fill:none; stroke:var(--file-format-ink); stroke-width:.75; stroke-linecap:round; }
+      .hot-file-icon-ui-window,.hot-file-icon-app-window { fill:#edf5f7; stroke:var(--file-format-color); stroke-width:.8; }
+      .hot-file-icon-ui-head,.hot-file-icon-app-head { fill:none; stroke:var(--file-format-color); stroke-width:.7; }
+      .hot-file-icon-ui-panels { fill:color-mix(in srgb,var(--file-format-color) 55%,#dff2f5); stroke:var(--file-format-color); stroke-width:.4; }
+      .hot-file-icon-tag { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 45%,#071018); stroke-width:.6; }
+      .hot-file-icon-tag-hole { fill:#eef3f5; stroke:color-mix(in srgb,var(--file-format-color) 45%,#071018); stroke-width:.35; }
+      .hot-file-icon-solution-link { fill:none; stroke:var(--file-format-color); stroke-width:.65; }
+      .hot-file-icon-solution-block { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 45%,#071018); stroke-width:.6; }
+      .hot-file-icon-app-play { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 45%,#071018); stroke-width:.45; }
+      .hot-file-icon-library-back { fill:color-mix(in srgb,var(--file-format-color) 50%,#eef5f7); stroke:var(--file-format-color); stroke-width:.65; }
+      .hot-file-icon-library-front { fill:#eef5f7; stroke:var(--file-format-color); stroke-width:.75; }
+      .hot-file-icon-library-link { fill:none; stroke:var(--file-format-color); stroke-width:.65; stroke-linecap:round; }
+      .hot-file-icon-chip { fill:var(--file-format-color); stroke:color-mix(in srgb,var(--file-format-color) 45%,#071018); stroke-width:.75; }
+      .hot-file-icon-chip-lines { fill:none; stroke:var(--file-format-ink); stroke-width:.7; stroke-linejoin:round; }
 
-      .hot-file-format-mark.is-length-1 { font-size: 6.3px; }
-      .hot-file-format-mark.is-length-2 { font-size: 5.25px; }
-      .hot-file-format-mark.is-length-3 { font-size: 4.15px; }
+      .hot-file-change-badge { stroke:rgba(3,10,14,.9); stroke-width:.62; }
+      .hot-file-change-mark { fill:none; stroke:#fff; stroke-width:.72; stroke-linecap:round; stroke-linejoin:round; }
+      .hot-file-change-badge.is-added + .hot-file-change-mark,.hot-file-change-badge.is-modified + .hot-file-change-mark,.hot-file-change-badge.is-renamed + .hot-file-change-mark { stroke:#071018; }
+      .hot-file-change-badge.is-added { fill:#35c77a; }
+      .hot-file-change-badge.is-modified { fill:#f2b84b; }
+      .hot-file-change-badge.is-deleted { fill:#ef665f; }
+      .hot-file-change-badge.is-renamed { fill:#53a4ff; }
+      .hot-file-change-badge.is-mixed { fill:#b982f2; }
 
-      .hot-file-change-badge {
-        stroke: rgba(3,10,14,0.9);
-        stroke-width: 0.72;
-      }
-
-      .hot-file-change-mark {
-        fill: none;
-        stroke: #fff;
-        stroke-width: 0.82;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-      }
-
-      .hot-file-change-badge.is-added + .hot-file-change-mark,
-      .hot-file-change-badge.is-modified + .hot-file-change-mark,
-      .hot-file-change-badge.is-renamed + .hot-file-change-mark {
-        stroke: #071018;
-      }
-
-      .hot-file-change-badge.is-added { fill: #35c77a; }
-      .hot-file-change-badge.is-modified { fill: #f2b84b; }
-      .hot-file-change-badge.is-deleted { fill: #ef665f; }
-      .hot-file-change-badge.is-renamed { fill: #53a4ff; }
-      .hot-file-change-badge.is-mixed { fill: #b982f2; }
-
-      .office-wall-hot-cell-icon {
-        position: absolute;
-        left: 2px;
-        top: 50%;
-        width: clamp(9px, 26%, 15px);
-        height: clamp(9px, 90%, 15px);
-        transform: translateY(-50%);
-        pointer-events: none;
-        filter: drop-shadow(1px 1px 0 rgba(0,0,0,0.45));
-      }
-
-      .office-wall-row-file-icon {
-        width: 14px;
-        height: 14px;
-        margin-right: 4px;
-        vertical-align: middle;
-      }
-
-      .office-wall-hot-title {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .office-wall-hot-hover-icon {
-        width: 24px;
-        height: 24px;
-      }
-
-      .office-wall-hot-format {
-        margin-left: auto;
-        padding: 2px 6px;
-        border: 1px solid var(--file-format-color);
-        color: #f7fbff;
-        background: color-mix(in srgb, var(--file-format-color) 34%, #071018);
-        font-family: "IBM Plex Mono", "Cascadia Code", monospace;
-        font-size: 0.68em;
-        line-height: 1.2;
-        white-space: nowrap;
-      }
+      .office-wall-hot-cell-icon { position:absolute; left:2px; top:50%; width:clamp(9px,26%,15px); height:clamp(9px,90%,15px); transform:translateY(-50%); pointer-events:none; filter:drop-shadow(1px 1px 0 rgba(0,0,0,.45)); }
+      .office-wall-row-file-icon { width:14px; height:14px; margin-right:4px; vertical-align:middle; }
+      .office-wall-hot-title { display:flex; align-items:center; gap:8px; }
+      .office-wall-hot-hover-icon { width:24px; height:24px; }
+      .office-wall-hot-format { margin-left:auto; padding:2px 6px; border:1px solid var(--file-format-color); color:#f7fbff; background:color-mix(in srgb,var(--file-format-color) 34%,#071018); font-family:"IBM Plex Mono","Cascadia Code",monospace; font-size:.68em; line-height:1.2; white-space:nowrap; }

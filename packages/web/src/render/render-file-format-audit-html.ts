@@ -197,7 +197,12 @@ export function renderFileFormatAuditHtml(): string {
       }
 
       .format-card:hover { z-index: 1; outline: 1px solid var(--file-card-color); outline-offset: -1px; }
-      .format-card .hot-file-format-icon { width: var(--icon-review-size, 30px); height: var(--icon-review-size, 30px); }
+      .format-card-icons { display: grid; grid-template-columns: auto 24px; gap: 8px; align-items: center; }
+      .format-card-icons > .hot-file-format-icon { width: var(--icon-review-size, 30px); height: var(--icon-review-size, 30px); }
+      .format-card-size-strip { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; align-items: center; justify-items: center; width: 24px; }
+      .format-card-size-icon { display: flex; align-items: center; justify-content: center; }
+      .format-card-size-icon:last-child { grid-column: 1 / -1; }
+      .format-card-size-icon .hot-file-format-icon { width: 100%; height: 100%; }
       .format-copy { min-width: 0; }
       .format-name { overflow: hidden; text-overflow: ellipsis; font: 700 13px/1.25 "IBM Plex Mono", monospace; white-space: nowrap; }
       .format-meta { margin-top: 3px; color: var(--review-muted); font-size: 11px; text-transform: uppercase; }
@@ -238,7 +243,7 @@ export function renderFileFormatAuditHtml(): string {
           <option value="renamed">Renamed</option>
           <option value="mixed">Mixed</option>
         </select>
-        <label class="review-size-control">Size <input id="icon-size" type="range" min="16" max="48" value="30" /><output id="icon-size-output">30px</output></label>
+        <label class="review-size-control">Size <input id="icon-size" type="range" min="9" max="48" value="30" /><output id="icon-size-output">30px</output></label>
         <button id="theme-toggle" class="review-button" type="button">Light surface</button>
       </div>
 
@@ -276,6 +281,8 @@ ${runtimeSource}
       const sizeInput = document.getElementById("icon-size");
       const sizeOutput = document.getElementById("icon-size-output");
       const themeToggle = document.getElementById("theme-toggle");
+      const initialSearch = new URLSearchParams(window.location.search).get("q");
+      if (initialSearch) searchInput.value = initialSearch;
 
       function iconEntry(item, changeKind) {
         return {
@@ -318,7 +325,11 @@ ${runtimeSource}
           return '<section class="family-section"><div class="family-head"><h2>' + escapeHtml(family)
             + '</h2><span>' + entries.length + ' format' + (entries.length === 1 ? '' : 's') + '</span></div><div class="format-grid">'
             + entries.map((item) => '<article class="format-card" style="--file-card-color:' + escapeHtml(item.formatColor) + '">'
-              + renderHotFileIcon(iconEntry(item, state), "gallery-file-icon")
+              + '<div class="format-card-icons">' + renderHotFileIcon(iconEntry(item, state), "gallery-file-icon")
+              + '<div class="format-card-size-strip" aria-label="9, 14, and 24 pixel previews">'
+              + [9, 14, 24].map((size) => '<span class="format-card-size-icon" title="' + size + 'px" style="width:' + size + 'px;height:' + size + 'px">'
+                + renderHotFileIcon(iconEntry(item, state), "gallery-size-icon") + '</span>').join("")
+              + '</div></div>'
               + '<div class="format-copy"><div class="format-name">.' + escapeHtml(item.extension) + '</div>'
               + '<div class="format-meta"><span class="format-swatch"></span>' + escapeHtml(item.fileFormat) + ' · ' + escapeHtml(item.formatColor) + '</div></div></article>')
               .join("")
