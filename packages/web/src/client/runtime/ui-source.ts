@@ -281,6 +281,9 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
         if (agent.source === "hermes" || agent.provenance === "hermes") {
           return agent.sourceProjectRoot || snapshot.projectRoot;
         }
+        if (!agent.accountObserved && (agent.source === "claude" || agent.provenance === "claude")) {
+          return agent.sourceProjectRoot || snapshot.projectRoot;
+        }
         if (agent.provenance !== "codex" || agent.source !== "local") {
           return null;
         }

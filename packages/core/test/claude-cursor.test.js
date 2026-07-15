@@ -544,6 +544,288 @@ test("Claude workflow subagent transcripts create inferred child rows under the 
   });
 });
 
+test("Claude background Bash tasks create live child rows with bounded output", async () => {
+  await withTempAppData("claude-background-task-live-", async () => {
+    const now = Date.now();
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "claude-background-task-output-"));
+    const outputPath = path.join(tempDir, "session-background-live", "tasks", "task-live.output");
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, "starting review\nchecking renderer tests\n", "utf8");
+
+    try {
+      const agents = await buildClaudeSubagentAgentsForTest({
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        sessionId: "session-background-live",
+        cwd: "/workspaces/CodexAgentsOffice",
+        updatedAt: now,
+        records: [
+          {
+            type: "assistant",
+            timestamp: new Date(now - 1_000).toISOString(),
+            message: {
+              content: [{
+                type: "tool_use",
+                id: "tool-background-live",
+                name: "Bash",
+                input: {
+                  command: "npm test",
+                  description: "Run renderer tests",
+                  run_in_background: true
+                }
+              }]
+            }
+          },
+          {
+            type: "user",
+            timestamp: new Date(now - 900).toISOString(),
+            message: {
+              content: [{
+                type: "tool_result",
+                tool_use_id: "tool-background-live",
+                content: `Command running in background with ID: task-live. Output is being written to: ${outputPath}.`
+              }]
+            },
+            toolUseResult: { backgroundTaskId: "task-live" }
+          }
+        ],
+        hookRecords: []
+      });
+
+      assert.equal(agents.length, 1);
+      assert.equal(agents[0].id, "claude:session-background-live:agent:background-task:task-live");
+      assert.equal(agents[0].parentThreadId, "claude:session-background-live");
+      assert.equal(agents[0].sourceKind, "claude:background-task");
+      assert.equal(agents[0].label, "Run renderer tests");
+      assert.equal(agents[0].taskId, "task-live");
+      assert.equal(agents[0].isSubagent, true);
+      assert.equal(agents[0].isOngoing, true);
+      assert.equal(agents[0].state, "running");
+      assert.equal(agents[0].latestMessage, "checking renderer tests");
+      assert.equal(agents[0].activityEvent?.type, "commandExecution");
+      assert.equal(agents[0].confidence, "inferred");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("Claude raw task notifications finish background child rows when SDK records omit completion", async () => {
+  await withTempAppData("claude-background-task-complete-", async () => {
+    const now = Date.now();
+    const projectDir = await mkdtemp(path.join(os.tmpdir(), "claude-background-task-transcript-"));
+    const sessionId = "session-background-complete";
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const outputPath = path.join(projectDir, sessionId, "tasks", "task-complete.output");
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    const spawn = {
+      type: "assistant",
+      timestamp: new Date(now - 2_000).toISOString(),
+      message: {
+        content: [{
+          type: "tool_use",
+          id: "tool-background-complete",
+          name: "Bash",
+          input: {
+            command: "npm test",
+            description: "Run full suite",
+            run_in_background: true
+          }
+        }]
+      }
+    };
+    const started = {
+      type: "user",
+      timestamp: new Date(now - 1_900).toISOString(),
+      message: {
+        content: [{
+          type: "tool_result",
+          tool_use_id: "tool-background-complete",
+          content: `Command running in background with ID: task-complete. Output is being written to: ${outputPath}.`
+        }]
+      },
+      toolUseResult: { backgroundTaskId: "task-complete" }
+    };
+    const notification = {
+      type: "queue-operation",
+      operation: "enqueue",
+      timestamp: new Date(now - 1_000).toISOString(),
+      content: `<task-notification>\n<task-id>task-complete</task-id>\n<tool-use-id>tool-background-complete</tool-use-id>\n<output-file>${outputPath}</output-file>\n<status>completed</status>\n<summary>Background command \"Run full suite\" completed (exit code 0)</summary>\n</task-notification>`
+    };
+    await writeFile(outputPath, "result=Passed total=60 failed=0\n", "utf8");
+    await writeFile(transcriptPath, [spawn, started].map((record) => JSON.stringify(record)).join("\n") + "\n", "utf8");
+
+    try {
+      const runningAgents = await buildClaudeSubagentAgentsForTest({
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        sessionId,
+        projectDirPath: projectDir,
+        cwd: "/workspaces/CodexAgentsOffice",
+        updatedAt: now,
+        records: [spawn, started],
+        hookRecords: []
+      });
+      assert.equal(runningAgents.length, 1);
+      assert.equal(runningAgents[0].isOngoing, true);
+
+      await writeFile(
+        transcriptPath,
+        [spawn, started, notification].map((record) => JSON.stringify(record)).join("\n") + "\n",
+        "utf8"
+      );
+      const agents = await buildClaudeSubagentAgentsForTest({
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        sessionId,
+        projectDirPath: projectDir,
+        cwd: "/workspaces/CodexAgentsOffice",
+        updatedAt: now,
+        records: [spawn, started],
+        hookRecords: []
+      });
+
+      assert.equal(agents.length, 1);
+      assert.equal(agents[0].state, "done");
+      assert.equal(agents[0].isOngoing, false);
+      assert.ok(Date.parse(agents[0].stoppedAt) >= now - 1_000);
+      assert.equal(agents[0].latestMessage, "result=Passed total=60 failed=0");
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("Claude failed background task notifications produce blocked child rows", async () => {
+  await withTempAppData("claude-background-task-failed-", async () => {
+    const now = Date.now();
+    const agents = await buildClaudeSubagentAgentsForTest({
+      projectRoot: "/workspaces/CodexAgentsOffice",
+      sessionId: "session-background-failed",
+      cwd: "/workspaces/CodexAgentsOffice",
+      updatedAt: now,
+      records: [
+        {
+          type: "assistant",
+          timestamp: new Date(now - 2_000).toISOString(),
+          message: { content: [{
+            type: "tool_use",
+            id: "tool-background-failed",
+            name: "Bash",
+            input: { command: "npm test", description: "Run checks", run_in_background: true }
+          }] }
+        },
+        {
+          type: "user",
+          timestamp: new Date(now - 1_900).toISOString(),
+          message: { content: [{
+            type: "tool_result",
+            tool_use_id: "tool-background-failed",
+            content: "Command running in background with ID: task-failed."
+          }] },
+          toolUseResult: { backgroundTaskId: "task-failed" }
+        },
+        {
+          type: "queue-operation",
+          operation: "enqueue",
+          timestamp: new Date(now - 1_000).toISOString(),
+          content: "<task-notification>\n<task-id>task-failed</task-id>\n<status>failed</status>\n<summary>Background command \"Run checks\" failed (exit code 1)</summary>\n</task-notification>"
+        }
+      ],
+      hookRecords: []
+    });
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0].label, "Run checks");
+    assert.equal(agents[0].state, "blocked");
+    assert.equal(agents[0].isOngoing, false);
+  });
+});
+
+test("Claude background task output paths stay confined to the matching session task file", async () => {
+  await withTempAppData("claude-background-task-path-guard-", async () => {
+    const now = Date.now();
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "claude-background-task-path-guard-"));
+    const unrelatedPath = path.join(tempDir, "unrelated.output");
+    await writeFile(unrelatedPath, "must not surface\n", "utf8");
+
+    try {
+      const agents = await buildClaudeSubagentAgentsForTest({
+        projectRoot: "/workspaces/CodexAgentsOffice",
+        sessionId: "session-background-guarded",
+        cwd: "/workspaces/CodexAgentsOffice",
+        updatedAt: now,
+        records: [
+          {
+            type: "assistant",
+            timestamp: new Date(now - 2_000).toISOString(),
+            message: { content: [{
+              type: "tool_use",
+              id: "tool-background-guarded",
+              name: "Bash",
+              input: { command: "printenv", description: "Guarded task", run_in_background: true }
+            }] }
+          },
+          {
+            type: "user",
+            timestamp: new Date(now - 1_900).toISOString(),
+            message: { content: [{
+              type: "tool_result",
+              tool_use_id: "tool-background-guarded",
+              content: "Command running in background with ID: task-guarded."
+            }] },
+            toolUseResult: { backgroundTaskId: "task-guarded" }
+          },
+          {
+            type: "queue-operation",
+            operation: "enqueue",
+            timestamp: new Date(now - 1_000).toISOString(),
+            content: `<task-notification>\n<task-id>task-guarded</task-id>\n<output-file>${unrelatedPath}</output-file>\n<status>completed</status>\n<summary>Background command \"Guarded task\" completed (exit code 0)</summary>\n</task-notification>`
+          }
+        ],
+        hookRecords: []
+      });
+
+      assert.equal(agents.length, 1);
+      assert.equal(agents[0].latestMessage, null);
+      assert.equal(agents[0].detail, "Background command \"Guarded task\" completed (exit code 0)");
+      assert.deepEqual(agents[0].paths, ["/workspaces/CodexAgentsOffice"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("Claude Agent task notifications do not create duplicate background-command children", async () => {
+  await withTempAppData("claude-background-task-agent-dedupe-", async () => {
+    const now = Date.now();
+    const agents = await buildClaudeSubagentAgentsForTest({
+      projectRoot: "/workspaces/CodexAgentsOffice",
+      sessionId: "session-agent-notification",
+      cwd: "/workspaces/CodexAgentsOffice",
+      updatedAt: now,
+      records: [
+        {
+          type: "user",
+          timestamp: new Date(now - 1_500).toISOString(),
+          message: { content: [{
+            type: "tool_result",
+            tool_use_id: "agent-tool-use",
+            content: "Agent running in background with ID: agent-worker."
+          }] },
+          toolUseResult: { backgroundTaskId: "agent-worker" }
+        },
+        {
+          type: "queue-operation",
+          operation: "enqueue",
+          timestamp: new Date(now - 1_000).toISOString(),
+          content: "<task-notification>\n<task-id>agent-worker</task-id>\n<status>completed</status>\n<summary>Agent worker completed</summary>\n</task-notification>"
+        }
+      ],
+      hookRecords: []
+    });
+
+    assert.equal(agents.length, 0);
+  });
+});
+
 test("Claude workflow journal records create and finish inferred child rows", async () => {
   await withTempAppData("claude-workflow-journal-rows-", async () => {
     const now = Date.now();

@@ -9,6 +9,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added inferred Claude background-task child rows for `Bash` calls launched with `run_in_background`, including stable parent linkage, live command activity, incremental transcript discovery, bounded local-only output tails, raw task-notification completion/failure handling, a read-only in-scene history card, and a short recent-completion grace without confusing those commands with true Claude Agent subagents.
 - Added compact per-format SVG file badges to the in-scene hot-change board and hover cards. Badges use recognizable format colors, semantic file pictograms, and added/modified/deleted/renamed/mixed change indicators across code, markup, styles, data, configuration, docs, images, audio, video, fonts, archives, Unity/project files, binaries, and unknown formats.
 - Added `/file-format-audit`, an interactive visual-review gallery driven by the production icon renderer and the complete recognized-extension catalog, with search, change-state switching, adjustable sizing, light/dark surfaces, and a 9–32px legibility strip.
 

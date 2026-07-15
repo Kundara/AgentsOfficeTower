@@ -893,6 +893,7 @@ test("runtime source lets scene-agent clicks open a stable thread history card",
   assert.ok(uiSource.includes("function findThreadViewEntry(projectRoot, threadId) {"));
   assert.ok(uiSource.includes('agent.sourceKind !== "appServer"'));
   assert.ok(uiSource.includes('if (agent.source === "hermes" || agent.provenance === "hermes") {'));
+  assert.ok(uiSource.includes('if (!agent.accountObserved && (agent.source === "claude" || agent.provenance === "claude")) {'));
   assert.ok(uiSource.includes("return agent.sourceProjectRoot || snapshot.projectRoot;"));
   assert.ok(uiSource.includes("&& !findThreadViewEntry(state.openAgentThread.projectRoot, state.openAgentThread.threadId)"));
   assert.ok(uiSource.includes("function markReplyThreadWorkIntent(threadId"));
@@ -1189,7 +1190,8 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes('" - no shared active matching projects"'));
   assert.ok(multiplayerSource.includes("const remoteAgents = snapshotActiveSharedAgents(remoteSnapshot);"));
   assert.ok(multiplayerSource.includes(".filter((snapshot) => isSnapshotSharedWithRoom(snapshot) && snapshotHasActiveSharedAgents(snapshot))"));
-  assert.ok(multiplayerSource.includes("cloned.agents = snapshotActiveSharedAgents(cloned).map((agent) => ({"));
+  assert.ok(multiplayerSource.includes(".map((agent) => agentForMultiplayer(agent, localHatId));"));
+  assert.ok(multiplayerSource.includes('agent.sourceKind === "claude:background-task"'));
   assert.ok(!multiplayerSource.includes("MULTIPLAYER_REMOTE_PROJECT_COOLDOWN_MS"));
   assert.ok(!multiplayerSource.includes("function cooledRemoteProjectSnapshot(entry) {"));
   assert.ok(multiplayerSource.includes("function mergeSharedHotChange(localSnapshot, remoteSnapshot, change, peer)"));
@@ -1204,7 +1206,7 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   assert.ok(multiplayerSource.includes("const users = uniqueSharedList([...(change && Array.isArray(change.users) ? change.users : []), peer.peerLabel]);"));
   assert.ok(multiplayerSource.includes("hotChanges: []"));
   assert.ok(multiplayerSource.includes("const localHatId = currentSelectedHatId();"));
-  assert.ok(multiplayerSource.includes("hatId: localHatId"));
+  assert.ok(multiplayerSource.includes("const shared = { ...agent, hatId };"));
   assert.ok(multiplayerSource.includes("deviceId: currentMultiplayerDeviceId(),"));
   assert.ok(multiplayerSource.includes("payload.deviceId === currentMultiplayerDeviceId()"));
   assert.ok(multiplayerSource.includes("const firstPayloadFromPeer = !multiplayerPeers.has(payload.peerId);"));
@@ -1230,6 +1232,28 @@ test("multiplayer runtime persists explicit per-project sharing and hides inacti
   const partyServerSource = readFileSync(join(__dirname, "../../party/src/server.ts"), "utf8");
   assert.ok(partyServerSource.includes("deviceId?: string;"));
   assert.ok(partyServerSource.includes("deviceId: normalizedText(candidate.deviceId, 128) ?? undefined"));
+});
+
+test("multiplayer payloads suppress local Claude background command output", () => {
+  const multiplayerRuntime = readTemplateExportValue("multiplayer-source.ts");
+  const agentForMultiplayer = Function(
+    `${extractRuntimeFunctions(multiplayerRuntime, ["agentForMultiplayer"])}\nreturn agentForMultiplayer;`
+  )();
+  const localAgent = {
+    id: "claude:session:agent:background-task:task-1",
+    sourceKind: "claude:background-task",
+    isOngoing: true,
+    detail: "token=secret",
+    latestMessage: "https://auth.example/?token=secret"
+  };
+
+  assert.deepEqual(agentForMultiplayer(localAgent, "cap"), {
+    ...localAgent,
+    hatId: "cap",
+    detail: "Claude background command running",
+    latestMessage: null
+  });
+  assert.equal(localAgent.latestMessage, "https://auth.example/?token=secret");
 });
 
 test("shared peers with the same repository URL merge despite different labels and root commits", () => {

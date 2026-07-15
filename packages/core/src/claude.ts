@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 
 import { ensureAgentAppearance } from "./appearance";
 import { getClaudeSdkSessionRecords, listClaudeSdkSessions, resolveReadableClaudeHooksFilePath } from "./claude-agent-sdk";
+import { buildClaudeTranscriptBackgroundTaskAgents } from "./claude-background-tasks";
 import { inferredGoalFromText } from "./goal";
 import { sameProjectPath, type DiscoveredProject } from "./project-paths";
 import type { AgentActivityEvent, ActivityState, AgentConfidence, AgentGoalKind, AgentGoalState, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
@@ -3573,7 +3574,7 @@ async function buildClaudeSubagentAgents(input: {
     });
   }
 
-  return Promise.all(
+  const subagents = await Promise.all(
     [...latestById.entries()].map(async ([id, seed]) => {
       const parentThreadId = seed.context ? claudeTeamParentAgentId(seed.context) : claudeLeadAgentId(input.session.sessionId);
       const threadId = seed.context?.member.sessionId ?? id;
@@ -3636,6 +3637,20 @@ async function buildClaudeSubagentAgents(input: {
       } satisfies DashboardAgent;
     })
   );
+
+  const backgroundAgents = await buildClaudeTranscriptBackgroundTaskAgents({
+    projectRoot: input.projectRoot,
+    sessionId: input.session.sessionId,
+    cwd: input.session.cwd,
+    gitBranch: input.session.gitBranch,
+    records: input.session.records,
+    fallbackUpdatedAt: input.session.updatedAt,
+    transcriptPath: input.session.projectDirPath
+      ? join(input.session.projectDirPath, `${input.session.sessionId}.jsonl`)
+      : null
+  });
+
+  return [...subagents, ...backgroundAgents];
 }
 
 async function buildClaudeTeamAgentsForProject(input: {

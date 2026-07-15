@@ -605,6 +605,7 @@ What we read:
 - local workflow/subagent JSONL files under `~/.claude/projects/<encoded-cwd>/<session-id>/subagents/**/agent-*.jsonl`
 - matching workflow/subagent metadata files such as `agent-*.meta.json`
 - workflow journals such as `~/.claude/projects/<encoded-cwd>/<session-id>/subagents/workflows/<workflow-id>/journal.jsonl`
+- parent-session `Bash` launches with `run_in_background`, their `backgroundTaskId` / output path results, raw `<task-notification>` lifecycle records, and bounded local-only tails from the reported temporary `tasks/<id>.output` files; those output tails are removed from shared-room payloads
 - optional per-project hook sidecars in Agents Office user data at `claude-hooks/<session-id>.jsonl`
 - Claude Agent Teams config files under `~/.claude/teams/*/config.json`
 - Claude Agent View background session state under `$CLAUDE_CONFIG_DIR/jobs/*/state.json` or `~/.claude/jobs/*/state.json`
@@ -626,6 +627,7 @@ How we use it:
 - prefer typed Claude hook events when a sidecar exists for that session
 - assign the Claude `sessionId` to the normalized `threadId` field so browser event matching can treat Claude like other tracked sessions
 - derive inferred child Claude agents from local workflow/subagent transcripts, metadata, and journals when hooks are absent
+- derive inferred `claude:background-task` children from background Bash launch/result pairs, keep their command activity and latest bounded output visible, and end them from raw completion/failure/stop records that the Agent SDK can omit
 - derive typed child Claude agents from hook `agent_id` and Agent Teams `leadSessionId` / teammate metadata when those typed identifiers are available
 - add teammate `worktreePath` or `cwd` values to Claude project discovery so cowork/team workspaces can appear as floors
 - add Agent View background jobs as read-only `claude:background` agents keyed by the Claude session id when available, otherwise by the background job id
@@ -1238,6 +1240,7 @@ Status:
 - Claude is merged into the same snapshot model
 - transcript-derived Claude agents carry `provenance = claude` and `confidence = inferred`
 - local workflow/subagent transcript and journal child rows carry `provenance = claude` and `confidence = inferred`
+- background Bash task child rows carry `provenance = claude` and `confidence = inferred`; they are command processes, not typed Claude Agent identities
 - hook-backed Claude sessions, subagents, and Agent Teams rows carry `provenance = claude` and `confidence = typed` when their state comes from typed hook/team metadata, including when a hook row upgrades a matching inferred workflow child
 - Hermes agents carry `provenance = hermes` and `confidence = inferred`
 - Codex, cloud, and presence entries carry typed provenance
@@ -1268,6 +1271,7 @@ Today the project already rides:
 - Claude local JSONL discovery
 - Claude tool-use and message inference
 - local Claude workflow/subagent transcript and journal discovery
+- Claude background Bash task lifecycle and bounded output-tail discovery
 - Claude provenance/confidence signaling
 - Claude inferred goal metadata for lead sessions, Agent Teams rows, workflow subagents, Home work rows, and Agent View background jobs
 - hook-backed Claude approval and elicitation responses from the browser queue

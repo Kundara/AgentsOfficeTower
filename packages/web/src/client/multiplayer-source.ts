@@ -1185,6 +1185,15 @@ export const MULTIPLAYER_SCRIPT = `
         }
       }
 
+      function agentForMultiplayer(agent, hatId) {
+        const shared = { ...agent, hatId };
+        if (agent && agent.sourceKind === "claude:background-task") {
+          shared.detail = agent.isOngoing ? "Claude background command running" : "Claude background command finished";
+          shared.latestMessage = null;
+        }
+        return shared;
+      }
+
       function buildMultiplayerPayload() {
         if (!state.localFleet) {
           return null;
@@ -1195,10 +1204,8 @@ export const MULTIPLAYER_SCRIPT = `
           .filter((snapshot) => isSnapshotSharedWithRoom(snapshot) && snapshotHasActiveSharedAgents(snapshot))
           .map((snapshot) => {
             const cloned = cloneValue(snapshot);
-            cloned.agents = snapshotActiveSharedAgents(cloned).map((agent) => ({
-              ...agent,
-              hatId: localHatId
-            }));
+            cloned.agents = snapshotActiveSharedAgents(cloned)
+              .map((agent) => agentForMultiplayer(agent, localHatId));
             return cloned;
           });
         return {
