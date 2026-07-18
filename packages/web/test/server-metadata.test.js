@@ -4,7 +4,10 @@ const assert = require("node:assert/strict");
 const { buildFleetResponse, buildServerMeta } = require("../dist/server-metadata.js");
 const {
   DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS,
+  FLEET_CLOUD_REFRESH_TIMEOUT_MS,
+  FLEET_MONITOR_START_TIMEOUT_MS,
   FLEET_MONITOR_REFRESH_TIMEOUT_MS,
+  FLEET_OPTIONAL_SOURCE_TIMEOUT_MS,
   FleetLiveService,
   PROJECT_SET_REFRESH_INTERVAL_MS,
   filterFreshDiscoveredProjects,
@@ -15,6 +18,9 @@ const {
 } = require("../dist/server/fleet-live-service.js");
 
 test("fleet monitor refresh timeout keeps a degraded project from blocking the fleet", async () => {
+  assert.equal(FLEET_CLOUD_REFRESH_TIMEOUT_MS, 5000);
+  assert.equal(FLEET_OPTIONAL_SOURCE_TIMEOUT_MS, 3000);
+  assert.equal(FLEET_MONITOR_START_TIMEOUT_MS, 8000);
   assert.equal(FLEET_MONITOR_REFRESH_TIMEOUT_MS, 20000);
   assert.equal(await refreshMonitorWithinTimeout(async () => {}, 10), true);
   assert.equal(
@@ -120,6 +126,70 @@ test("fleet mode starts empty while explicit project mode remains pinned", () =>
   const seed = [{ root: "/seed/project", label: "project" }];
   assert.deepEqual(new FleetLiveService(seed, false).getCurrentProjects(), []);
   assert.deepEqual(new FleetLiveService(seed, true).getCurrentProjects(), seed);
+});
+
+test("fleet startup is single-flight and fleet reads wait for readiness", async () => {
+  const service = new FleetLiveService([], false);
+  let releaseStart;
+  service.startInternal = async () => {
+    await new Promise((resolve) => {
+      releaseStart = resolve;
+    });
+    service.fleet = buildFleetResponse([], new Map());
+  };
+
+  const starting = service.start();
+  let readResolved = false;
+  const reading = service.getFleet().then(() => {
+    readResolved = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(readResolved, false);
+  releaseStart();
+  await Promise.all([starting, reading]);
+  assert.equal(readResolved, true);
+});
+
+test("overlapping project-set requests share one discovery pass", async () => {
+  const service = new FleetLiveService([], false);
+  let refreshCount = 0;
+  let releaseRefresh;
+  service.refreshProjectSet = async () => {
+    refreshCount += 1;
+    await new Promise((resolve) => {
+      releaseRefresh = resolve;
+    });
+    service.lastProjectSetRefreshAt = Date.now();
+  };
+
+  const first = service.ensureProjectSet(true);
+  const second = service.ensureProjectSet(true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(refreshCount, 1);
+  releaseRefresh();
+  await Promise.all([first, second]);
+});
+
+test("overlapping cloud refresh requests share one provider call", async () => {
+  const service = new FleetLiveService([], false);
+  let refreshCount = 0;
+  let releaseRefresh;
+  service.refreshSharedCloudTasksInternal = async () => {
+    refreshCount += 1;
+    await new Promise((resolve) => {
+      releaseRefresh = resolve;
+    });
+  };
+
+  const first = service.refreshSharedCloudTasks();
+  const second = service.refreshSharedCloudTasks();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(refreshCount, 1);
+  releaseRefresh();
+  await Promise.all([first, second]);
 });
 
 test("empty fleet discovery still respects the project refresh cadence", () => {

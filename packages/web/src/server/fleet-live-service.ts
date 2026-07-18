@@ -42,7 +42,10 @@ import {
 
 export const DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const PROJECT_SET_REFRESH_INTERVAL_MS = 4000;
+export const FLEET_MONITOR_START_TIMEOUT_MS = 8000;
 export const FLEET_MONITOR_REFRESH_TIMEOUT_MS = 20000;
+export const FLEET_CLOUD_REFRESH_TIMEOUT_MS = 5000;
+export const FLEET_OPTIONAL_SOURCE_TIMEOUT_MS = 3000;
 const HERMES_FLOATING_AGENT_LIMIT = 12;
 const OPENCLAW_FLOATING_AGENT_LIMIT = 12;
 
@@ -174,9 +177,12 @@ export class FleetLiveService {
   private accountAgents: DashboardAgent[] = [];
   private lastAccountAgentRefreshAt = 0;
   private accountAgentRefresh: Promise<void> | null = null;
+  private startPromise: Promise<void> | null = null;
   private lastProjectSetRefreshAt = 0;
+  private projectSetRefresh: Promise<void> | null = null;
   private sharedCloudTasks: CloudTask[] = [];
   private sharedCloudErrorMessage: string | null = null;
+  private sharedCloudRefresh: Promise<void> | null = null;
   private cloudTimer: NodeJS.Timeout | null = null;
   private cloudBackoffUntil = 0;
   private coordinatedTeamFleet: WebCliTeamFleetCache | null = null;
@@ -190,12 +196,34 @@ export class FleetLiveService {
   }
 
   async start(): Promise<void> {
+    if (this.startPromise) {
+      await this.startPromise;
+      return;
+    }
+    const startPromise = this.startInternal();
+    this.startPromise = startPromise;
+    try {
+      await startPromise;
+    } finally {
+      if (this.startPromise === startPromise) {
+        this.startPromise = null;
+      }
+    }
+  }
+
+  private async startInternal(): Promise<void> {
     this.fleet = buildFleetResponse(this.projects, new Map(), this.accountAgents);
     this.cloudTimer = setInterval(() => {
-      void this.refreshSharedCloudTasks();
+      void refreshMonitorWithinTimeout(
+        () => this.refreshSharedCloudTasks(),
+        FLEET_CLOUD_REFRESH_TIMEOUT_MS
+      );
     }, FleetLiveService.CLOUD_REFRESH_INTERVAL_MS);
     await this.ensureProjectSet(true);
-    await this.refreshSharedCloudTasks();
+    await refreshMonitorWithinTimeout(
+      () => this.refreshSharedCloudTasks(),
+      FLEET_CLOUD_REFRESH_TIMEOUT_MS
+    );
     await this.publish();
   }
 
@@ -215,6 +243,9 @@ export class FleetLiveService {
   }
 
   async getFleet(): Promise<FleetResponse> {
+    if (this.startPromise) {
+      await this.startPromise;
+    }
     if (!this.fleet) {
       await this.publish(true);
     }
@@ -276,8 +307,14 @@ export class FleetLiveService {
 
   async refreshAll(): Promise<FleetResponse> {
     await this.ensureProjectSet(true);
-    await this.refreshSharedCloudTasks();
-    await this.refreshAccountAgents(true);
+    await refreshMonitorWithinTimeout(
+      () => this.refreshSharedCloudTasks(),
+      FLEET_CLOUD_REFRESH_TIMEOUT_MS
+    );
+    await refreshMonitorWithinTimeout(
+      () => this.refreshAccountAgents(true),
+      FLEET_OPTIONAL_SOURCE_TIMEOUT_MS
+    );
     await Promise.all(Array.from(this.monitors.values()).map((monitor) => (
       refreshMonitorWithinTimeout(() => monitor.refreshNow())
     )));
@@ -462,7 +499,10 @@ export class FleetLiveService {
 
   private async publish(forceProjectRefresh = false): Promise<void> {
     await this.ensureProjectSet(forceProjectRefresh);
-    await this.refreshAccountAgents(forceProjectRefresh);
+    await refreshMonitorWithinTimeout(
+      () => this.refreshAccountAgents(forceProjectRefresh),
+      FLEET_OPTIONAL_SOURCE_TIMEOUT_MS
+    );
     const snapshotsByRoot = new Map<string, DashboardSnapshot>();
     for (const project of this.projects) {
       const snapshot = this.monitors.get(project.root)?.getSnapshot();
@@ -471,8 +511,16 @@ export class FleetLiveService {
       }
     }
 
-    await this.attachRoamingHermesAgents(snapshotsByRoot);
-    await this.attachRoamingOpenClawAgents(snapshotsByRoot);
+    await Promise.all([
+      refreshMonitorWithinTimeout(
+        () => this.attachRoamingHermesAgents(snapshotsByRoot),
+        FLEET_OPTIONAL_SOURCE_TIMEOUT_MS
+      ),
+      refreshMonitorWithinTimeout(
+        () => this.attachRoamingOpenClawAgents(snapshotsByRoot),
+        FLEET_OPTIONAL_SOURCE_TIMEOUT_MS
+      )
+    ]);
     const previousFleet = this.fleet;
     this.fleet = buildFleetResponse(this.projects, snapshotsByRoot, this.accountAgents);
     try {
@@ -575,7 +623,19 @@ export class FleetLiveService {
     if (!shouldRefreshProjectSet(this.lastProjectSetRefreshAt, force)) {
       return;
     }
-    await this.refreshProjectSet();
+    if (this.projectSetRefresh) {
+      await this.projectSetRefresh;
+      return;
+    }
+    const projectSetRefresh = this.refreshProjectSet();
+    this.projectSetRefresh = projectSetRefresh;
+    try {
+      await projectSetRefresh;
+    } finally {
+      if (this.projectSetRefresh === projectSetRefresh) {
+        this.projectSetRefresh = null;
+      }
+    }
   }
 
   private async refreshProjectSet(): Promise<void> {
@@ -659,7 +719,9 @@ export class FleetLiveService {
       newMonitors.push(monitor);
     }
 
-    await Promise.all(newMonitors.map((monitor) => monitor.start()));
+    await Promise.all(newMonitors.map((monitor) => (
+      refreshMonitorWithinTimeout(() => monitor.start(), FLEET_MONITOR_START_TIMEOUT_MS)
+    )));
 
     for (const [projectRoot, monitor] of Array.from(this.monitors.entries())) {
       if (nextRoots.has(projectRoot)) {
@@ -674,6 +736,22 @@ export class FleetLiveService {
   }
 
   private async refreshSharedCloudTasks(): Promise<void> {
+    if (this.sharedCloudRefresh) {
+      await this.sharedCloudRefresh;
+      return;
+    }
+    const sharedCloudRefresh = this.refreshSharedCloudTasksInternal();
+    this.sharedCloudRefresh = sharedCloudRefresh;
+    try {
+      await sharedCloudRefresh;
+    } finally {
+      if (this.sharedCloudRefresh === sharedCloudRefresh) {
+        this.sharedCloudRefresh = null;
+      }
+    }
+  }
+
+  private async refreshSharedCloudTasksInternal(): Promise<void> {
     if (Date.now() < this.cloudBackoffUntil) {
       this.applySharedCloudTasksToMonitors();
       return;

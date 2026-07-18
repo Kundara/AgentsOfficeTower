@@ -9,7 +9,7 @@ import { canonicalizeProjectPath, projectLabelFromRoot } from "./project-paths";
 import type { ProjectIdentity } from "./types";
 
 const execFileAsync = promisify(execFile);
-const CLAUDE_SCRATCHPAD_PATH = /^\/private\/tmp\/claude-[^/]+\/([^/]+)\/([0-9a-f-]{36})\/scratchpad\/([^/]+)(?:\/|$)/i;
+const CLAUDE_SCRATCHPAD_PATH = /^\/private\/tmp\/claude-[^/]+\/([^/]+)\/([0-9a-f-]{36})\/scratchpad(?:\/([^/]+))?(?:\/|$)/i;
 const CLAUDE_TRANSCRIPT_PREFIX_BYTES = 256 * 1024;
 
 function repoNameFromUrl(repoUrl: string | null): string | null {
@@ -156,7 +156,8 @@ export async function resolveClaudeScratchpadOwner(
     return null;
   }
 
-  const [, encodedOwner, sessionId, worktreeName] = match;
+  const [, encodedOwner, sessionId, matchedWorktreeName] = match;
+  const worktreeName = matchedWorktreeName || "scratchpad";
   const transcriptPath = resolve(claudeConfigDir, "projects", encodedOwner, `${sessionId}.jsonl`);
   let handle;
   try {

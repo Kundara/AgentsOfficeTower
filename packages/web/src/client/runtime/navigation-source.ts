@@ -537,8 +537,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
               .rect(cellX, 0, columnWidth, cellHeight)
               .fill({ color: palette.fill, alpha: 0.96 });
             rowContainer.addChild(body);
-            const textInset = 10;
-            const maskedTextWidth = Math.max(1, columnWidth - textInset * 2);
+            const textInset = 8;
+            const maskedTextWidth = Math.max(1, columnWidth - textInset);
             const rowText = createPixiText(renderer, wallDashboardTextValue(row.label || ""), {
               fill: palette.text,
               fontFamily: "IBM Plex Mono, Cascadia Code, monospace",
@@ -559,7 +559,7 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
               const fade = new PIXI.Graphics();
               for (let step = 0; step < fadeWidth; step += 1) {
                 fade.rect(fadeX + step, 0, 1, cellHeight)
-                  .fill({ color: palette.fill, alpha: ((step + 1) / fadeWidth) * 0.9 });
+                  .fill({ color: palette.fill, alpha: (step + 1) / fadeWidth });
               }
               rowContainer.addChild(fade);
             }

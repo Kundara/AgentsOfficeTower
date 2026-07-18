@@ -615,9 +615,11 @@ test("runtime source renders a scene-native office wall dashboard from snapshot 
   assert.ok(navigationSource.includes("const heatTrack = new PIXI.Graphics()"));
   assert.ok(navigationSource.includes("const heatFill = new PIXI.Graphics()"));
   assert.ok(navigationSource.includes("renderer.root.toLocal(event.global)"));
-  assert.ok(navigationSource.includes("const textInset = 10;"));
+  assert.ok(navigationSource.includes("const textInset = 8;"));
+  assert.ok(navigationSource.includes("const maskedTextWidth = Math.max(1, columnWidth - textInset);"));
   assert.ok(navigationSource.includes("rowText.x = cellX + textInset;"));
   assert.ok(navigationSource.includes("rowText.width > maskedTextWidth"));
+  assert.ok(navigationSource.includes("alpha: (step + 1) / fadeWidth"));
   assert.ok(uiSource.includes("window.setInterval(() => {"));
   assert.ok(uiSource.includes("syncOfficeWallDashboardHeat();"));
   assert.ok(uiSource.includes("}, 1000);"));

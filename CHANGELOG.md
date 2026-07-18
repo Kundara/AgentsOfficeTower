@@ -23,6 +23,9 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed fleet startup and manual refresh getting stuck behind overlapping project discovery or stalled optional providers. Project discovery is now single-flight, fleet reads wait for startup readiness, and monitor, cloud, account, and roaming-source enrichment have bounded waits so local floors publish reliably.
+- Fixed bare Claude scratchpad roots appearing as standalone floors by resolving them back to their owning repository identity, allowing the browser's normal worktree merge to fold them into the canonical project floor.
+- Fixed in-scene hot-file labels fading well before the right edge of their colored cells, and tightened the icon-to-label spacing so more of each filename remains readable.
 - Fixed managed Tower server, Codex observer, `codex cloud list`, and Git inspection child processes opening visible Windows Terminal windows during background startup and refresh work. Tower's read-only Codex observers now also skip the user's MCP and plugin configuration, preventing observer refreshes from launching unnecessary `cmd`, `npx`, and tool-server grandchildren that can create additional Terminal windows on Windows.
 - Fixed active file edits missing from hot changes when Windows-hosted fleet roots use canonical `/mnt/...` paths, when files are untracked, when raw file-event history drops or is stale but typed activity identifies a fresher edit, or when Unity formats such as `.uxml` and `.uss` were previously unsupported. Absolute, canonical, and relative spellings now deduplicate without conflating distinct nested relative files.
 - Fixed skill manifest activity labels to show `skill-name/SKILL.md` instead of the ambiguous `SKILL.md` basename on the office wall and file-change notifications.

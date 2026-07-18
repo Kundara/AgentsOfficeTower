@@ -13,6 +13,7 @@ test("deleted Claude scratch worktrees inherit their owning repository identity"
   const claudeConfig = join(root, ".claude");
   const encodedOwner = "-Users-test-Projects-ExampleWorkspace";
   const sessionId = "0b7ec54b-c40b-43eb-861e-cfa0320d7490";
+  const bareScratchRoot = `/private/tmp/claude-501/${encodedOwner}/${sessionId}/scratchpad`;
   const scratchRoot = `/private/tmp/claude-501/${encodedOwner}/${sessionId}/scratchpad/example-wt`;
 
   try {
@@ -32,6 +33,10 @@ test("deleted Claude scratch worktrees inherit their owning repository identity"
       ownerRoot,
       worktreeName: "example-wt"
     });
+    assert.deepEqual(await resolveClaudeScratchpadOwner(bareScratchRoot, claudeConfig), {
+      ownerRoot,
+      worktreeName: "scratchpad"
+    });
     const previousClaudeConfig = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = claudeConfig;
     try {
@@ -41,6 +46,9 @@ test("deleted Claude scratch worktrees inherit their owning repository identity"
       assert.match(identity.rootCommit, /^[a-f0-9]{40}$/);
       assert.equal(identity.gitRoot, realpathSync(ownerRoot));
       assert.equal(identity.worktreeName, "example-wt");
+      const bareIdentity = await resolveProjectIdentity(bareScratchRoot);
+      assert.equal(bareIdentity.repoUrl, "https://example.invalid/acme/example-workspace");
+      assert.equal(bareIdentity.worktreeName, "scratchpad");
     } finally {
       if (previousClaudeConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfig;
