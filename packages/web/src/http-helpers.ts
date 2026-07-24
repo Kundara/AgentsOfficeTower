@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile, realpath } from "node:fs/promises";
 import { extname, normalize, resolve } from "node:path";
 
-import { canonicalizeProjectPath } from "@agents-tower/core";
+import { canonicalizeProjectPath, filesystemPathForProjectRoot } from "@agents-tower/core";
 
 const WEB_PUBLIC_DIR = resolve(__dirname, "../public");
 const DEFAULT_JSON_BODY_MAX_BYTES = 1024 * 1024;
@@ -146,7 +146,9 @@ export async function sendProjectFile(
   filePath: string,
   method: string
 ): Promise<void> {
-  const normalizedRoot = canonicalizeProjectPath(projectRoot) ?? resolve(projectRoot);
+  const normalizedRoot = resolve(
+    filesystemPathForProjectRoot(canonicalizeProjectPath(projectRoot) ?? projectRoot)
+  );
   const candidate = filePath.startsWith("/")
     ? resolve(filePath)
     : resolve(normalizedRoot, filePath);

@@ -11,6 +11,7 @@ import {
   describeStoredAppearanceSettings,
   describeCursorIntegrationSettings,
   describeStoredMultiplayerSettings,
+  filesystemPathForProjectRoot,
   getStoredMultiplayerSettingsSync,
   discoverProjects,
   listCloudTasks,
@@ -63,6 +64,10 @@ export function filterFreshDiscoveredProjects(
     (project) => project.count > 0
       && (normalizeDiscoveredProjectUpdatedAt(project.updatedAt) * 1000) >= cutoffMs
   );
+}
+
+export function projectRootExists(projectRoot: string): boolean {
+  return existsSync(filesystemPathForProjectRoot(projectRoot));
 }
 
 export function shouldRefreshProjectSet(
@@ -644,7 +649,7 @@ export class FleetLiveService {
       ? []
       : await discoverProjects(FleetLiveService.PROJECT_DISCOVERY_LIMIT).catch(() => []);
     const discoveredProjects = filterFreshDiscoveredProjects(rawDiscoveredProjects)
-      .filter((project) => existsSync(project.root));
+      .filter((project) => projectRootExists(project.root));
     const normalizedSeeds = this.seedProjects
       .map((project) => {
         const root = canonicalizeProjectPath(project.root);
@@ -677,7 +682,7 @@ export class FleetLiveService {
       });
     }
     for (const [identityKey, project] of Array.from(this.recentlyDiscoveredProjects.entries())) {
-      if (now - project.lastSeenAt > FleetLiveService.PROJECT_DISCOVERY_RETENTION_MS || !existsSync(project.root)) {
+      if (now - project.lastSeenAt > FleetLiveService.PROJECT_DISCOVERY_RETENTION_MS || !projectRootExists(project.root)) {
         this.recentlyDiscoveredProjects.delete(identityKey);
       } else {
         sourceKindsByIdentity.set(

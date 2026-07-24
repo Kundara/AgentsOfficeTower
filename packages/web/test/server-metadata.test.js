@@ -1,6 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { mkdtempSync, rmSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
 
+const { canonicalizeProjectPath } = require("../../core/dist/project-paths.js");
 const { buildFleetResponse, buildServerMeta } = require("../dist/server-metadata.js");
 const {
   DISCOVERED_PROJECT_FRESHNESS_WINDOW_MS,
@@ -12,6 +16,7 @@ const {
   PROJECT_SET_REFRESH_INTERVAL_MS,
   filterFreshDiscoveredProjects,
   mergeDiscoveredProjectRootsWithSeeds,
+  projectRootExists,
   refreshMonitorWithinTimeout,
   shouldRefreshProjectSet,
   sortProjectRootsWithCoworkLast
@@ -100,6 +105,17 @@ test("fleet discovery hides autodiscovered workspaces older than the internal 7-
   );
 
   assert.deepEqual(visible.map((project) => project.root), ["/fresh", "/fresh-ms"]);
+});
+
+test("fleet project existence checks convert canonical roots to host-native paths", () => {
+  const nativeRoot = mkdtempSync(join(tmpdir(), "agents-tower-project-root-"));
+  try {
+    const canonicalRoot = canonicalizeProjectPath(nativeRoot);
+    assert.ok(canonicalRoot);
+    assert.equal(projectRootExists(canonicalRoot), true);
+  } finally {
+    rmSync(nativeRoot, { recursive: true, force: true });
+  }
 });
 
 test("fleet discovery drops seed workspaces without recent discovered activity", () => {

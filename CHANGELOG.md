@@ -23,6 +23,7 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Fixed
 
+- Fixed Windows filesystem operations treating canonical `/mnt/<drive>/...` project identities as native paths. Deleted-worktree cleanup now keeps active Windows projects in fleet discovery, and project image previews resolve against the real host path.
 - Fixed fleet startup and manual refresh getting stuck behind overlapping project discovery or stalled optional providers. Project discovery is now single-flight, fleet reads wait for startup readiness, and monitor, cloud, account, and roaming-source enrichment have bounded waits so local floors publish reliably.
 - Fixed bare Claude scratchpad roots appearing as standalone floors by resolving them back to their owning repository identity, allowing the browser's normal worktree merge to fold them into the canonical project floor.
 - Fixed in-scene hot-file labels fading well before the right edge of their colored cells, and tightened the icon-to-label spacing so more of each filename remains readable.
