@@ -1711,7 +1711,7 @@ test("runtime source section files now start on function boundaries instead of c
 });
 
 test("runtime source merges worktrees by repo and renders worktree badges in hover and split floor headers", () => {
-  const layoutSource = readRuntimeSource("layout-source.ts");
+  const layoutSource = readRuntimeSource("worktree-merge-source.ts") + readRuntimeSource("layout-source.ts");
   const renderSource = readRuntimeSource("render-source.ts");
   const sceneSource = readSceneRuntime();
   const uiSource = readRuntimeSource("ui-source.ts");
@@ -1728,6 +1728,8 @@ test("runtime source merges worktrees by repo and renders worktree badges in hov
   );
   assert.ok(layoutSource.includes('return "git-common:" + commonGitDir;'));
   assert.ok(layoutSource.includes("mergedProjectRoots: bucket.snapshots.map((snapshot) => snapshot.projectRoot),"));
+  assert.ok(layoutSource.includes("const mergedAgentEntries = dedupeMergedAgentEntries(bucket.snapshots);"));
+  assert.ok(layoutSource.includes("const sourceRootByAgentIdentity = mergedAgentSourceRoots(mergedAgentEntries);"));
   assert.ok(layoutSource.includes("sourceProjectRoot,"));
   assert.ok(renderSource.includes('const worktreeHtml = worktreeName'));
   assert.ok(renderSource.includes('class="agent-hover-worktree"'));
@@ -1740,6 +1742,110 @@ test("runtime source merges worktrees by repo and renders worktree badges in hov
   assert.ok(uiSource.includes('const selectableProjects = state.globalSceneSettings?.splitWorktrees ? rawProjects : floorProjects;'));
   assert.ok(uiSource.includes('...selectableProjects.map((project) => {'));
   assert.ok(settingsSource.includes("splitWorktrees: Boolean(parsed && parsed.splitWorktrees)"));
+});
+
+test("worktree merge keeps one logical agent and prefers its exact cwd snapshot", () => {
+  const layoutSource = readTemplateExportValue("runtime", "worktree-merge-source.ts")
+    + readTemplateExportValue("runtime", "layout-source.ts");
+  const dedupeMergedAgentEntries = Function(
+    `${extractRuntimeFunctions(layoutSource, [
+      "mergedAgentIdentity",
+      "normalizedMergedAgentPath",
+      "mergedAgentSnapshotAffinity",
+      "preferredMergedAgentEntry",
+      "dedupeMergedAgentEntries"
+    ])}\nreturn dedupeMergedAgentEntries;`
+  )();
+  const agentId = "claude:session:agent:background-task:task-1";
+  const mainRoot = "/repo";
+  const worktreeRoot = "/repo/.claude/worktrees/fix-agents";
+  const nestedRoot = "/repo/Library/Proof";
+  const duplicateAgent = (state, updatedAt) => ({
+    id: agentId,
+    cwd: worktreeRoot,
+    paths: [worktreeRoot],
+    state,
+    updatedAt
+  });
+  const entries = dedupeMergedAgentEntries([
+    {
+      projectRoot: mainRoot,
+      agents: [duplicateAgent("running", "2026-07-30T18:00:00.000Z")]
+    },
+    {
+      projectRoot: nestedRoot,
+      agents: [duplicateAgent("running", "2026-07-30T18:01:00.000Z")]
+    },
+    {
+      projectRoot: worktreeRoot,
+      agents: [duplicateAgent("done", "2026-07-30T18:02:00.000Z")]
+    }
+  ]);
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].snapshot.projectRoot, worktreeRoot);
+  assert.equal(entries[0].agent.state, "done");
+});
+
+test("worktree merge keeps a child linked to the retained parent across source roots", () => {
+  const layoutSource = readTemplateExportValue("runtime", "worktree-merge-source.ts")
+    + readTemplateExportValue("runtime", "layout-source.ts");
+  const runtime = Function(
+    "remapSharedPaths",
+    "remapSharedPath",
+    "roomIdForSharedPaths",
+    "worktreeNameForSnapshot",
+    `${extractRuntimeFunctions(layoutSource, [
+      "mergedAgentId",
+      "mergedAgentIdentity",
+      "mergedParentAgentIdentity",
+      "normalizedMergedAgentPath",
+      "mergedAgentSnapshotAffinity",
+      "preferredMergedAgentEntry",
+      "dedupeMergedAgentEntries",
+      "mergedAgentSourceRoots",
+      "cloneAgentForMergedSnapshot"
+    ])}
+    return {
+      cloneAgentForMergedSnapshot,
+      dedupeMergedAgentEntries,
+      mergedAgentSourceRoots
+    };`
+  )(
+    (_sourceRoot, _targetRoot, paths) => paths,
+    (_sourceRoot, _targetRoot, value) => value,
+    () => "root",
+    (snapshot) => snapshot.worktreeName || null
+  );
+  const mainSnapshot = {
+    projectRoot: "/repo",
+    agents: [{
+      id: "claude:session-1",
+      parentThreadId: null,
+      cwd: "/repo",
+      paths: ["/repo"]
+    }]
+  };
+  const worktreeSnapshot = {
+    projectRoot: "/repo/.claude/worktrees/feature",
+    worktreeName: "feature",
+    agents: [{
+      id: "claude:session-1:child",
+      parentThreadId: "claude:session-1",
+      cwd: "/repo/.claude/worktrees/feature",
+      paths: ["/repo/.claude/worktrees/feature"]
+    }]
+  };
+  const entries = runtime.dedupeMergedAgentEntries([mainSnapshot, worktreeSnapshot]);
+  const sourceRoots = runtime.mergedAgentSourceRoots(entries);
+  const clonedAgents = entries.map(({ snapshot, agent }) =>
+    runtime.cloneAgentForMergedSnapshot(snapshot, mainSnapshot, agent, true, sourceRoots)
+  );
+  const parent = clonedAgents.find((agent) => agent.sourceAgentId === "claude:session-1");
+  const child = clonedAgents.find((agent) => agent.sourceAgentId === "claude:session-1:child");
+
+  assert.equal(parent.id, "/repo::claude:session-1");
+  assert.equal(child.parentThreadId, parent.id);
 });
 
 test("rec-room roster keeps space for recently visible resting leads that went active", () => {

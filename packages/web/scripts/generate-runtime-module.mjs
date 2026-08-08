@@ -17,6 +17,7 @@ const RUNTIME_SECTIONS = [
   ["src/client/scene-grid-source.ts", "SCENE_GRID_SCRIPT"],
   ["src/client/toast-source.ts", "TOAST_SCRIPT"],
   ["src/client/multiplayer-source.ts", "MULTIPLAYER_SCRIPT"],
+  ["src/client/runtime/worktree-merge-source.ts", "CLIENT_RUNTIME_WORKTREE_MERGE_SOURCE"],
   ["src/client/runtime/layout-source.ts", "CLIENT_RUNTIME_LAYOUT_SOURCE"],
   ["src/client/runtime/display-text-source.ts", "CLIENT_RUNTIME_DISPLAY_TEXT_SOURCE"],
   ["src/client/runtime/file-formats-source.ts", "CLIENT_RUNTIME_FILE_FORMATS_SOURCE"],

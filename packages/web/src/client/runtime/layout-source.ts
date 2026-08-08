@@ -537,8 +537,69 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         return String(projectRoot || "") + "::" + String(agentId || "");
       }
 
-      function cloneAgentForMergedSnapshot(sourceSnapshot, targetSnapshot, agent, useSyntheticIds) {
+      function mergedAgentIdentity(agent) {
+        return String(agent && (agent.sourceAgentId || agent.id) || "").trim();
+      }
+
+      function normalizedMergedAgentPath(value) {
+        return String(value || "").trim().replace(/\\\\/g, "/").replace(/\\/+$/g, "");
+      }
+
+      function mergedAgentSnapshotAffinity(snapshot, agent) {
+        const projectRoot = normalizedMergedAgentPath(snapshot && snapshot.projectRoot);
+        if (!projectRoot) {
+          return 0;
+        }
+        if (normalizedMergedAgentPath(agent && agent.cwd) === projectRoot) {
+          return 2;
+        }
+        return (Array.isArray(agent && agent.paths) ? agent.paths : [])
+          .some((path) => normalizedMergedAgentPath(path) === projectRoot)
+          ? 1
+          : 0;
+      }
+
+      function preferredMergedAgentEntry(current, candidate) {
+        if (!current) {
+          return candidate;
+        }
+        const currentAffinity = mergedAgentSnapshotAffinity(current.snapshot, current.agent);
+        const candidateAffinity = mergedAgentSnapshotAffinity(candidate.snapshot, candidate.agent);
+        if (candidateAffinity !== currentAffinity) {
+          return candidateAffinity > currentAffinity ? candidate : current;
+        }
+        const currentUpdatedAt = Date.parse(String(current.agent && current.agent.updatedAt || "")) || 0;
+        const candidateUpdatedAt = Date.parse(String(candidate.agent && candidate.agent.updatedAt || "")) || 0;
+        return candidateUpdatedAt > currentUpdatedAt ? candidate : current;
+      }
+
+      function dedupeMergedAgentEntries(snapshots) {
+        const entries = [];
+        const indexByIdentity = new Map();
+        for (const snapshot of snapshots) {
+          for (const agent of Array.isArray(snapshot && snapshot.agents) ? snapshot.agents : []) {
+            const candidate = { snapshot, agent };
+            const identity = mergedAgentIdentity(agent);
+            if (!identity || !indexByIdentity.has(identity)) {
+              if (identity) {
+                indexByIdentity.set(identity, entries.length);
+              }
+              entries.push(candidate);
+              continue;
+            }
+            const index = indexByIdentity.get(identity);
+            entries[index] = preferredMergedAgentEntry(entries[index], candidate);
+          }
+        }
+        return entries;
+      }
+
+      function cloneAgentForMergedSnapshot(sourceSnapshot, targetSnapshot, agent, useSyntheticIds, sourceRootByIdentity) {
         const sourceProjectRoot = sourceSnapshot && sourceSnapshot.projectRoot ? sourceSnapshot.projectRoot : targetSnapshot.projectRoot;
+        const parentIdentity = mergedParentAgentIdentity(agent);
+        const parentSourceProjectRoot = parentIdentity && sourceRootByIdentity instanceof Map
+          ? sourceRootByIdentity.get(parentIdentity) || sourceProjectRoot
+          : sourceProjectRoot;
         const remappedPaths = remapSharedPaths(
           sourceProjectRoot,
           targetSnapshot.projectRoot,
@@ -557,8 +618,8 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
         return {
           ...agent,
           id: useSyntheticIds ? mergedAgentId(sourceProjectRoot, agent.id) : agent.id,
-          parentThreadId: agent.parentThreadId
-            ? (useSyntheticIds ? mergedAgentId(sourceProjectRoot, agent.parentThreadId) : agent.parentThreadId)
+          parentThreadId: parentIdentity
+            ? (useSyntheticIds ? mergedAgentId(parentSourceProjectRoot, parentIdentity) : agent.parentThreadId)
             : null,
           roomId: roomId || (sourceProjectRoot === targetSnapshot.projectRoot ? agent.roomId : null),
           cwd: remappedCwd || agent.cwd,
@@ -597,11 +658,13 @@ export const CLIENT_RUNTIME_LAYOUT_SOURCE = `
           .map((bucket) => {
             const representative = bucket.representative;
             const useSyntheticIds = bucket.snapshots.length > 1;
+            const mergedAgentEntries = dedupeMergedAgentEntries(bucket.snapshots);
+            const sourceRootByAgentIdentity = mergedAgentSourceRoots(mergedAgentEntries);
             return {
               ...representative,
               mergedProjectRoots: bucket.snapshots.map((snapshot) => snapshot.projectRoot),
-              agents: bucket.snapshots.flatMap((snapshot) =>
-                snapshot.agents.map((agent) => cloneAgentForMergedSnapshot(snapshot, representative, agent, useSyntheticIds))
+              agents: mergedAgentEntries.map(({ snapshot, agent }) =>
+                cloneAgentForMergedSnapshot(snapshot, representative, agent, useSyntheticIds, sourceRootByAgentIdentity)
               ),
               cloudTasks: bucket.snapshots.flatMap((snapshot) => Array.isArray(snapshot.cloudTasks) ? snapshot.cloudTasks : []),
               events: bucket.snapshots.flatMap((snapshot) => Array.isArray(snapshot.events) ? snapshot.events : []),
