@@ -7,6 +7,7 @@ import {
 import {
   applyRecentActivityEvent,
   inferThreadAgentRole,
+  isDormantThreadPastQuietWindow,
   isOngoingThread,
   parseThreadSourceMeta,
   pickThreadLabel,
@@ -130,7 +131,10 @@ export async function buildCodexLocalAdapterSnapshotFromState(input: {
         const recentThreadEvents = recentEventsByThreadId.get(thread.id) ?? [];
         const needsUser = input.needsUserByThreadId?.get(thread.id) ?? null;
         const inferredOngoing =
-          (input.ongoingThreadIds?.has(thread.id) ?? false)
+          (
+            (input.ongoingThreadIds?.has(thread.id) ?? false)
+            && !isDormantThreadPastQuietWindow(thread)
+          )
           || isOngoingThread(thread);
         const summary = applyRecentActivityEvent(
           thread,

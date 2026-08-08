@@ -2,6 +2,7 @@ export {
   applyRecentActivityEvent,
   buildActivityEventFromDashboardEvent,
   inferThreadAgentRole,
+  isDormantThreadPastQuietWindow,
   isOngoingThread,
   isStaleActiveSubagentThread,
   latestAgentMessageForThread,

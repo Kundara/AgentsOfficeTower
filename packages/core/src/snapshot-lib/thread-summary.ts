@@ -572,6 +572,17 @@ const FRESH_SPAWNED_THREAD_WINDOW_MS = 2 * 60 * 1000;
 const FRESH_NOT_LOADED_THREAD_UPDATE_WINDOW_MS = 8 * 1000;
 const QUIET_LIVE_THREAD_WINDOW_MS = 3 * 60 * 1000;
 
+export function isDormantThreadPastQuietWindow(
+  thread: CodexThread,
+  nowMs = Date.now()
+): boolean {
+  if (thread.status.type !== "idle" && thread.status.type !== "notLoaded") {
+    return false;
+  }
+  const updatedAtMs = thread.updatedAt * 1000;
+  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs > QUIET_LIVE_THREAD_WINDOW_MS;
+}
+
 function isFreshSpawnedDetachedThread(thread: CodexThread): boolean {
   if (thread.status.type !== "notLoaded") {
     return false;
@@ -631,6 +642,9 @@ export function isOngoingThread(thread: CodexThread): boolean {
       return false;
     }
     return !isStaleActiveSubagentThread(thread);
+  }
+  if (isDormantThreadPastQuietWindow(thread)) {
+    return false;
   }
   if (isFreshSpawnedDetachedThread(thread) || isFreshNotLoadedUnhydratedThread(thread)) {
     return true;
@@ -737,12 +751,13 @@ export function summariseThread(thread: CodexThread): {
   const interruptedWithoutFinalAnswer =
     lastTurn.status === "interrupted" && !turnHasFinalAnswer(lastTurn);
   const freshNotLoadedNonFinalWork = isFreshNotLoadedNonFinalWorkThread(thread, lastTurn);
+  const dormantPastQuietWindow = isDormantThreadPastQuietWindow(thread);
   const activeTopLevelWithoutFinalAnswer =
     thread.status.type === "active"
     && !parentThreadIdForThread(thread)
     && !turnHasFinalAnswer(lastTurn);
   const treatAsInProgress =
-    lastTurn.status === "inProgress"
+    (lastTurn.status === "inProgress" && !dormantPastQuietWindow)
     || freshNotLoadedNonFinalWork
     || activeTopLevelWithoutFinalAnswer;
 

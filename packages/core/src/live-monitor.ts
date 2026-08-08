@@ -22,6 +22,7 @@ import {
 import { getRoomsFilePath, resolveReadableRoomsFilePath } from "./room-config";
 import {
   filterProjectCloudTasks,
+  isDormantThreadPastQuietWindow,
   isOngoingThread,
   isStaleActiveSubagentThread,
   parentThreadIdForThread,
@@ -171,6 +172,9 @@ function threadStillAwaitsFinalAnswer(thread: CodexThread): boolean {
   if (thread.status.type === "systemError") {
     return false;
   }
+  if (isDormantThreadPastQuietWindow(thread)) {
+    return false;
+  }
   const lastTurn = thread.turns.at(-1);
   if (!lastTurn || lastTurn.status === "failed" || turnHasFinalAnswer(lastTurn)) {
     return false;
@@ -203,6 +207,9 @@ function isFreshEnoughToPromoteAwaitingFinalAnswer(thread: CodexThread): boolean
 
 function isRecentThreadSubscriptionCandidate(thread: CodexThread, now: number): boolean {
   if (parentThreadIdForThread(thread)) {
+    return false;
+  }
+  if (isDormantThreadPastQuietWindow(thread, now)) {
     return false;
   }
   const updatedAtMs = thread.updatedAt * 1000;
@@ -241,6 +248,10 @@ export class ProjectLiveMonitor extends EventEmitter {
   private readonly notes = new Set<string>();
   private roomConfigPath: string;
   private readonly pendingUserRequests = new Map<string, PendingUserRequest>();
+  private readonly pendingUserRequestBaselines = new Map<string, {
+    threadUpdatedAt: number | null;
+    lastTurnId: string | null;
+  }>();
   private readonly subscribedThreadIds = new Set<string>();
   private readonly ongoingThreadIds = new Set<string>();
   private readonly stoppedAtByThreadId = new Map<string, number>();
@@ -354,7 +365,7 @@ export class ProjectLiveMonitor extends EventEmitter {
     } else {
       this.client.respondToApprovalRequest(numericRequestId, decision);
     }
-    this.pendingUserRequests.delete(requestId);
+    this.deletePendingUserRequest(requestId);
     this.markThreadLive(pending.threadId);
     this.scheduleThreadRefresh(pending.threadId);
     await this.rebuildSnapshot();
@@ -441,7 +452,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         answers: normalizedAnswers
       });
     }
-    this.pendingUserRequests.delete(requestId);
+    this.deletePendingUserRequest(requestId);
     this.markThreadLive(pending.threadId);
     this.scheduleThreadRefresh(pending.threadId);
     await this.rebuildSnapshot();
@@ -735,7 +746,7 @@ export class ProjectLiveMonitor extends EventEmitter {
           if (shouldPreserveKnownOngoingThread(mergedThread, this.ongoingThreadIds.has(listedThread.id))) {
             this.markThreadLive(listedThread.id);
           } else if (this.ongoingThreadIds.has(listedThread.id)) {
-            this.markThreadStopped(listedThread.id);
+            this.stopThreadForObservedState(listedThread.id, mergedThread);
           }
           this.threads.set(listedThread.id, mergedThread);
           await this.refreshThreadGoal(listedThread.id);
@@ -745,10 +756,15 @@ export class ProjectLiveMonitor extends EventEmitter {
 
       for (const threadId of Array.from(this.threads.keys())) {
         if (!projectThreadsById.has(threadId)) {
-          if (this.ongoingThreadIds.has(threadId)) {
+          const knownThread = this.threads.get(threadId) ?? null;
+          if (
+            this.ongoingThreadIds.has(threadId)
+            && knownThread
+            && threadStillAwaitsFinalAnswer(knownThread)
+          ) {
             continue;
           }
-          this.markThreadStopped(threadId);
+          this.markThreadDormant(threadId);
         }
       }
 
@@ -799,19 +815,42 @@ export class ProjectLiveMonitor extends EventEmitter {
     this.clearMatchingNote("Thread subscribe failed (");
 
     const now = Date.now();
+    for (const thread of this.threads.values()) {
+      if (
+        this.ongoingThreadIds.has(thread.id)
+        && !threadStillAwaitsFinalAnswer(thread)
+        && (
+          thread.status.type !== "active"
+          || isStaleActiveSubagentThread(thread, now)
+        )
+      ) {
+        this.stopThreadForObservedState(thread.id, thread);
+      }
+    }
+
     const candidates = [...this.threads.values()]
       .filter((thread) => (
         !this.stoppedAtByThreadId.has(thread.id)
         && (
-          this.ongoingThreadIds.has(thread.id)
+          (
+            this.ongoingThreadIds.has(thread.id)
+            && threadStillAwaitsFinalAnswer(thread)
+          )
+          || this.hasPendingUserRequestForThread(thread.id)
           || (thread.status.type === "active" && !isStaleActiveSubagentThread(thread, now))
           || isOngoingThread(thread)
           || isRecentThreadSubscriptionCandidate(thread, now)
         )
       ))
       .sort((left, right) => {
-        const leftActive = (left.status.type === "active" && !isStaleActiveSubagentThread(left, now)) || this.ongoingThreadIds.has(left.id) ? 1 : 0;
-        const rightActive = (right.status.type === "active" && !isStaleActiveSubagentThread(right, now)) || this.ongoingThreadIds.has(right.id) ? 1 : 0;
+        const leftActive =
+          (left.status.type === "active" && !isStaleActiveSubagentThread(left, now))
+          || this.ongoingThreadIds.has(left.id)
+          || this.hasPendingUserRequestForThread(left.id) ? 1 : 0;
+        const rightActive =
+          (right.status.type === "active" && !isStaleActiveSubagentThread(right, now))
+          || this.ongoingThreadIds.has(right.id)
+          || this.hasPendingUserRequestForThread(right.id) ? 1 : 0;
         return rightActive - leftActive || right.updatedAt - left.updatedAt;
       })
       .slice(0, MAX_SUBSCRIBED_THREADS);
@@ -943,7 +982,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     for (const [requestId, request] of this.pendingUserRequests.entries()) {
       if (request.threadId === threadId) {
-        this.pendingUserRequests.delete(requestId);
+        this.deletePendingUserRequest(requestId);
       }
     }
     const removalTimer = this.threadRemovalTimers.get(threadId);
@@ -1060,7 +1099,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         if (notification.method === "thread/status/changed" && statusType === "notLoaded") {
           this.schedulePendingNotLoadedStop(threadId);
         } else {
-          this.markThreadStopped(threadId);
+          this.markThreadDormant(threadId);
         }
       }
       if (
@@ -1085,7 +1124,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       const requestId = asString(params.requestId);
       const pendingRequest = requestId ? this.pendingUserRequests.get(requestId) ?? null : null;
       if (requestId) {
-        this.pendingUserRequests.delete(requestId);
+        this.deletePendingUserRequest(requestId);
       }
       const event = buildDashboardEventFromAppServerMessage(
         { projectRoot: this.projectRoot, pendingRequest },
@@ -1127,6 +1166,11 @@ export class ProjectLiveMonitor extends EventEmitter {
     const needsUser = buildNeedsUserStateFromServerRequest(request);
     if (needsUser) {
       this.pendingUserRequests.set(needsUser.requestId, needsUser);
+      const knownThread = this.threads.get(needsUser.threadId) ?? null;
+      this.pendingUserRequestBaselines.set(needsUser.requestId, {
+        threadUpdatedAt: knownThread?.updatedAt ?? null,
+        lastTurnId: knownThread?.turns.at(-1)?.id ?? null
+      });
     }
 
     const event = buildDashboardEventFromAppServerMessage(
@@ -1225,7 +1269,21 @@ export class ProjectLiveMonitor extends EventEmitter {
         if (!listedThread) {
           throw error;
         }
-        readThread = listedThread;
+        // thread/list rows normally omit turns. If a reread stalls, keep the
+        // last hydrated turns while accepting the fresher list status/clock;
+        // the quiet-work window can then decide whether the latch is still
+        // valid without treating missing detail as evidence of completion.
+        readThread = previousThread
+          ? {
+            ...previousThread,
+            status: listedThread.status,
+            updatedAt: Math.max(previousThread.updatedAt, listedThread.updatedAt),
+            path: listedThread.path ?? previousThread.path,
+            turns: listedThread.status.type === "active"
+              ? listedThread.turns
+              : previousThread.turns
+          }
+          : listedThread;
       }
       if (this.threadRefreshGenerations.get(threadId) !== refreshGeneration) {
         return "superseded";
@@ -1268,7 +1326,10 @@ export class ProjectLiveMonitor extends EventEmitter {
           || wasOngoing
           || isFreshEnoughToPromoteAwaitingFinalAnswer(thread)
         );
-      if (isOngoingThread(thread) || shouldPromoteAwaitingFinalAnswer) {
+      const authoritativeActive =
+        thread.status.type === "active"
+        && !isStaleActiveSubagentThread(thread);
+      if (authoritativeActive || isOngoingThread(thread) || shouldPromoteAwaitingFinalAnswer) {
         this.markThreadLive(threadId);
       } else if (wasOngoing) {
         const nextMessage = latestThreadAgentMessage(thread);
@@ -1278,13 +1339,17 @@ export class ProjectLiveMonitor extends EventEmitter {
         if (pendingNotLoadedStop) {
           // Wait for the scheduled reread confirmation before releasing a desk.
         } else if (isStaleActiveSubagentThread(thread)) {
-          this.markThreadStopped(threadId);
+          this.stopThreadForObservedState(threadId, thread);
         } else if (settledDormantSubagent) {
+          this.stopThreadForObservedState(threadId, thread);
+        } else if (thread.status.type === "systemError") {
           this.markThreadStopped(threadId);
-        } else if (thread.status.type === "systemError" || hasFinalAnswer) {
-          this.markThreadStopped(threadId);
-        } else {
+        } else if (hasFinalAnswer) {
+          this.stopThreadForObservedState(threadId, thread);
+        } else if (threadStillAwaitsFinalAnswer(thread)) {
           this.markThreadLive(threadId);
+        } else {
+          this.markThreadDormant(threadId);
         }
       }
       const previousMessage = previousThread ? latestThreadAgentMessage(previousThread) : null;
@@ -1515,6 +1580,93 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
   }
 
+  private hasPendingUserRequestForThread(threadId: string): boolean {
+    for (const request of this.pendingUserRequests.values()) {
+      if (request.threadId === threadId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private deletePendingUserRequest(requestId: string): void {
+    this.pendingUserRequests.delete(requestId);
+    this.pendingUserRequestBaselines.delete(requestId);
+  }
+
+  private clearPendingUserRequestsForThread(threadId: string): void {
+    for (const [requestId, request] of this.pendingUserRequests.entries()) {
+      if (request.threadId === threadId) {
+        this.deletePendingUserRequest(requestId);
+      }
+    }
+  }
+
+  private markThreadDormant(threadId: string): void {
+    if (this.hasPendingUserRequestForThread(threadId)) {
+      // Approval and input requests are durable work. Keep their thread and
+      // connection alive until the request is answered or resolved.
+      this.markThreadLive(threadId);
+      return;
+    }
+    this.markThreadStopped(threadId);
+  }
+
+  private pendingRequestOutlivesObservedTerminalState(
+    threadId: string,
+    thread: CodexThread,
+    terminalTurn: CodexThread["turns"][number]
+  ): boolean {
+    const threadUpdatedAtMs = thread.updatedAt * 1000;
+    for (const request of this.pendingUserRequests.values()) {
+      if (request.threadId !== threadId) {
+        continue;
+      }
+      if (request.turnId === terminalTurn.id) {
+        continue;
+      }
+      const baseline = this.pendingUserRequestBaselines.get(request.requestId) ?? null;
+      if (baseline) {
+        if (baseline.lastTurnId === terminalTurn.id) {
+          return true;
+        }
+        if (
+          baseline.threadUpdatedAt !== null
+          && thread.updatedAt < baseline.threadUpdatedAt
+        ) {
+          return true;
+        }
+        continue;
+      }
+      const requestCreatedAtMs = Date.parse(request.createdAt);
+      if (
+        Number.isFinite(requestCreatedAtMs)
+        && Number.isFinite(threadUpdatedAtMs)
+        && requestCreatedAtMs > threadUpdatedAtMs
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private stopThreadForObservedState(threadId: string, thread: CodexThread): void {
+    const lastTurn = thread.turns.at(-1);
+    if (thread.status.type === "systemError") {
+      this.markThreadStopped(threadId);
+      return;
+    }
+    if (
+      lastTurn
+      && (lastTurn.status === "failed" || turnHasFinalAnswer(lastTurn))
+      && !this.pendingRequestOutlivesObservedTerminalState(threadId, thread, lastTurn)
+    ) {
+      this.markThreadStopped(threadId);
+      return;
+    }
+    this.markThreadDormant(threadId);
+  }
+
   private markThreadStopped(threadId: string): void {
     if (!this.threads.has(threadId)) {
       return;
@@ -1523,6 +1675,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       return;
     }
 
+    this.clearPendingUserRequestsForThread(threadId);
     this.clearPendingNotLoadedStop(threadId);
     this.ongoingThreadIds.delete(threadId);
     this.stoppedAtByThreadId.set(threadId, Date.now());
@@ -1571,11 +1724,15 @@ export class ProjectLiveMonitor extends EventEmitter {
       return;
     }
     if (confirmation === "unavailable") {
-      // A transport failure is not evidence that Codex stopped. Preserve the
-      // last authoritative running signal until a reread actually confirms
-      // the notLoaded transition.
-      this.markThreadLive(threadId);
-      this.schedulePendingNotLoadedStop(threadId);
+      const thread = this.threads.get(threadId) ?? null;
+      if (thread && !isDormantThreadPastQuietWindow(thread)) {
+        // A short observer stall is not evidence that Codex stopped. Preserve
+        // the last running signal while it remains inside the quiet-work window.
+        this.markThreadLive(threadId);
+        this.schedulePendingNotLoadedStop(threadId);
+      } else {
+        this.markThreadDormant(threadId);
+      }
       this.scheduleSnapshot();
       return;
     }
@@ -1591,12 +1748,7 @@ export class ProjectLiveMonitor extends EventEmitter {
       return;
     }
 
-    const latestMessage = latestThreadAgentMessage(thread);
-    if (isSettledDormantSubagentThread(thread) || latestMessage?.phase === "final_answer") {
-      this.markThreadStopped(threadId);
-    } else {
-      this.markThreadLive(threadId);
-    }
+    this.markThreadDormant(threadId);
     this.scheduleSnapshot();
   }
 }
