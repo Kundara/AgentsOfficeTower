@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { ensureAgentAppearance } from "./appearance";
 import { getClaudeSdkSessionRecords, listClaudeSdkSessions, resolveReadableClaudeHooksFilePath } from "./claude-agent-sdk";
 import { buildClaudeTranscriptBackgroundTaskAgents } from "./claude-background-tasks";
+import { claudeSdkSessionListOptions, filterClaudeSdkSessionsForProject } from "./claude-session-ownership";
 import { inferredGoalFromText } from "./goal";
 import { sameProjectPath, type DiscoveredProject } from "./project-paths";
 import type { AgentActivityEvent, ActivityState, AgentConfidence, AgentGoalKind, AgentGoalState, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
@@ -2634,20 +2635,20 @@ async function discoverClaudeProjectsViaSdk(limit = 50): Promise<ClaudeSdkProjec
 }
 
 async function loadClaudeSessionsViaSdk(projectRoot: string, limit = 12): Promise<ClaudeSdkSessionEntry[] | null> {
-  const sessions = await listClaudeSdkSessions({
-    dir: projectRoot,
-    limit,
-    includeWorktrees: true
-  });
+  const sessions = await listClaudeSdkSessions(claudeSdkSessionListOptions(projectRoot, limit));
   if (!sessions || sessions.length === 0) {
     return null;
+  }
+  const projectSessions = filterClaudeSdkSessionsForProject(projectRoot, sessions);
+  if (projectSessions.length === 0) {
+    return [];
   }
   const projectDirPath = await scanClaudeProjectDirs()
     .then((projects) => projects.find((project) => sameProjectPath(project.root, projectRoot))?.dirPath ?? null)
     .catch(() => null);
 
   const entries = await Promise.all(
-    sessions.map(async (session) => {
+    projectSessions.map(async (session) => {
       const cwd = canonicalizeProjectPath(session.cwd) ?? projectRoot;
       const records = await getClaudeSdkSessionRecords({
         sessionId: session.sessionId,
@@ -2673,12 +2674,13 @@ async function loadClaudeSessionsViaSdk(projectRoot: string, limit = 12): Promis
     })
   );
 
-  return entries.filter((entry): entry is ClaudeSdkSessionEntry => Boolean(entry));
+  const loadedEntries = entries.filter((entry): entry is ClaudeSdkSessionEntry => Boolean(entry));
+  return loadedEntries.length > 0 ? loadedEntries : null;
 }
 
 async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Promise<ClaudeLoadedSession[]> {
   const sdkSessions = await loadClaudeSessionsViaSdk(projectRoot, limit);
-  if (sdkSessions && sdkSessions.length > 0) {
+  if (sdkSessions !== null) {
     return Promise.all(
       sdkSessions.map(async (session) => {
         const hookSample = await resolveReadableClaudeHooksFilePath(projectRoot, session.sessionId)

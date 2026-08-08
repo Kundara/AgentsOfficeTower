@@ -22,6 +22,10 @@ const {
   summariseClaudeSession
 } = require("../dist/claude.js");
 const {
+  claudeSdkSessionListOptions,
+  filterClaudeSdkSessionsForProject
+} = require("../dist/claude-session-ownership.js");
+const {
   claudeHooksFilePath,
   createClaudeSdkSidecarHooks,
   normalizeClaudeSdkMessageForTest,
@@ -81,6 +85,38 @@ async function writeJsonl(filePath, records) {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, records.map((record) => JSON.stringify(record)).join("\n") + "\n", "utf8");
 }
+
+test("Claude SDK sessions belong only to their exact project snapshot", () => {
+  const sessions = [
+    { sessionId: "main", cwd: "/workspaces/PartyGame" },
+    { sessionId: "sibling-worktree", cwd: "/workspaces/PartyGame-review" },
+    { sessionId: "nested-root", cwd: "/workspaces/PartyGame/Packages/PolyStack" }
+  ];
+
+  assert.deepEqual(
+    filterClaudeSdkSessionsForProject("/workspaces/PartyGame/", sessions).map((session) => session.sessionId),
+    ["main"]
+  );
+  assert.deepEqual(
+    filterClaudeSdkSessionsForProject("/workspaces/PartyGame-review", sessions).map((session) => session.sessionId),
+    ["sibling-worktree"]
+  );
+  assert.deepEqual(
+    filterClaudeSdkSessionsForProject("/workspaces/PartyGame/Packages/PolyStack", sessions).map((session) => session.sessionId),
+    ["nested-root"]
+  );
+});
+
+test("Claude SDK project reads exclude sibling worktrees before applying their page limit", () => {
+  assert.deepEqual(
+    claudeSdkSessionListOptions("/workspaces/PartyGame/.claude/worktrees/fix-agents", 12),
+    {
+      dir: "/workspaces/PartyGame/.claude/worktrees/fix-agents",
+      limit: 12,
+      includeWorktrees: false
+    }
+  );
+});
 
 test("typed Claude permission hooks become approval-backed blocked state", () => {
   const summary = summariseClaudeHookRecord({
