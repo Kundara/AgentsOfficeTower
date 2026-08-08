@@ -8,8 +8,8 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 
 ## Highlights
 
-- **Live office map**: active agents sit at desks, blocked or waiting work is visible, and recent finished leads rest in the rec area.
-- **Fleet mode by default**: discovered Codex workspaces appear together, with projectless Codex tasks, locally materialized Claude Home work, and recent remote Claude Home work metadata combined at tables on the street-level Chat Café floor. Codex Quick Chat becomes visible after **Add to task**; ordinary ChatGPT and Claude chat history remains outside the supported local session APIs.
+- **Live office map**: active agents sit at desks, blocked or waiting work is visible, recent finished leads rest in the rec area, and abandoned `idle`/`notLoaded` Codex turns age out instead of occupying workstations indefinitely.
+- **Fleet mode by default**: discovered Codex workspaces appear together, with Git-linked worktrees merged by repository unless **Split Worktrees** is enabled. Merged floors keep one logical agent identity and prefer the snapshot matching that agent's real working directory. Projectless Codex tasks, locally materialized Claude Home work, and recent remote Claude Home work metadata are combined at tables on the street-level Chat Café floor. Codex Quick Chat becomes visible after **Add to task**; ordinary ChatGPT and Claude chat history remains outside the supported local session APIs.
 - **A real tower cutaway**: blue-brick workspace floors with restrained seams share a straight full-width crown, facade, and foundation above a pixel-art Chat Café; grounded avatars move through the navigation grid while only roaming Hermes/OpenClaw orchestrators fly outside the building.
 - **Per-workspace colors**: Customize beside Shared/Focus selects browser-local Floor, Wall, and Board base colors; bounded lighter/darker shades are derived automatically and persist across merged or split worktree views.
 - **Codex-first visibility**: local Codex app-server data, Codex CLI activity, typed goals, cloud tasks, subagents, approvals, input waits, and typed events share one model.
