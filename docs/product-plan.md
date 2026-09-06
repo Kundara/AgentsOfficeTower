@@ -205,7 +205,7 @@ P0 and P1 can run in parallel. P5 depends on P1 (health reporting is part of the
 
 - [ ] **Versioned provider contract** defining: provider identity and version, source kinds, typed vs. inferred confidence, discovery and snapshot support, live-event support, health reporting, optional action capabilities, schema negotiation.
 - [ ] **Resource limits in the contract**: time, memory, filesystem, network, result-size budgets per provider.
-- [ ] **Golden contract tests** any provider implementation must pass; publish fixtures.
+- [x] **Golden contract tests** for the in-process version-1 contract: built-in adapters, bounded lifecycle checks, malformed sources, cache-preserving failure, and disposal regressions. External provider templates and process isolation remain open.
 - [ ] **Out-of-process provider execution** preferred over in-process plugins; the normalized Tower model remains authoritative. Migrate one existing adapter (candidate: Cursor, the weakest/most-inferred one) as the reference implementation.
 - [ ] **SDK docs + example provider** repo/template under the `@agents-tower` scope.
 
@@ -253,3 +253,9 @@ P0 and P1 can run in parallel. P5 depends on P1 (health reporting is part of the
 ## Release theme
 
 The first shippable milestone is **Trust & Coordination v1** = Phase 0 + Phase 1 + the filter/ranking/overlap items of Phase 2, under the flagship acceptance target above. It materially evolves the product without changing its identity.
+
+## Maintenance pass — 2026-09-06
+
+Astra specialist roles preserve their low/medium/high responsibilities while the main Codex config remains user-controlled. Provider SDK v1 now has a public cached-source helper and lifecycle failure/disposal coverage. Coordination retains filesystem scope identity and all overlap-lens actors. The demo uses isolated deterministic snapshots instead of legacy presence files, with typed request lifecycle and matching visual feedback.
+
+This maintenance does not close out-of-process provider isolation, cross-peer claim envelopes, or human visual acceptance. See [self-development checks](self-development.md#deterministic-maintenance-checks) for the repeatable verification path.

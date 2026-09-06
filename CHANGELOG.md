@@ -44,6 +44,16 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Changed
 
+- Fixed active Codex tasks disappearing when image-heavy histories exceed the transport limit: workload reads now use recent turn summaries and bounded action pages, full history pages items independently, and observer attachment omits full history.
+- Fixed slow Codex discovery disappearing from the fleet: refreshes share in-flight scans and retain late results for the next update, with bounded cache expiry instead of discarding everything after five seconds.
+
+- Updated Codex history hydration to the current paginated app-server contract with explicit incomplete-history errors and no deprecated full-thread fallback. Restored native Windows Git lookup for Claude scratch repository identity, and isolated provider/storage test fixtures from machine settings.
+
+- Migrated the three read-only specialist agents and active model documentation to GPT-6 Astra, preserving their reasoning levels and the user-controlled main config. Workflow checks enforce the specialist model without forcing lead/review settings.
+- Hardened provider SDK v1 lifecycle checks and exported `StaticProjectSource`: provider failures retain cached data with explicit health, disposal suppresses late publication, observers are isolated, and harness timers and cleanup are bounded. Codex local transport failures no longer report an empty healthy inventory.
+- Replaced the legacy presence-file demo with isolated scripted snapshots and reproducible `--at` frames for request lifecycle, delegation, coordination, and visual feedback. Resolution effects match request IDs before using pending-request details.
+- Corrected advisory claim scope matching across native Windows, WSL, relative paths, and grouped Codex task directories; claim storage uses validated atomic records. The overlap lens retains actors beyond its six-card display limit, deduplicates actor evidence, and declared claims show blockers. Needs You remains pinned through lens/search filtering, and WAIT/ASK cues sit above avatars to clear workstation monitors.
+
 - Changed team-scope CLI reads to reject a shared team cache older than five minutes, falling back to local scope with `teamDataAvailable: false` instead of silently serving stale team data, and aligned the spec's shared-workspace matching rule with the implemented Git-identity-then-exact-root behavior (both from the Codex coordination review).
 - Changed the Sessions panel per tester feedback: the header stacks heading and filter bar so they no longer overlap, Recent rows are compact single lines (ellipsized title with the full text in the tooltip, state, age), and the Cycle look and Why? card actions were removed along with the browser Map/Terminal toggle — the terminal surface lives in the CLI.
 - Changed `aot stop` to wait up to 20 seconds for the server to drain observers before reporting an unresolved stop.

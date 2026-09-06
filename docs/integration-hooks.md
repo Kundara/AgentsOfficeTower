@@ -1287,3 +1287,14 @@ Today the project does not yet fully ride:
 - direct Claude or Cursor session reply steering
 
 That is the current observability contract of Agents Office Tower.
+
+## Provider lifecycle and simulation boundary
+
+Provider integration implementations share the version-1 source lifecycle documented in [Provider SDK](provider-sdk.md). A failed Codex local app-server read becomes error health before usable data exists, or degraded health with preserved cached agents and timestamps after a successful read. It must not become an empty ready result. These health changes do not change source provenance, permission boundaries, or the interpretation of a successful empty inventory.
+
+The preview simulator produces explicitly labeled fixture snapshots at the server boundary. It does not write fake provider hook sidecars or presence rosters. Request IDs connect simulated approval/input waits to their matching resolution events; the same renderer used for observed work supplies their visual cues. No simulated request is sent to an actual provider.
+Codex full-thread reads use metadata-only `thread/read` (`includeTurns: false`), ascending `thread/turns/list` metadata pages with `itemsView: notLoaded`, and independent ascending `thread/items/list` pages. The client assembles these into the existing `CodexThread` result with full turn items. Repeated or malformed cursors, malformed pages, provider errors, and histories exceeding 100 turn pages or 2,000 item pages fail explicitly rather than returning incomplete history or retrying deprecated hydration. Existing caller timeouts still apply.
+
+`thread/environment/connected` and `thread/environment/disconnected` are attachment telemetry; `rawResponse/completed` is internal response-usage accounting. Tower explicitly ignores all three for workload, history cues, and completion classification. A raw response completion or environment disconnect is not a final-answer signal. The protocol drift guard tracks these reviewed methods against the installed schema.
+
+Codex workload reads are bounded independently of total history size: four recent turn summaries plus at most twenty recent items from the latest turn. Full-history retrieval uses separate turn metadata and item pages. Observer attachment requests `excludeTurns: true`; it must not reintroduce a full-history response before the bounded refresh.

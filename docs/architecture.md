@@ -134,7 +134,7 @@ Sources:
 
 - Demo preview harness
   - disposable fake app workspace for visual/testing passes
-  - scripted presence timeline with demo agents, demo skills, and room config
+  - isolated in-memory snapshot timeline with typed fixture requests, request resolutions, and deterministic `--at <seconds>` frames; demo preview never starts real provider monitors
   - auto-cleanup on exit unless launched with `--keep`
 
 - Browser mode
@@ -537,3 +537,14 @@ Sources:
 
 - [Aseprite files](https://www.aseprite.org/docs/files)
 - [Aseprite slices export](https://www.aseprite.org/docs/slices/)
+
+## Adapter and coordination maintenance
+
+The version-1 provider boundary remains `ProjectAdapter` → `ProjectSource` → normalized snapshots. `StaticProjectSource` is exported from the core entrypoint; loaders publish through a generation guard, convert failures into health, preserve cached data timestamps on failure, and stop publishing after disposal. Subscriber failures cannot prevent other subscribers from receiving a snapshot. Codex local transport failures reach this shared boundary rather than becoming empty ready snapshots. The contract harness checks warm, refresh, snapshot reads, and disposal with cleared per-operation timers and cleanup after malformed providers. These are in-process checks, not cancellation or resource isolation; out-of-process providers remain a separate roadmap item.
+
+Declared claims use atomic file replacement and validate record identity, scope, lifecycle, and timestamps before they become visible. Invalid records are ignored without being rewritten or mistaken for active work. Overlap compares filesystem paths relative to each claim's real project root, normalizes Windows/WSL spelling and dot segments, preserves POSIX case, and does not collapse dated Codex task directories into their grouped floor identity. The browser caps evidence cards at six while the overlap lens retains every detected actor. `blockedOn` is visible alongside the declared scope and heartbeat.
+
+Demo preview injects a scripted fleet source at the server boundary. It shares the production snapshot renderer and SSE transport while bypassing provider discovery, account sessions, operational-history publication, and shared-room configuration. Fixture requests advance through the timeline; browser mutations are refused. A request-resolution effect only borrows the current request's question/decision profile when request IDs match.
+Codex history hydration is paginated at the app-server boundary. Workload polling reads metadata, four newest turn summaries, and at most twenty recent items from the latest turn. It preserves summary replies outside that action window and keeps chronological order. Full-history reads page turn metadata and items independently, reducing oversized item pages down to one item before reporting an explicit error. Observer attachment requests metadata only. The monitor still consumes the same assembled thread type; history volume no longer determines whether a real agent gets a desk. Filesystem and project identities remain separate: native Git receives a host filesystem path even when the shared snapshot identifies the checkout with canonical `/mnt/<drive>/...` spelling. This also restores repository identity for deleted Claude scratch worktrees on Windows.
+
+Project discovery shares one current scan per provider/query scope. After one minute an unresponsive scan can be superseded; generation checks prevent its eventual completion from publishing over or releasing its replacement. Fleet callers wait at most five seconds, while late results remain available for the next refresh. Successful results are retained for at most one minute without renewal on failure; successful empty results replace old evidence. This avoids repeatedly discarding slow Codex inventories while keeping ordinary fleet reads responsive.

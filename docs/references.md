@@ -30,12 +30,10 @@
   Repository instruction discovery, precedence, and scope.
 - [Codex Skills](https://developers.openai.com/codex/skills)
   Repo skill discovery under `.agents/skills`, progressive disclosure, frontmatter, and UI metadata.
-- [Using GPT-5.6](https://developers.openai.com/api/docs/guides/latest-model)
-  Current GPT-5.6 family, explicit Sol routing, reasoning-effort guidance, and migration baseline.
-- [Upgrading to GPT-5.6 Sol](https://developers.openai.com/api/docs/guides/upgrading-to-gpt-5p6-sol)
-  Migration classification, role-aware model mapping, compatibility gates, and validation matrix.
-- [Prompting guidance for GPT-5.6 Sol](https://developers.openai.com/api/docs/guides/prompt-guidance-gpt-5p6)
-  Outcome-first prompts, autonomy boundaries, tool routing, delegation, stopping rules, and validation guidance.
+- [GPT-6 Astra model](https://developers.openai.com/api/docs/models/gpt-6-astra)
+  Explicit `gpt-6-astra` specialist routing and supported reasoning levels; checked 2026-09-05.
+- [Using GPT-6 Astra](https://developers.openai.com/api/docs/guides/latest-model)
+  Migration guidance: preserve effective reasoning effort. Tower observes provider sessions; this role migration does not add Responses API calls or credentials.
 
 ## Claude
 

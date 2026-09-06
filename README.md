@@ -12,6 +12,7 @@ Agents Office Tower is not a chat replay tool. It is a workload surface: what is
 - **Fleet mode by default**: discovered Codex workspaces appear together, with Git-linked worktrees merged by repository unless **Split Worktrees** is enabled. Merged floors keep one logical agent identity and prefer the snapshot matching that agent's real working directory. Projectless Codex tasks, locally materialized Claude Home work, and recent remote Claude Home work metadata are combined at tables on the street-level Chat Café floor. Codex Quick Chat becomes visible after **Add to task**; ordinary ChatGPT and Claude chat history remains outside the supported local session APIs.
 - **A real tower cutaway**: blue-brick workspace floors with restrained seams share a straight full-width crown, facade, and foundation above a pixel-art Chat Café; grounded avatars move through the navigation grid while only roaming Hermes/OpenClaw orchestrators fly outside the building.
 - **Per-workspace colors**: Customize beside Shared/Focus selects browser-local Floor, Wall, and Board base colors; bounded lighter/darker shades are derived automatically and persist across merged or split worktree views.
+- **Bounded workload reads**: live Codex polling reads recent state and actions independently of full history size, so long image-heavy tasks remain observable.
 - **Codex-first visibility**: local Codex app-server data, Codex CLI activity, typed goals, cloud tasks, subagents, approvals, input waits, and typed events share one model.
 - **Hermes and OpenClaw support**: Hermes sessions come from durable state, live process hints, and optional hook sidecars, while OpenClaw sessions come from its Gateway; projectless Hermes and unmatched OpenClaw orchestrators hover in the left-side sky outside the tower instead of creating fake floors.
 - **CLI built in**: inspect snapshots, watch terminal views, launch the web server, or query the running tower from scripts.
@@ -56,7 +57,7 @@ Open [http://127.0.0.1:4181](http://127.0.0.1:4181).
 Or run it without cloning anything:
 
 ```bash
-npx agents-office-tower demo preview   # disposable demo office
+npx agents-office-tower demo preview   # isolated scripted demo office
 npm install -g agents-office-tower     # installs the `aot` binary
 aot web                                # fleet mode on port 4181
 ```
@@ -114,7 +115,7 @@ They are designed for bounded visibility, not remote control. Skills can query t
 
 ## Codex Workflow
 
-The trusted-project config pins lead and review work to `gpt-5.6-sol`, enables bounded multi-agent v2 collaboration, and registers read-only mapping, copy, and verification roles. The lead agent owns integration and final validation; workers stay one level deep and do not share edit scopes.
+The specialist agent files pin mapping, copy, and verification to `gpt-6-astra`, with medium, low, and high reasoning respectively. The main config retains role registration and bounded multi-agent v2 collaboration; lead and review model settings remain user-controlled. The lead agent owns integration and final validation; workers stay one level deep and do not share edit scopes.
 
 See [docs/agent-workflows.md](docs/agent-workflows.md) for the model baseline, role-selection rules, delegation handoff, permission boundary, and validation commands.
 
@@ -159,7 +160,7 @@ The VS Code panel embeds the real office renderer by starting a local Agents Off
 ## Repo Layout
 
 - `.agents/skills`: repo-discovered Codex skills for tower operations and coordination
-- `.codex`: GPT-5.6 project defaults and bounded specialist role definitions
+- `.codex`: GPT-6 Astra specialist roles and bounded collaboration registration
 - `packages/core`: discovery, adapters, room parsing, workload policy, and snapshot assembly
 - `packages/web`: browser server, renderer, routes, and client bundle
 - `packages/cli`: `web`, `snapshot`, `watch`, `web query`, demo, and integration commands
@@ -188,3 +189,9 @@ The VS Code panel embeds the real office renderer by starting a local Agents Off
 ## License
 
 The code in this repository is licensed under the [MIT License](LICENSE). Bundled art assets remain under their original authors' terms as listed in Asset Credits and [docs/references.md](docs/references.md); they are not relicensed by the MIT grant.
+
+## Reproducible demo checks
+
+`aot demo preview --port 4182 --at 5` freezes the approval stage, `--at 16` freezes input, and `--at 24` freezes resolution feedback. Without `--at`, the timeline advances normally. Demo sessions are labeled fixtures: no real providers, requests, sharing, or operational history are connected. Preview uses the production snapshot renderer, with browser writes disabled.
+
+Provider maintainers can import `StaticProjectSource` and `runAdapterContractChecks` from `@agents-tower/core`; see [Provider SDK](docs/provider-sdk.md) for lifecycle, health, and timeout semantics. Coordination claims accept equivalent native Windows, WSL, and relative scope paths; evidence remains advisory and the overlap lens includes all detected actors.

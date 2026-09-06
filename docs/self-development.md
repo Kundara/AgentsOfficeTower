@@ -27,7 +27,7 @@ A good iteration improves at least one of these:
 
 ## Current technical priorities
 
-1. Keep the shared adapter registry and snapshot assembler authoritative across all front ends.
+1. Keep the shared adapter registry and snapshot assembler authoritative across all front ends; retain the version-1 lifecycle regressions for degraded cached data, disposal, subscriber isolation, and bounded contract checks.
 2. Improve real session discovery before inventing synthetic presence.
 3. Increase event-level transparency so visible state is traceable to real provider signals.
 4. Split the remaining oversized Claude and Hermes provider façades into one-way `*-lib` dependency DAGs while preserving their public exports.
@@ -178,3 +178,11 @@ A good iteration improves at least one of these:
 - full transcript replay inside the room scene
 - replacing the Codex thread UI
 - using decorative pixel art that weakens status clarity
+
+## Deterministic maintenance checks
+
+- Run `npm run check:agent-workflows` for Astra specialist policy; preserve user-selected lead configuration.
+- Run the full `npm run check` after a build, including provider contract, coordination, demo-fixture, demo-source, and request-cue regressions.
+- Capture `aot demo preview --port 4182 --at 5`, `--at 16`, and `--at 24` to inspect approval, input, and resolution feedback. Keep the demo on a separate port from the normal fleet.
+- Pair fixture proof with a rebuilt normal-fleet readiness, server metadata, fleet, and typed status check. Fixture success does not establish live provider availability or human visual acceptance.
+- Continue toward process isolation for third-party providers; timeout checks alone cannot cancel a stuck loader or bound synchronous work.

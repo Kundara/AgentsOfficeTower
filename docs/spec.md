@@ -539,7 +539,7 @@ Current-workload rules:
 ## Internal doc map
 
 - [agent-workflows.md](./agent-workflows.md)
-  GPT-5.6 Codex configuration, roles, delegation, permission boundaries, skills, and workflow validation.
+  GPT-6 Astra Codex configuration, roles, delegation, permission boundaries, skills, and workflow validation.
 
 - [architecture.md](./architecture.md)
   System design and module ownership.
@@ -549,3 +549,16 @@ Current-workload rules:
   Improvement priorities.
 - [references.md](./references.md)
   External sources.
+
+## Simulation and contract regression bar
+
+- Demo preview must be explicitly labeled and isolated from real provider connections, account inventory, sharing settings, session actions, and operational history.
+- Its timeline must be reproducible with an injected clock or `--at <seconds>`, and exercise active work, parent/child delegation, typed approval/input waits, matching request resolutions, and completion cooldown through the production renderer.
+- A resolved request must not inherit question/decision feedback from a different pending request on the same thread.
+- The overlap lens must retain all matching agents even when evidence cards are capped; duplicate actor IDs must not invent overlap.
+- Declared-scope advice must match equivalent absolute/relative Windows and WSL paths, preserve case on POSIX paths, and retain file identity inside grouped Codex task directories.
+- Adapter failures must be visible as health without renewing cached data timestamps. Disposed sources must not publish late loader results. Harness timeouts must release their timers and always attempt provider cleanup.
+
+- A bounded discovery wait must not permanently hide a real workspace merely because its provider scan completes after the caller deadline. Late completed scans must feed subsequent fleet refreshes, with bounded retention and no fabricated session presence.
+
+- Large Codex histories must not hide live sessions. Workload polling must fetch bounded recent state/actions, while full-history reads paginate items independently of turns. Final answers, pending requests and ongoing turn evidence retain their existing seating semantics.
