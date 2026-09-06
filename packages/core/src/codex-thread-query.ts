@@ -132,7 +132,7 @@ export async function readCodexThreadWithTimeout(
   timeoutMs = APP_SERVER_THREAD_READ_TIMEOUT_MS
 ): Promise<CodexThread> {
   return await withTimeout(
-    client.readThread(threadId),
+    client.readThread(threadId, { history: "workload" }),
     timeoutMs,
     "thread/read"
   );

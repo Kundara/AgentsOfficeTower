@@ -5,6 +5,7 @@ const { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } = require(
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 
+const { canonicalizeProjectPath } = require("../dist/project-paths.js");
 const { resolveClaudeScratchpadOwner, resolveProjectIdentity } = require("../dist/project-identity.js");
 
 test("deleted Claude scratch worktrees inherit their owning repository identity", async () => {
@@ -30,11 +31,11 @@ test("deleted Claude scratch worktrees inherit their owning repository identity"
     writeFileSync(join(transcriptDir, `${sessionId}.jsonl`), JSON.stringify({ sessionId, cwd: ownerRoot }) + "\n");
 
     assert.deepEqual(await resolveClaudeScratchpadOwner(scratchRoot, claudeConfig), {
-      ownerRoot,
+      ownerRoot: canonicalizeProjectPath(ownerRoot),
       worktreeName: "example-wt"
     });
     assert.deepEqual(await resolveClaudeScratchpadOwner(bareScratchRoot, claudeConfig), {
-      ownerRoot,
+      ownerRoot: canonicalizeProjectPath(ownerRoot),
       worktreeName: "scratchpad"
     });
     const previousClaudeConfig = process.env.CLAUDE_CONFIG_DIR;
@@ -44,7 +45,7 @@ test("deleted Claude scratch worktrees inherit their owning repository identity"
       assert.equal(identity.repoUrl, "https://example.invalid/acme/example-workspace");
       assert.equal(identity.repoName, "example-workspace");
       assert.match(identity.rootCommit, /^[a-f0-9]{40}$/);
-      assert.equal(identity.gitRoot, realpathSync(ownerRoot));
+      assert.equal(identity.gitRoot, canonicalizeProjectPath(realpathSync(ownerRoot)));
       assert.equal(identity.worktreeName, "example-wt");
       const bareIdentity = await resolveProjectIdentity(bareScratchRoot);
       assert.equal(bareIdentity.repoUrl, "https://example.invalid/acme/example-workspace");

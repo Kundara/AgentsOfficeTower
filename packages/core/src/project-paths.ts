@@ -4,6 +4,7 @@ import { basename, join, normalize } from "node:path";
 import { platform } from "node:process";
 
 import { withAppServerClient } from "./app-server";
+import { DiscoverySourceCache } from "./services/discovery-source-cache";
 import type { CodexThread } from "./types";
 
 export interface DiscoveredProject {
@@ -21,7 +22,7 @@ const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
 const MIN_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 100;
 const MAX_CODEX_PROJECT_DISCOVERY_THREAD_LIMIT = 400;
 const CODEX_PROJECT_DISCOVERY_THREAD_MULTIPLIER = 20;
-const PROJECT_DISCOVERY_SOURCE_TIMEOUT_MS = 5000;
+const projectDiscoveryCache = new DiscoverySourceCache<DiscoveredProject>();
 const TRANSIENT_PROJECT_ROOTS = new Set(["/tmp", "/var/tmp", "/dev/shm"]);
 const CODEX_CHAT_DATE_SEGMENT = /^\d{4}-\d{2}-\d{2}$/;
 const CODEX_CHAT_PROJECT_LABEL = "Chat";
@@ -408,22 +409,14 @@ export async function discoverCodexProjects(limit = 20): Promise<DiscoveredProje
 export async function discoverProjects(limit = 20): Promise<DiscoveredProject[]> {
   const { PROJECT_ADAPTERS } = await import("./adapters");
 
-  const withDiscoveryTimeout = (
-    promise: Promise<DiscoveredProject[]>
-  ): Promise<DiscoveredProject[]> =>
-    Promise.race([
-      promise,
-      new Promise<DiscoveredProject[]>((resolve) => {
-        setTimeout(() => resolve([]), PROJECT_DISCOVERY_SOURCE_TIMEOUT_MS).unref();
-      })
-    ]).catch(() => []);
-
+  const readSource = (id: string, load: () => Promise<DiscoveredProject[]>) =>
+    projectDiscoveryCache.read(`${id}:${limit}`, load);
   const discoveredProjectLists: DiscoveredProject[][] = await Promise.all([
-    withDiscoveryTimeout(discoverCodexConfiguredProjects(limit)),
-    withDiscoveryTimeout(discoverCodexProjects(limit)),
+    readSource("codex-config", () => discoverCodexConfiguredProjects(limit)),
+    readSource("codex-threads", () => discoverCodexProjects(limit)),
     ...PROJECT_ADAPTERS
       .filter((adapter) => typeof adapter.discoverProjects === "function")
-      .map((adapter) => withDiscoveryTimeout(adapter.discoverProjects!(limit)))
+      .map((adapter) => readSource(adapter.id, () => adapter.discoverProjects!(limit)))
   ]);
 
   return mergeDiscoveredProjectLists(discoveredProjectLists, limit);

@@ -964,6 +964,12 @@ export function buildDashboardEventFromAppServerMessage(
   const requestId = "id" in message ? String(message.id) : undefined;
 
   switch (method) {
+    // Attachment telemetry does not establish agent activity or a final answer.
+    case "thread/environment/connected":
+    case "thread/environment/disconnected":
+    // Internal upstream usage accounting is not a user-facing response event.
+    case "rawResponse/completed":
+      return null;
     case "error": {
       const detail = diagnosticMessage(params, "message", "error") || "Codex app-server error";
       return eventBase(context, method, params, {

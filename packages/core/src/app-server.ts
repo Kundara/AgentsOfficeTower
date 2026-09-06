@@ -428,12 +428,89 @@ export class CodexAppServerClient {
     return threads.slice(0, requestedLimit);
   }
 
-  async readThread(threadId: string): Promise<CodexThread> {
+  async readThread(threadId: string, options: { history?: "full" | "workload" } = {}): Promise<CodexThread> {
     const result = await this.request<{ thread: CodexThread }>("thread/read", {
       threadId,
-      includeTurns: true
+      includeTurns: false
     });
-    return result.thread;
+    const workload = options.history === "workload";
+    const turns: CodexThread["turns"] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; ; page++) {
+      if (page >= 100) throw new Error("thread/turns/list exceeded 100 pages; full history is incomplete");
+      const response: {
+        data: Array<CodexThread["turns"][number] & { itemsView: string }>;
+        nextCursor: string | null;
+      } = await this.request("thread/turns/list", {
+        threadId, cursor, limit: workload ? 4 : 100,
+        sortDirection: workload ? "desc" : "asc",
+        itemsView: workload ? "summary" : "notLoaded"
+      });
+      if (!Array.isArray(response.data) || response.data.some(turn => !Array.isArray(turn.items))) {
+        throw new Error("thread/turns/list returned malformed turns; history is incomplete");
+      }
+      turns.push(...response.data);
+      if (workload) { turns.reverse(); break; }
+      if (response.nextCursor === null) break;
+      cursor = this.nextHistoryCursor(response.nextCursor, seenCursors, "thread/turns/list");
+    }
+    if (turns.length === 0) return { ...result.thread, turns };
+
+    // Live occupancy needs recent state and actions, not every historical image/tool result.
+    // Full history uses independent item pages so one long turn cannot form an enormous response.
+    const entries: Array<{ turnId: string; item: CodexThread["turns"][number]["items"][number] }> = [];
+    const itemCursors = new Set<string>();
+    cursor = null;
+    const maxPages = workload ? 4 : 2000;
+    for (let page = 0; page < maxPages; page++) {
+      const response = await this.readThreadItemPage(threadId, cursor, workload ? turns[turns.length - 1].id : null, workload ? "desc" : "asc");
+      if (!Array.isArray(response.data) || response.data.some(entry => !entry.item || typeof entry.turnId !== "string")) {
+        throw new Error("thread/items/list returned malformed items; history is incomplete");
+      }
+      entries.push(...response.data);
+      if (response.nextCursor === null) break;
+      cursor = this.nextHistoryCursor(response.nextCursor, itemCursors, "thread/items/list");
+      if (!workload && page === maxPages - 1) {
+        throw new Error(`thread/items/list exceeded ${maxPages} pages; full history is incomplete`);
+      }
+    }
+    if (workload) entries.reverse();
+    const byTurn = new Map(turns.map(turn => [turn.id, turn]));
+    if (!workload) for (const turn of turns) turn.items = [];
+    for (const entry of entries) {
+      const turn = byTurn.get(entry.turnId);
+      if (!turn) {
+        if (workload) continue;
+        throw new Error("thread/items/list returned an unknown turn; history changed during the read");
+      }
+      // Summary messages stay available if outside the recent action window.
+      turn.items = turn.items.filter(item => item.id !== entry.item.id);
+      turn.items.push(entry.item);
+    }
+    if (!workload) for (const turn of turns) turn.itemsView = "full";
+    return { ...result.thread, turns };
+  }
+
+  private nextHistoryCursor(value: unknown, seen: Set<string>, method: string): string {
+    if (typeof value !== "string" || !value || seen.has(value)) {
+      throw new Error(`${method} returned an invalid or repeated cursor; full history is incomplete`);
+    }
+    seen.add(value);
+    return value;
+  }
+
+  private async readThreadItemPage(threadId: string, cursor: string | null, turnId: string | null, sortDirection: SortDirection): Promise<{
+    data: Array<{ turnId: string; item: CodexThread["turns"][number]["items"][number] }>;
+    nextCursor: string | null;
+  }> {
+    for (let limit = 5; ; limit = Math.max(1, Math.floor(limit / 2))) {
+      try {
+        return await this.request("thread/items/list", { threadId, turnId, cursor, limit, sortDirection });
+      } catch (error) {
+        if (limit === 1 || !(error instanceof Error) || !error.message.startsWith("app-server message exceeded ")) throw error;
+      }
+    }
   }
 
   async getThreadGoal(threadId: string): Promise<AppServerThreadGoal | null> {
@@ -441,9 +518,9 @@ export class CodexAppServerClient {
     return result.goal ?? null;
   }
 
-  async resumeThread(threadId: string): Promise<CodexThread> {
+  async resumeThread(threadId: string, excludeTurns = false): Promise<CodexThread> {
     const result = await this.request<{ thread: CodexThread }>("thread/resume", {
-      threadId
+      excludeTurns, threadId
     });
     return result.thread;
   }

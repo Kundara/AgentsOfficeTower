@@ -124,6 +124,7 @@ export type ThreadStatus =
 
 export interface CodexTurn {
   id: string;
+  itemsView?: "notLoaded" | "summary" | "full";
   status: "completed" | "interrupted" | "failed" | "inProgress";
   error: { message?: string } | null;
   items: ThreadItem[];

@@ -19,6 +19,9 @@ const knownNotificationMethods = [
   "thread/name/updated",
   "thread/goal/updated",
   "thread/goal/cleared",
+  // Environment attachment is transport state, not agent activity or completion.
+  "thread/environment/connected",
+  "thread/environment/disconnected",
   "thread/settings/updated",
   "thread/tokenUsage/updated",
   "turn/started",
@@ -32,6 +35,8 @@ const knownNotificationMethods = [
   "item/autoApprovalReview/completed",
   "item/completed",
   "rawResponseItem/completed",
+  // Internal upstream usage accounting; deliberately omitted from workload events.
+  "rawResponse/completed",
   "item/agentMessage/delta",
   "item/plan/delta",
   "command/exec/outputDelta",

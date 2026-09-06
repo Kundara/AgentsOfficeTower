@@ -2600,7 +2600,9 @@ test("fresh interrupted read-only turns without a final answer remain live throu
   }), false);
 });
 
-test("fresh unhydrated notLoaded desktop thread after a user prompt reserves a desk briefly", async () => {
+test("fresh unhydrated notLoaded desktop thread after a user prompt reserves a desk briefly", async (t) => {
+  // Provider fixture I/O must not consume the eight-second prompt grace window.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const promptedThread = {
     ...sampleThread(),
     status: { type: "notLoaded" },

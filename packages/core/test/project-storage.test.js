@@ -17,9 +17,11 @@ const {
 const { resetAppSettingsCacheForTest } = require("../dist/app-settings.js");
 
 function withTempAppData() {
+  const previousLocalAppData = process.env.LOCALAPPDATA;
   const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
   const previousCodexHome = process.env.CODEX_HOME;
   const configHome = mkdtempSync(join(tmpdir(), "codex-office-app-data-"));
+  process.env.LOCALAPPDATA = configHome;
   process.env.XDG_CONFIG_HOME = configHome;
   delete process.env.CODEX_HOME;
   resetAppSettingsCacheForTest();
@@ -27,6 +29,8 @@ function withTempAppData() {
   return {
     configHome,
     restore() {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
       if (previousXdgConfigHome !== undefined) {
         process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
       } else {

@@ -402,7 +402,7 @@ export class ProjectLiveMonitor extends EventEmitter {
 
     let activeTurn = latestInProgressTurn(thread);
     if (!activeTurn && thread.status.type === "active") {
-      thread = await this.client.readThread(threadId);
+      thread = await this.client.readThread(threadId, { history: "workload" });
       this.threads.set(threadId, thread);
       activeTurn = latestInProgressTurn(thread);
     }
@@ -874,7 +874,7 @@ export class ProjectLiveMonitor extends EventEmitter {
         .map(async (threadId) => {
           try {
             await withTimeout(
-              this.client?.resumeThread(threadId) ?? Promise.reject(new Error("client unavailable")),
+              this.client?.resumeThread(threadId, true) ?? Promise.reject(new Error("client unavailable")),
               APP_SERVER_SUBSCRIPTION_TIMEOUT_MS,
               `thread/resume ${threadId.slice(0, 8)}`
             );
@@ -1392,7 +1392,7 @@ export class ProjectLiveMonitor extends EventEmitter {
     }
 
     try {
-      const thread = await this.client.readThread(threadId);
+      const thread = await this.client.readThread(threadId, { history: "workload" });
       const parentThreadId = parentThreadIdForThread(thread);
       const canonicalCwd = canonicalizeProjectPath(thread.cwd) ?? thread.cwd;
       const belongsToProject =

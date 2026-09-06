@@ -54,6 +54,25 @@ const {
 const { cursorCloudAdapter } = require("../dist/adapters/cursor-cloud.js");
 
 const execFileAsync = promisify(execFile);
+const { getProjectStoragePath } = require("../dist/project-storage.js");
+
+// Isolate every settings/appearance write, including Windows' native app-data path.
+let fixtureEnvironment;
+let fixtureAppData;
+test.beforeEach(async () => {
+  fixtureEnvironment = Object.fromEntries(["CODEX_HOME", "LOCALAPPDATA", "APPDATA", "XDG_CONFIG_HOME"].map((key) => [key, process.env[key]]));
+  fixtureAppData = await mkdtemp(path.join(os.tmpdir(), "claude-cursor-app-data-"));
+  for (const key of Object.keys(fixtureEnvironment)) process.env[key] = fixtureAppData;
+  resetAppSettingsCacheForTest();
+});
+test.afterEach(async () => {
+  for (const [key, value] of Object.entries(fixtureEnvironment)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  resetAppSettingsCacheForTest();
+  await rm(fixtureAppData, { recursive: true, force: true });
+});
 
 async function withTempAppData(prefix, fn) {
   const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
@@ -1480,7 +1499,7 @@ test("typed Claude notification hooks surface a recent agent message", () => {
 test("Cursor generic typed session-start falls back to planning instead of synthetic thinking", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-local-sessionstart-"));
   const projectRoot = path.join(tempRoot, "project");
-  const hooksDir = path.join(projectRoot, ".codex-agents", "cursor-hooks");
+  const hooksDir = getProjectStoragePath(projectRoot, "cursor-hooks");
   const sessionId = "cursor-hook-sessionstart";
   const hookFile = path.join(hooksDir, `${sessionId}.jsonl`);
   const now = Date.now();
@@ -2619,7 +2638,7 @@ test("cursor local snapshot ignores transcript-only state when no typed hooks ex
   const logsDir = path.join(tempRoot, "logs");
   const workspaceDir = path.join(workspaceStorageDir, "workspace-1");
   const cursorProjectsDir = path.join(tempRoot, "cursor-projects");
-  const projectSlug = projectRoot.replace(/^\/+/, "").replace(/[\\/]+/g, "-");
+  const projectSlug = projectRoot.replace(/^[\\/]+/, "").replace(/[:\\/]+/g, "-");
   const sessionId = "11111111-2222-3333-4444-555555555555";
   const transcriptDir = path.join(cursorProjectsDir, projectSlug, "agent-transcripts", sessionId);
   await mkdir(projectRoot, { recursive: true });
@@ -2720,7 +2739,7 @@ test("cursor local snapshot ignores transcript tool activity when no typed hooks
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-local-transcript-edit-"));
   const projectRoot = path.join(tempRoot, "project");
   const cursorProjectsDir = path.join(tempRoot, "cursor-projects");
-  const projectSlug = projectRoot.replace(/^\/+/, "").replace(/[\\/]+/g, "-");
+  const projectSlug = projectRoot.replace(/^[\\/]+/, "").replace(/[:\\/]+/g, "-");
   const sessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
   const transcriptDir = path.join(cursorProjectsDir, projectSlug, "agent-transcripts", sessionId);
   const transcriptFile = path.join(transcriptDir, `${sessionId}.jsonl`);
@@ -2770,10 +2789,10 @@ test("cursor local snapshot reads typed project hook sidecars and ignores transc
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-local-hooks-"));
   const projectRoot = path.join(tempRoot, "project");
   const cursorProjectsDir = path.join(tempRoot, "cursor-projects");
-  const projectSlug = projectRoot.replace(/^\/+/, "").replace(/[\\/]+/g, "-");
+  const projectSlug = projectRoot.replace(/^[\\/]+/, "").replace(/[:\\/]+/g, "-");
   const transcriptSessionId = "transcript-only-session";
   const transcriptDir = path.join(cursorProjectsDir, projectSlug, "agent-transcripts", transcriptSessionId);
-  const hooksDir = path.join(projectRoot, ".codex-agents", "cursor-hooks");
+  const hooksDir = getProjectStoragePath(projectRoot, "cursor-hooks");
   const hookSessionId = "cursor-hook-session";
   const transcriptFile = path.join(transcriptDir, `${transcriptSessionId}.jsonl`);
   const hookFile = path.join(hooksDir, `${hookSessionId}.jsonl`);
@@ -2860,7 +2879,7 @@ test("cursor local snapshot reads typed project hook sidecars and ignores transc
 test("cursor hook-backed local failures become typed blocked state", { concurrency: false }, async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-local-hook-failure-"));
   const projectRoot = path.join(tempRoot, "project");
-  const hooksDir = path.join(projectRoot, ".codex-agents", "cursor-hooks");
+  const hooksDir = getProjectStoragePath(projectRoot, "cursor-hooks");
   const sessionId = "cursor-hook-failure-session";
   const hookFile = path.join(hooksDir, `${sessionId}.jsonl`);
   const now = Date.now();
@@ -2898,7 +2917,7 @@ test("cursor hook-backed local failures become typed blocked state", { concurren
 test("cursor hook snapshot ignores future-skewed stale records when newer lines are appended", { concurrency: false }, async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cursor-local-hook-skew-"));
   const projectRoot = path.join(tempRoot, "project");
-  const hooksDir = path.join(projectRoot, ".codex-agents", "cursor-hooks");
+  const hooksDir = getProjectStoragePath(projectRoot, "cursor-hooks");
   const sessionId = "cursor-hook-future-skew";
   const hookFile = path.join(hooksDir, `${sessionId}.jsonl`);
   const now = Date.now();
