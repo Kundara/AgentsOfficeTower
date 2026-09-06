@@ -195,12 +195,18 @@ export class FleetLiveService {
 
   constructor(
     private readonly seedProjects: ProjectDescriptor[],
-    private readonly explicitProjects: boolean
+    private readonly explicitProjects: boolean,
+    private readonly demoSource?: () => FleetResponse
   ) {
     this.projects = explicitProjects ? [...seedProjects] : [];
   }
 
   async start(): Promise<void> {
+    if (this.demoSource) {
+      await this.publish();
+      if (!this.cloudTimer) this.cloudTimer = setInterval(() => { void this.publish(); }, 250);
+      return;
+    }
     if (this.startPromise) {
       await this.startPromise;
       return;
@@ -248,6 +254,7 @@ export class FleetLiveService {
   }
 
   async getFleet(): Promise<FleetResponse> {
+    if (this.demoSource) return this.demoSource();
     if (this.startPromise) {
       await this.startPromise;
     }
@@ -258,7 +265,7 @@ export class FleetLiveService {
   }
 
   getPublishedFleet(): FleetResponse | null {
-    return this.fleet;
+    return this.demoSource ? this.demoSource() : this.fleet;
   }
 
   setCoordinatedTeamFleet(fleet: FleetResponse | null, hasSharedData?: boolean): void {
@@ -279,6 +286,7 @@ export class FleetLiveService {
   }
 
   getMultiplayerStatus(): MultiplayerStatus {
+    if (this.demoSource) return { enabled: false, transport: null, secure: false, peerCount: 0, note: "Isolated demo: sharing disabled." };
     const multiplayer = getStoredMultiplayerSettingsSync();
     if (!multiplayer.enabled) {
       return {
@@ -306,11 +314,13 @@ export class FleetLiveService {
   }
 
   async getProjects(): Promise<ProjectDescriptor[]> {
+    if (this.demoSource) return [...this.projects];
     await this.ensureProjectSet();
     return [...this.projects];
   }
 
   async refreshAll(): Promise<FleetResponse> {
+    if (this.demoSource) return this.demoSource();
     await this.ensureProjectSet(true);
     await refreshMonitorWithinTimeout(
       () => this.refreshSharedCloudTasks(),
@@ -503,6 +513,16 @@ export class FleetLiveService {
   }
 
   private async publish(forceProjectRefresh = false): Promise<void> {
+    if (this.demoSource) {
+      this.fleet = this.demoSource();
+      for (const response of this.clients) {
+        if (!response.destroyed && !response.writableEnded) {
+          try { response.write("event: fleet\ndata: " + JSON.stringify(this.fleet) + "\n\n"); }
+          catch { this.clients.delete(response); }
+        }
+      }
+      return;
+    }
     await this.ensureProjectSet(forceProjectRefresh);
     await refreshMonitorWithinTimeout(
       () => this.refreshAccountAgents(forceProjectRefresh),

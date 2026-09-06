@@ -1,3 +1,4 @@
+import type { FleetResponse } from "./server-types";
 import { createServer } from "node:http";
 
 import { FleetLiveService } from "./fleet-live-service";
@@ -29,12 +30,27 @@ function installClientDisconnectExceptionGuard(): void {
   });
 }
 
-export async function startWebServer(argv: string[] = process.argv.slice(2)): Promise<void> {
+export function isDemoRequestAllowed(method: string, target: string): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+  let path: string;
+  try { path = new URL(target, "http://localhost").pathname; }
+  catch { return false; }
+  return !path.startsWith("/api/") || ["/api/fleet", "/api/web-cli/query", "/api/server-meta", "/api/multiplayer", "/api/events", "/api/health", "/api/health/live", "/api/health/ready"].includes(path);
+}
+
+export async function startWebServer(
+  argv: string[] = process.argv.slice(2),
+  demoSource?: () => FleetResponse
+): Promise<void> {
   installClientDisconnectExceptionGuard();
   const options = parseArgs(argv);
-  const service = new FleetLiveService(options.projects, options.explicitProjects);
+  const service = new FleetLiveService(options.projects, options.explicitProjects, demoSource);
   const meta = buildServerMeta(options, options.projects, service.getMultiplayerStatus());
   const server = createServer((request, response) => {
+    if (demoSource && !isDemoRequestAllowed(request.method ?? "GET", request.url ?? "/")) {
+      sendJson(response, 403, { error: "Isolated demo is read-only; requests resolve only through its scripted timeline." });
+      return;
+    }
     void handleRequest(request, response, options, service).catch((error) => {
       sendJson(response, 500, {
         error: error instanceof Error ? error.message : String(error)

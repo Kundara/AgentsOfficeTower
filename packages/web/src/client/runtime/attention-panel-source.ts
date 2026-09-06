@@ -40,7 +40,7 @@ export const CLIENT_RUNTIME_ATTENTION_PANEL_SOURCE = `
       }
 
       function needsUserActionProjectRoot(snapshot, agent) {
-        if (!snapshot || !agent || !agent.needsUser) {
+        if (!snapshot || !agent || !agent.needsUser || agent.sourceKind === "demo-fixture") {
           return null;
         }
         const isLocalCodex = !agent.network && agent.provenance === "codex" && agent.source === "local";
