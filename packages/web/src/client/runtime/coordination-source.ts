@@ -9,9 +9,9 @@ export const CLIENT_RUNTIME_COORDINATION_SOURCE = `      const DESKTOP_NOTIFY_PR
             ? snapshot.activity.hotChanges
             : [];
           for (const change of hotChanges) {
-            const agents = Array.isArray(change.agents) ? change.agents : [];
-            const users = Array.isArray(change.users) ? change.users : [];
-            const branches = Array.isArray(change.branches) ? change.branches : [];
+            const agents = Array.isArray(change.agents) ? [...new Set(change.agents.filter((value) => typeof value === 'string' && value.trim()))] : [];
+            const users = Array.isArray(change.users) ? [...new Set(change.users.filter((value) => typeof value === 'string' && value.trim()))] : [];
+            const branches = Array.isArray(change.branches) ? [...new Set(change.branches.filter((value) => typeof value === 'string' && value.trim()))] : [];
             if (agents.length >= 2 || users.length >= 2 || branches.length >= 2) {
               overlaps.push({
                 projectRoot: snapshot.projectRoot,
@@ -26,7 +26,7 @@ export const CLIENT_RUNTIME_COORDINATION_SOURCE = `      const DESKTOP_NOTIFY_PR
             }
           }
         }
-        return overlaps.slice(0, 6);
+        return overlaps;
       }
 
       function overlapEvidenceLine(overlap) {
@@ -65,6 +65,7 @@ export const CLIENT_RUNTIME_COORDINATION_SOURCE = `      const DESKTOP_NOTIFY_PR
             claim.agentLabel ? "by " + claim.agentLabel : "",
             claim.scope.length > 0 ? "scope " + claim.scope.join(", ") : "",
             claim.branch ? "branch " + claim.branch : "",
+            claim.blockedOn ? "blocked on " + claim.blockedOn : "",
             "heartbeat " + (evidenceTime(claim.heartbeatAt) || "unknown")
           ].filter(Boolean).join(" \u00b7 ");
           const staleNote = claim.lifecycle === "stale"
@@ -80,7 +81,7 @@ export const CLIENT_RUNTIME_COORDINATION_SOURCE = `      const DESKTOP_NOTIFY_PR
       function renderCoordinationCards(projects) {
         const overlaps = state.overlapRows || [];
         if (overlaps.length === 0) return "";
-        const cards = overlaps.map((overlap) =>
+        const cards = overlaps.slice(0, 6).map((overlap) =>
           \`<div class="coordination-card" role="listitem"><div class="coordination-card-title">Possible overlap — \${escapeHtml(overlap.label)}</div><div class="muted coordination-card-evidence">\${escapeHtml(overlapEvidenceLine(overlap))} · \${escapeHtml(evidenceTime(overlap.lastChangedAt) || "recently")} · \${escapeHtml(overlap.confidence)} evidence</div><div class="card-actions"><button data-action="search-overlap" data-query="\${escapeHtml(overlap.label)}">Show sessions</button></div></div>\`
         ).join("");
         return \`<section class="session-group session-group-coordination" role="group" aria-label="Possible coordination overlaps, \${escapeHtml(String(overlaps.length))} findings"><div class="session-group-header"><h3>Possible overlap</h3><span>\${escapeHtml(String(overlaps.length))}</span></div><div class="session-group-items" role="list">\${cards}</div></section>\`;

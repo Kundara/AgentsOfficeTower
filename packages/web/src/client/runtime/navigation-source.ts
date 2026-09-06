@@ -1239,7 +1239,8 @@ export const CLIENT_RUNTIME_NAVIGATION_SOURCE = `
             return "avatar";
           }
           if (cue.mode === "approval" || cue.mode === "input") {
-            return agent && agent.slotId ? "side" : "avatar";
+            // A seated side cue can sit behind the workstation monitor.
+            return "avatar";
           }
           if (cue.mode === "resolved") {
             return "avatar";

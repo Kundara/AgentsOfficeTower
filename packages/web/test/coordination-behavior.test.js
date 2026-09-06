@@ -122,3 +122,24 @@ test("declared claims render side by side with detected overlaps, stale claims f
   assert.match(html, /Stale: expired without an explicit release/);
   assert.ok(!html.includes("Finished work"));
 });
+
+test("the overlap lens includes actors beyond the six visible evidence cards", () => {
+  const state = {};
+  const coordination = loadCoordination(state);
+  const projects = [snapshotWithChanges(Array.from({ length: 8 }, (_, i) => ({
+    path: `src/file-${i}.ts`, label: `file-${i}.ts`, agents: [`a-${i}`, `b-${i}`], users: [], branches: [], confidence: "typed"
+  })))];
+  coordination.refreshCoordinationState(projects);
+  assert.equal(state.overlapAgentIds.size, 16);
+  assert.ok(state.overlapAgentIds.has("a-7"));
+  const html = coordination.renderCoordinationCards(projects);
+  assert.equal((html.match(/data-action="search-overlap"/g) || []).length, 6);
+  assert.match(html, /8 findings/);
+});
+
+test("duplicate or blank actors do not invent overlap", () => {
+  const coordination = loadCoordination();
+  assert.deepEqual(coordination.detectPossibleOverlaps([snapshotWithChanges([
+    { path: "a.ts", agents: ["a", "a", ""], users: ["Me", "Me"], branches: ["main", "main"] }
+  ])]), []);
+});

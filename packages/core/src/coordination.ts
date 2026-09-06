@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join, posix } from "node:path";
 
 import { getAppDataDirectory } from "./app-settings";
 import { projectPathIdentityKey } from "./project-paths";
@@ -16,13 +16,22 @@ function claimsDirectory(projectRoot: string): string {
 }
 
 function claimFilePath(projectRoot: string, id: string): string {
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid coordination claim id.");
   return join(claimsDirectory(projectRoot), `${id}.json`);
 }
 
-function readClaimFile(path: string): CoordinationClaim | null {
+function readClaimFile(path: string, projectRoot: string): CoordinationClaim | null {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as CoordinationClaim;
-    return typeof parsed?.id === "string" && typeof parsed?.objective === "string" ? parsed : null;
+    if (!parsed || typeof parsed.id !== "string" || !/^[a-zA-Z0-9_-]+$/.test(parsed.id)
+      || path !== claimFilePath(projectRoot, parsed.id)
+      || projectPathIdentityKey(parsed.projectRoot) !== projectPathIdentityKey(projectRoot)
+      || typeof parsed.objective !== "string" || !parsed.objective.trim()
+      || !Array.isArray(parsed.scope) || parsed.scope.some((scope) => typeof scope !== "string")
+      || !["active", "released", "handoff"].includes(parsed.status)
+      || [parsed.createdAt, parsed.heartbeatAt, parsed.expiresAt].some((value) => typeof value !== "string" || !Number.isFinite(Date.parse(value)))
+      || [parsed.branch, parsed.agentLabel, parsed.blockedOn].some((value) => value !== null && typeof value !== "string")) return null;
+    return parsed;
   } catch {
     return null;
   }
@@ -31,7 +40,14 @@ function readClaimFile(path: string): CoordinationClaim | null {
 function writeClaimFile(claim: CoordinationClaim): void {
   const directory = claimsDirectory(claim.projectRoot);
   mkdirSync(directory, { recursive: true });
-  writeFileSync(claimFilePath(claim.projectRoot, claim.id), `${JSON.stringify(claim, null, 2)}\n`);
+  const target = claimFilePath(claim.projectRoot, claim.id);
+  const temporary = join(directory, `.${claim.id}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporary, `${JSON.stringify(claim, null, 2)}\n`, { flag: "wx" });
+    renameSync(temporary, target);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 function claimLifecycle(claim: CoordinationClaim, nowMs: number): CoordinationClaimLifecycle {
@@ -39,7 +55,7 @@ function claimLifecycle(claim: CoordinationClaim, nowMs: number): CoordinationCl
     return claim.status;
   }
   const expiresMs = Date.parse(claim.expiresAt);
-  return Number.isFinite(expiresMs) && nowMs > expiresMs ? "stale" : "active";
+  return Number.isFinite(expiresMs) && nowMs >= expiresMs ? "stale" : "active";
 }
 
 function shouldPruneClaim(claim: CoordinationClaim, lifecycle: CoordinationClaimLifecycle, nowMs: number): boolean {
@@ -64,6 +80,7 @@ export function startCoordinationClaim(input: {
   ttlMs?: number;
   nowMs?: number;
 }): CoordinationClaim {
+  if (!input.objective.trim()) throw new Error("A coordination claim needs an objective.");
   const nowMs = input.nowMs ?? Date.now();
   const ttlMs = Number.isFinite(input.ttlMs) && (input.ttlMs as number) > 0 ? (input.ttlMs as number) : DEFAULT_CLAIM_TTL_MS;
   const now = new Date(nowMs).toISOString();
@@ -89,7 +106,7 @@ export function heartbeatCoordinationClaim(
   id: string,
   options: { ttlMs?: number; blockedOn?: string | null; nowMs?: number } = {}
 ): CoordinationClaim | null {
-  const existing = readClaimFile(claimFilePath(projectRoot, id));
+  const existing = readClaimFile(claimFilePath(projectRoot, id), projectRoot);
   if (!existing || existing.status !== "active") {
     return null;
   }
@@ -110,7 +127,7 @@ export function releaseCoordinationClaim(
   id: string,
   options: { handoff?: boolean; nowMs?: number } = {}
 ): CoordinationClaim | null {
-  const existing = readClaimFile(claimFilePath(projectRoot, id));
+  const existing = readClaimFile(claimFilePath(projectRoot, id), projectRoot);
   if (!existing) {
     return null;
   }
@@ -135,9 +152,8 @@ export function listCoordinationClaims(projectRoot: string, nowMs = Date.now()):
       continue;
     }
     const path = join(directory, entry);
-    const claim = readClaimFile(path);
+    const claim = readClaimFile(path, projectRoot);
     if (!claim) {
-      rmSync(path, { force: true });
       continue;
     }
     const lifecycle = claimLifecycle(claim, nowMs);
@@ -156,14 +172,27 @@ export interface ClaimOverlapAdvice {
   overlapping: CoordinationClaimView[];
 }
 
-function normalizedScopePath(value: string): string {
-  return value.replace(/\\/g, "/").replace(/\/+$/g, "").toLowerCase();
+// File scopes must retain task subdirectories that project grouping intentionally collapses.
+function filesystemScopeKey(value: string): string {
+  let path = value.trim().replace(/\\/g, "/").replace(/^\/\/\?\//, "");
+  path = path.replace(/^([a-zA-Z]):\//, (_match, drive: string) => `/mnt/${drive.toLowerCase()}/`);
+  const windowsBacked = /^\/mnt\/[a-z](?:\/|$)/i.test(path);
+  path = posix.normalize(path);
+  return windowsBacked ? path.toLowerCase() : path;
 }
 
-function scopesOverlap(left: string, right: string): boolean {
-  const a = normalizedScopePath(left);
-  const b = normalizedScopePath(right);
-  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+function normalizedScopePath(projectRoot: string, value: string): string | null {
+  const scope = value.trim().replace(/\\/g, "/");
+  if (!scope) return null;
+  const absolute = scope.startsWith("/") || /^[a-zA-Z]:\//.test(scope);
+  return filesystemScopeKey(absolute ? scope : filesystemScopeKey(projectRoot) + "/" + scope);
+}
+
+function scopesOverlap(projectRoot: string, left: string, claimRoot: string, right: string): boolean {
+  const a = normalizedScopePath(projectRoot, left);
+  const b = normalizedScopePath(claimRoot, right);
+  if (!a || !b) return false;
+  return a === b || a.startsWith(b.replace(/\/$/, "") + "/") || b.startsWith(a.replace(/\/$/, "") + "/");
 }
 
 export function adviseOnClaimOverlap(
@@ -175,7 +204,7 @@ export function adviseOnClaimOverlap(
     .filter((claim) => claim.lifecycle === "active" || claim.lifecycle === "stale");
   const overlapping = claims.filter((claim) =>
     claim.scope.length > 0
-    && requestedScope.some((requested) => claim.scope.some((declared) => scopesOverlap(requested, declared)))
+    && requestedScope.some((requested) => claim.scope.some((declared) => scopesOverlap(projectRoot, requested, claim.projectRoot, declared)))
   );
   if (overlapping.length === 0) {
     return {

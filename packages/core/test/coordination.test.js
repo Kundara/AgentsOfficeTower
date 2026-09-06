@@ -140,3 +140,56 @@ test("assembled snapshots carry coordination claims", async () => {
     assert.equal(snapshot.claims[0].lifecycle, "active");
   });
 });
+
+test("scope advice canonicalizes Windows, WSL, absolute and relative paths", () => {
+  withTempHome(() => {
+    const projectRoot = "F:\\Work\\Tower";
+    startCoordinationClaim({ projectRoot, objective: "Scoped change", scope: [".\\packages\\web\\src\\..\\src"] });
+    for (const path of ["packages/web/src/app.ts", "F:\\Work\\Tower\\packages\\WEB\\src\\app.ts", "/mnt/f/Work/Tower/packages/web/src/app.ts"]) {
+      assert.equal(adviseOnClaimOverlap(projectRoot, [path]).verdict, "caution", path);
+    }
+    assert.equal(adviseOnClaimOverlap(projectRoot, ["packages/web/src-other"]).verdict, "proceed");
+    assert.equal(adviseOnClaimOverlap(projectRoot, ["."]).verdict, "caution");
+  });
+});
+
+test("scope advice preserves POSIX case and respects path boundaries", () => {
+  withTempHome(() => {
+    const projectRoot = "/work/tower";
+    startCoordinationClaim({ projectRoot, objective: "Case-sensitive work", scope: ["src/UI"] });
+    assert.equal(adviseOnClaimOverlap(projectRoot, ["src/ui"]).verdict, "proceed");
+    assert.equal(adviseOnClaimOverlap(projectRoot, ["/work/tower/src/UI/view.ts"]).verdict, "caution");
+    assert.equal(adviseOnClaimOverlap(projectRoot, ["/work/tower-other/src/UI"]).verdict, "proceed");
+  });
+});
+
+test("claim expiry is exact and malformed or foreign records never become active", () => {
+  withTempHome(() => {
+    const { createHash } = require("node:crypto");
+    const { writeFileSync, readdirSync } = require("node:fs");
+    const { getAppDataDirectory } = require("../dist/app-settings.js");
+    const projectRoot = "/work/claim-fixture";
+    const claim = startCoordinationClaim({ projectRoot, objective: "Expiry", scope: ["src"], nowMs: 1000, ttlMs: 1000 });
+    assert.equal(listCoordinationClaims(projectRoot, 1999)[0].lifecycle, "active");
+    assert.equal(listCoordinationClaims(projectRoot, 2000)[0].lifecycle, "stale");
+    const directory = join(getAppDataDirectory(), "coordination", createHash("sha256").update(projectRoot).digest("hex").slice(0, 16));
+    assert.deepEqual(readdirSync(directory), [claim.id + ".json"]);
+    for (const change of [{ expiresAt: "invalid" }, { scope: null }, { projectRoot: "/other" }, { id: "../outside" }]) {
+      writeFileSync(join(directory, claim.id + ".json"), JSON.stringify({ ...claim, ...change }));
+      assert.deepEqual(listCoordinationClaims(projectRoot, 1500), []);
+      assert.equal(heartbeatCoordinationClaim(projectRoot, claim.id), null);
+    }
+    assert.throws(() => releaseCoordinationClaim(projectRoot, "../outside"), /Invalid coordination claim id/);
+    assert.throws(() => startCoordinationClaim({ projectRoot, objective: "  " }), /needs an objective/);
+  });
+});
+
+test("dated Codex task scopes keep file and task identity despite project grouping", () => {
+  withTempHome(() => {
+    const projectRoot = "F:/Users/Test/Documents/Codex/2026-09-06/demo";
+    startCoordinationClaim({ projectRoot, objective: "File A", scope: ["src/a.ts"] });
+    assert.equal(adviseOnClaimOverlap(projectRoot, [projectRoot + "/src/a.ts"]).verdict, "caution");
+    assert.equal(adviseOnClaimOverlap(projectRoot, [projectRoot + "/src/b.ts"]).verdict, "proceed");
+    assert.equal(adviseOnClaimOverlap("F:/Users/Test/Documents/Codex/2026-09-06/other", ["src/a.ts"]).verdict, "proceed");
+  });
+});

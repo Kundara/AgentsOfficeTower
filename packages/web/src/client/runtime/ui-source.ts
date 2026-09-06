@@ -32,7 +32,8 @@ export const CLIENT_RUNTIME_UI_SOURCE = `      function renderSessionCard(snapsh
 
       function sessionHierarchy(entries) {
         const sorted = [...filterSessionEntries(entries)].sort((left, right) => right.agent.updatedAt.localeCompare(left.agent.updatedAt));
-        const needsYou = sorted.filter(({ agent }) => Boolean(agent.needsUser)).sort(needsYouUrgency);
+        // Pending human requests stay pinned even when a lens or text search hides their session.
+        const needsYou = entries.filter(({ agent }) => Boolean(agent.needsUser)).sort(needsYouUrgency);
         const active = sorted.filter(({ agent }) => !agent.needsUser && isLiveSessionAgent(agent));
         const recent = sorted
           .filter(({ agent }) => !agent.needsUser && !isLiveSessionAgent(agent))

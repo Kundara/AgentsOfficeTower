@@ -492,7 +492,10 @@ export const CLIENT_RUNTIME_RENDER_SOURCE = `      function cleanReportedPath(pr
         if (!cue) {
           return null;
         }
-        const need = agent && agent.needsUser ? agent.needsUser : null;
+        const currentNeed = agent && agent.needsUser ? agent.needsUser : null;
+        // Historical cues must never borrow details from a different live request.
+        const need = currentNeed && (!event || (event.requestId && event.requestId === currentNeed.requestId))
+          ? currentNeed : null;
         if (cue.mode === "approval" || (cue.mode === "resolved" && event && event.kind === "approval")) {
           const decisionCount = Math.max(
             2,
