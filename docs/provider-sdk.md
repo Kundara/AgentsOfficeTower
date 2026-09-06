@@ -36,8 +36,10 @@ interface ProjectSource {
    Every non-ready status must carry a human-readable `detail`.
 2. **Provenance survives.** Every agent carries `confidence: "typed" | "inferred"`. Typed means the runtime gave you a structured signal; inferred means you reconstructed state from logs or files. Never upgrade inferred data to typed.
 3. **Truth before theater.** Never synthesize presence. An unobserved runtime is `unconfigured` or `degraded` with a detail — not an empty `ready`.
-4. **Snapshots are cheap and synchronous.** `getCachedSnapshot()` returns the last computed state immediately; loading happens in `warm`/`refresh`. `StaticProjectSource` in `@agents-tower/core` implements this pattern with a monotonic generation guard — wrap it unless you need custom caching.
-5. **Stay inside your budget.** Providers run inside the shared snapshot coordinator. Keep refreshes bounded (the built-ins target seconds, not minutes; the harness enforces a 10-second default timeout), keep result sizes proportional to real workload, and never block `getCachedSnapshot()` on I/O.
+4. **Snapshots are cheap and synchronous.** `getCachedSnapshot()` returns the last computed state immediately; loading happens in `warm`/`refresh`. `StaticProjectSource` in `@agents-tower/core` implements this pattern with a monotonic generation guard — wrap it unless you need custom caching. The newest requested refresh owns publication, including failures. Loader failures preserve cached agents, events, tasks, `generatedAt`, and `health.lastUpdatedAt`; cached successful data becomes `degraded`, while a source without meaningful cached data becomes `error`. A successful empty snapshot still counts as valid cached data.
+5. **Stay inside your budget.** Providers run inside the shared snapshot coordinator. Keep refreshes bounded (the built-ins target seconds, not minutes; the harness enforces a separate 10-second default timeout for warm, refresh, and disposal), keep result sizes proportional to real workload, and never block `getCachedSnapshot()` on I/O.
+
+6. **Disposal is terminal.** `StaticProjectSource.dispose()` is idempotent, clears subscribers, prevents new loads, and suppresses publication from loads already in flight. It does not cancel the underlying loader; loaders that own I/O resources must arrange cancellation themselves. Subscriber exceptions are isolated so they cannot turn a successful refresh into a provider failure or prevent other subscribers from receiving the update.
 
 ## Golden contract checks
 
@@ -50,7 +52,7 @@ const failures = await runAdapterContractChecks(myAdapter, { projectRoot: "/tmp/
 // failures: string[] — empty means the contract is satisfied
 ```
 
-The checks validate shape (id, source, capabilities, source methods), snapshot invariants (adapterId match, parseable timestamps, array fields, valid health status, detail on non-ready health, valid confidences), and behavior (refresh resolves within the timeout, dispose resolves). All built-in adapters run these checks in CI (`packages/core/test/adapter-contract.test.js`) — add your provider to the same table.
+The checks validate shape (id, source, capabilities, source methods), snapshot invariants (adapterId match, parseable timestamps, array fields, valid health status, detail on non-ready health, valid confidences), and behavior (warm, refresh, and dispose each resolve within the timeout). `refreshTimeoutMs` sets the per-operation budget for all three lifecycle calls. Snapshot getter failures and malformed sources are returned as failures, and a callable dispose method is attempted in a finally block even when earlier checks fail. Deadline timers are cleared after each operation. A timeout bounds the harness wait; it cannot forcibly cancel provider work or synchronous blocking code. All built-in adapters run these checks in CI (`packages/core/test/adapter-contract.test.js`) — add your provider to the same table.
 
 ## Registration
 

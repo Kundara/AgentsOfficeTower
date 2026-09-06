@@ -6,6 +6,7 @@ export class StaticProjectSource implements ProjectSource {
   private cachedSnapshot: AdapterSnapshot;
   private readonly listeners = new Set<() => void>();
   private refreshGeneration = 0;
+  private disposed = false;
 
   constructor(
     private readonly loadSnapshot: SnapshotLoader,
@@ -19,14 +20,33 @@ export class StaticProjectSource implements ProjectSource {
   }
 
   async refresh(_reason: AdapterRefreshReason): Promise<void> {
+    if (this.disposed) return;
     const generation = ++this.refreshGeneration;
-    const snapshot = await this.loadSnapshot();
-    if (generation !== this.refreshGeneration) {
-      return;
+    let snapshot: AdapterSnapshot;
+    try {
+      snapshot = await this.loadSnapshot();
+    } catch (error) {
+      const cached = this.cachedSnapshot;
+      const hasCachedData = cached.health.status === "ready" || cached.health.status === "degraded"
+        || cached.agents.length > 0 || cached.events.length > 0 || (cached.cloudTasks?.length ?? 0) > 0;
+      snapshot = {
+        ...cached,
+        health: {
+          ...cached.health,
+          status: hasCachedData ? "degraded" : "error",
+          detail: `Snapshot load failed: ${error instanceof Error ? error.message : String(error)}`
+        }
+      };
     }
+    if (this.disposed || generation !== this.refreshGeneration) return;
     this.cachedSnapshot = snapshot;
     for (const listener of this.listeners) {
-      listener();
+      if (this.disposed) break;
+      try {
+        listener();
+      } catch {
+        // An observer cannot prevent other observers from receiving the update.
+      }
     }
   }
 
@@ -35,6 +55,7 @@ export class StaticProjectSource implements ProjectSource {
   }
 
   subscribe(listener: () => void): () => void {
+    if (this.disposed) return () => {};
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
@@ -42,6 +63,8 @@ export class StaticProjectSource implements ProjectSource {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
+    this.refreshGeneration++;
     this.listeners.clear();
   }
 }

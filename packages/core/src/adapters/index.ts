@@ -9,6 +9,7 @@ import { presenceAdapter } from "./presence";
 
 export * from "./types";
 export * from "./contract-harness";
+export { StaticProjectSource } from "./static-source";
 
 export const PROJECT_ADAPTERS = [
   codexLocalAdapter,

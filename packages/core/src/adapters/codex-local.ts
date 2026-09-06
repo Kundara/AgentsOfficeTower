@@ -27,32 +27,25 @@ async function buildLocalAgents(
   notes: string[],
   readThreads = true
 ): Promise<CodexThread[]> {
-  try {
-    return await withAppServerClient(async (client) => {
-      const query = await listCodexProjectThreadCandidates({
-        client,
-        projectRoot,
-        localLimit
-      });
-      if (query.usedUnscopedFallback) {
-        notes.push("Local Codex cwd filter returned no project threads; used unscoped Windows path fallback.");
-      }
-      const threads = query.trackedThreads;
-      if (!readThreads) {
-        return threads;
-      }
-      return Promise.all(threads.map(async (thread) =>
-        mergeListedThreadMetadata(
-          await readCodexThreadWithTimeout(client, thread.id).catch(() => thread),
-          thread
-        )
-      ));
+  // Let the source turn transport failures into health while retaining its cache.
+  return withAppServerClient(async (client) => {
+    const query = await listCodexProjectThreadCandidates({
+      client,
+      projectRoot,
+      localLimit
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    notes.push(`Local Codex app-server unavailable: ${message}`);
-    return [];
-  }
+    if (query.usedUnscopedFallback) {
+      notes.push("Local Codex cwd filter returned no project threads; used unscoped Windows path fallback.");
+    }
+    const threads = query.trackedThreads;
+    if (!readThreads) return threads;
+    return Promise.all(threads.map(async (thread) =>
+      mergeListedThreadMetadata(
+        await readCodexThreadWithTimeout(client, thread.id).catch(() => thread),
+        thread
+      )
+    ));
+  });
 }
 
 function mergeListedThreadMetadata(thread: CodexThread, listedThread: CodexThread): CodexThread {
@@ -231,6 +224,10 @@ export const codexLocalAdapter: ProjectAdapter = {
         threads,
         notes
       });
-    }, emptyAdapterSnapshot({ adapterId: "codex-local", source: "local" }));
+    }, emptyAdapterSnapshot({
+      adapterId: "codex-local",
+      source: "local",
+      health: { status: "unconfigured", detail: "Local Codex has not been read yet.", lastUpdatedAt: null }
+    }));
   }
 };
