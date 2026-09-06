@@ -33,13 +33,13 @@ The project goal is not generic chat replay. It is live workload visibility:
 - `docs/integration-hooks.md`
   Exact Codex, Claude, and Cursor integration surfaces, plus how they map into the product.
 - `docs/agent-workflows.md`
-  GPT-5.6 model policy, Codex role selection, delegation boundaries, skill layout, and workflow validation.
+  GPT-6 Astra model policy, Codex role selection, delegation boundaries, skill layout, and workflow validation.
 - `docs/self-development.md`
   Project-quality bar, iteration priorities, and what to improve next.
 - `docs/references.md`
   External references used by this project.
 - `.codex/agents`
-  GPT-5.6 Codex role config layers for read-only mapping, copy, and verification.
+  GPT-6 Astra Codex role config layers for read-only mapping, copy, and verification.
 - `.agents/skills`
   Auto-discovered Tower operation and coordination skills.
 - `.codex-agents`

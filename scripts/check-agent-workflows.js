@@ -89,8 +89,8 @@ function validateRoleFile(role, rolePath, expectedEffort, fail) {
     return;
   }
   validateExactKeys(config, ROLE_KEYS, `Agent ${role} config`, fail);
-  if (config.model !== "gpt-5.6-sol") {
-    fail(`Agent ${role} must use gpt-5.6-sol.`);
+  if (config.model !== "gpt-6-astra") {
+    fail(`Agent ${role} must use gpt-6-astra.`);
   }
   if (config.model_reasoning_effort !== expectedEffort) {
     fail(`Agent ${role} reasoning effort must be ${expectedEffort}.`);
@@ -116,12 +116,8 @@ function validateCodexConfig(repoRoot, fail) {
     return;
   }
 
-  validateExactKeys(config, ROOT_KEYS, ".codex/config.toml", fail);
-  if (config.model !== "gpt-5.6-sol") fail("Lead model must be gpt-5.6-sol.");
-  if (config.review_model !== "gpt-5.6-sol") fail("Review model must be gpt-5.6-sol.");
-  if (config.model_reasoning_effort !== "medium") fail("Lead reasoning baseline must remain medium.");
-  if (config.plan_mode_reasoning_effort !== "high") fail("Plan mode must use high reasoning effort.");
-  if (config.model_verbosity !== "medium") fail("Lead model verbosity must remain medium.");
+  // Lead settings are user-controlled; only registration and concurrency are required.
+  validateExactKeys(config, ROOT_KEYS.filter((key) => key === "features" || key === "agents" || key in config), ".codex/config.toml", fail);
 
   validateExactKeys(config.features, ["multi_agent_v2"], "features", fail);
   const multiAgent = isObject(config.features) ? config.features.multi_agent_v2 : null;
@@ -237,7 +233,7 @@ if (require.main === module) {
     failures.forEach((failure) => console.error(`- ${failure}`));
     process.exit(1);
   }
-  console.log(`Agent workflow config is consistent (${Object.keys(EXPECTED_ROLES).length} roles, ${EXPECTED_SKILLS.length} skills, GPT-5.6 Sol).`);
+  console.log(`Agent workflow config is consistent (${Object.keys(EXPECTED_ROLES).length} roles, ${EXPECTED_SKILLS.length} skills, GPT-6 Astra).`);
 }
 
 module.exports = { validateAgentWorkflow };

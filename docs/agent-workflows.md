@@ -10,17 +10,16 @@ This repository keeps its Codex workflow contract in three places:
 
 Keep these surfaces aligned. Put product and codebase invariants in `AGENTS.md`, role-specific behavior in the role config, and repeatable operational procedures in a skill.
 
-## GPT-5.6 baseline
+## GPT-6 Astra baseline
 
-The trusted-project config uses the explicit flagship slug `gpt-5.6-sol` for lead, review, and subagent work. The unsuffixed `gpt-5.6` value is an alias; the explicit slug makes model routing visible in configuration and diagnostics.
+The three specialist files in `.codex/agents/` use the explicit model slug `gpt-6-astra`. Lead and generic review settings belong to the user and may be inherited from their app or user configuration. Migrating specialist roles does not require editing `.codex/config.toml` or forcing a lead model.
 
 The baseline is intentionally bounded:
 
-- Lead work uses `medium` reasoning.
-- Plan mode uses `high` reasoning for architecture and dependency decisions.
+- Repository mapping uses `medium` reasoning.
 - Narrow copy roles use `low` reasoning.
 - Independent verification uses `high` reasoning.
-- Model verbosity remains `medium`; prompts define required evidence instead of generic brevity rules.
+- Lead reasoning, plan effort, and verbosity remain user-controlled; role prompts specify required evidence.
 
 These settings are a starting contract, not a claim that the highest effort is always best. When representative workflow evals exist, compare the current setting with one level lower and keep the cheaper setting when completion quality and evidence remain equivalent.
 
@@ -95,7 +94,7 @@ Run the workflow guard after changing Codex config, roles, or skills:
 npm run check:agent-workflows
 ```
 
-It parses the Codex TOML layers structurally and verifies the GPT-5.6 model contract, exact role registration, concurrency bounds, unique in-tree role files, read-only sandboxes, intentional effort levels, skill discovery paths, frontmatter, UI prompts, and linked references. Fixture tests ensure malformed or duplicate TOML, orphan role files, shared role targets, and permission drift fail closed.
+It parses the Codex TOML layers structurally and verifies the GPT-6 Astra specialist model contract, exact role registration, concurrency bounds, unique in-tree role files, read-only sandboxes, intentional effort levels, skill discovery paths, frontmatter, UI prompts, and linked references. Fixture tests ensure malformed or duplicate TOML, orphan role files, shared role targets, and permission drift fail closed. Lead model keys are optional and are not pinned by this guard; tests cover both inherited and explicitly selected lead settings, and reject specialist downgrades.
 
 Also run:
 
@@ -104,10 +103,10 @@ codex features list
 npm run check
 ```
 
-`multi_agent_v2` is still marked under development in the tested CLI, while the public stable documentation describes the v1 `multi_agent`/`agents.max_threads` shape. This repository intentionally targets the tested v2/Fable-era runtime. Revalidate the project layer before changing either shape.
+The scheduler registration preserves the project's tested multi-agent v2 shape. Revalidate it against the installed CLI before changing scheduler keys; model migration alone is not a scheduler migration.
 
 `codex features list` reports feature availability, but it is not proof that the project layer won over user config. Use `codex --strict-config doctor --summary` after a Codex upgrade and inspect app-server `config/read` with `includeLayers: true` when changing this contract. Multi-agent v2 owns its concurrency limit, and Codex 0.144.0 rejects the older `agents.max_threads` setting when v2 is enabled. `npm run check` includes the deterministic repository guard alongside boundaries, type checks, and tests.
 
-The public model catalog and current local Codex catalog expose GPT-5.6 as Sol, Terra, and Luna. `Fable` is not a public model slug or config key, so do not hard-code it as a model alias. If a Codex surface supplies `Fable` as an agent nickname or other display label, preserve it as opaque metadata.
+Use the explicit Astra slug for specialist routing and preserve agent nicknames as opaque display metadata. The model choice does not change provider confidence, permissions, session ownership, or tool availability.
 
-If `gpt-5.6-sol` is unavailable to the current account or Codex surface, report the access error. Do not silently change the checked-in model contract or fall back to another family.
+If `gpt-6-astra` is unavailable to the current account or Codex surface, report the access error. Do not silently change the checked-in model contract or fall back to another family.

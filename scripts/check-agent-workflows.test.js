@@ -32,8 +32,8 @@ test("malformed and duplicate TOML keys fail closed", () => {
   const failures = withFixture((root) => {
     const path = join(root, ".codex", "config.toml");
     rewrite(path, (source) => source.replace(
-      'model = "gpt-5.6-sol"',
-      'model = "gpt-5.6-sol"\nmodel = "gpt-5.6-sol"'
+      'max_depth = 1',
+      'max_depth = 1\nmax_depth = 1'
     ));
   });
   assert.ok(failures.some((failure) => failure.includes("invalid TOML")));
@@ -41,7 +41,7 @@ test("malformed and duplicate TOML keys fail closed", () => {
 
 test("unregistered and multiply registered role files are rejected", () => {
   const orphanFailures = withFixture((root) => {
-    writeFileSync(join(root, ".codex", "agents", "orphan.toml"), "model = \"gpt-5.6-sol\"\n");
+    writeFileSync(join(root, ".codex", "agents", "orphan.toml"), "model = \"gpt-6-astra\"\n");
   });
   assert.ok(orphanFailures.some((failure) => failure.includes("Unregistered role config")));
 
@@ -66,4 +66,21 @@ test("role layers reject unexpected keys and permission or effort drift", () => 
   assert.ok(failures.some((failure) => failure.includes("unsupported keys: description")));
   assert.ok(failures.some((failure) => failure.includes("reasoning effort must be high")));
   assert.ok(failures.some((failure) => failure.includes("must remain read-only")));
+});
+
+test("lead settings may be inherited or explicitly selected without changing the Astra roles", () => {
+  for (const prefix of ['', 'model = "user-selected-model"\nreview_model = "user-selected-review"\nmodel_reasoning_effort = "high"\n']) {
+    const failures = withFixture((root) => {
+      const path = join(root, ".codex", "config.toml");
+      rewrite(path, (source) => prefix + source.replace(/^(?:model|review_model|model_reasoning_effort|plan_mode_reasoning_effort|model_verbosity)\s*=.*\r?\n/gm, ''));
+    });
+    assert.deepEqual(failures, []);
+  }
+});
+
+test("roles reject a silent downgrade from Astra", () => {
+  const failures = withFixture((root) => {
+    rewrite(join(root, ".codex", "agents", "office-mapper.toml"), (source) => source.replace('gpt-6-astra', 'gpt-5.6-sol'));
+  });
+  assert.ok(failures.some((failure) => failure.includes("must use gpt-6-astra")));
 });
