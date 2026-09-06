@@ -18,3 +18,7 @@ artifacts/validation
 artifacts
 AICodexAgentsOffice.win-runchrome-cdp
 .win-run
+
+# Generated motion captures contain local task history; keep the report and scripts.
+/tmp/motion-audit-*/fleet.jsonl
+/tmp/motion-audit-*/analysis.json
