@@ -6,8 +6,10 @@ import { ensureAgentAppearance } from "./appearance";
 import { getClaudeSdkSessionRecords, listClaudeSdkSessions, resolveReadableClaudeHooksFilePath } from "./claude-agent-sdk";
 import { buildClaudeTranscriptBackgroundTaskAgents } from "./claude-background-tasks";
 import { claudeSdkSessionListOptions, filterClaudeSdkSessionsForProject } from "./claude-session-ownership";
+import { applyClaudeRegistryStatus, readClaudeSessionRegistry } from "./claude-session-registry";
+import { extractClaudeSessionTitle, isClaudeHumanUserRecord, isMeaningfulTranscriptText, isSyntheticClaudeUserText, normalizeClaudeSessionTitle } from "./claude-transcript-signals";
 import { inferredGoalFromText } from "./goal";
-import { sameProjectPath, type DiscoveredProject } from "./project-paths";
+import { filesystemPathForProjectRoot, sameProjectPath, type DiscoveredProject } from "./project-paths";
 import type { AgentActivityEvent, ActivityState, AgentConfidence, AgentGoalKind, AgentGoalState, DashboardAgent, DashboardEvent, NeedsUserQuestion, NeedsUserState } from "./types";
 
 const DEFAULT_CLAUDE_CONFIG_DIR = join(homedir(), ".claude");
@@ -758,27 +760,6 @@ function shorten(text: string, maxLength: number): string {
   return `${normalized.slice(0, maxLength - 1)}…`;
 }
 
-function isMeaningfulTranscriptText(text: string | null | undefined): text is string {
-  if (typeof text !== "string") {
-    return false;
-  }
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return false;
-  }
-  return !/^[.\-_~`"'!,;:|/\\()[\]{}]+$/.test(normalized);
-}
-
-function isSyntheticClaudeUserText(text: string): boolean {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  return (
-    /^<local-command-stdout>[\s\S]*<\/local-command-stdout>$/i.test(normalized)
-    || /^<command-name>[\s\S]*<\/command-name>/i.test(normalized)
-    || /^<command-message>[\s\S]*<\/command-message>/i.test(normalized)
-    || /^<command-args>[\s\S]*<\/command-args>/i.test(normalized)
-  );
-}
-
 function parseJsonLines(text: string, dropFirstPartial = false): Array<Record<string, unknown>> {
   const lines = text.split(/\r?\n/);
   const usable = dropFirstPartial ? lines.slice(1) : lines;
@@ -909,7 +890,7 @@ function extractTextEntries(content: unknown): string[] {
 }
 
 function extractUserText(record: Record<string, unknown>): string | null {
-  if (record.type !== "user") {
+  if (!isClaudeHumanUserRecord(record)) {
     return null;
   }
 
@@ -2492,37 +2473,6 @@ function normalizeClaudeDisplayModel(model: string | null): string | null {
   return normalized || null;
 }
 
-function normalizeClaudeSessionTitle(title: string | null): string | null {
-  if (!title) {
-    return null;
-  }
-  const normalized = title.replace(/\s+/g, " ").trim();
-  if (!normalized || !isMeaningfulTranscriptText(normalized) || isSyntheticClaudeUserText(normalized)) {
-    return null;
-  }
-  return normalized;
-}
-
-function extractClaudeSessionTitle(records: Array<Record<string, unknown>>): string | null {
-  for (const record of [...records].reverse()) {
-    const type = typeof record.type === "string" ? record.type : "";
-    if (type === "ai-title") {
-      const title = normalizeClaudeSessionTitle(stringValue(record, "aiTitle", "ai_title", "title", "name"));
-      if (title) {
-        return title;
-      }
-    }
-
-    if (type === "session-title" || type === "session_title") {
-      const title = normalizeClaudeSessionTitle(stringValue(record, "title", "name", "summary"));
-      if (title) {
-        return title;
-      }
-    }
-  }
-  return null;
-}
-
 function labelFromSessionTitle(title: string | null, model: string | null, sessionId: string): string {
   const normalizedTitle = normalizeClaudeSessionTitle(title);
   return normalizedTitle ? shorten(normalizedTitle, 42) : labelFromModel(model, sessionId);
@@ -2650,9 +2600,11 @@ async function loadClaudeSessionsViaSdk(projectRoot: string, limit = 12): Promis
   const entries = await Promise.all(
     projectSessions.map(async (session) => {
       const cwd = canonicalizeProjectPath(session.cwd) ?? projectRoot;
-      const records = await getClaudeSdkSessionRecords({
+      // Prefer the raw transcript tail: the SDK chain drops attachments and system records.
+      const rawSample = projectDirPath ? await readLogSample(join(projectDirPath, `${session.sessionId}.jsonl`)).catch(() => null) : null;
+      const records = rawSample ? [...rawSample.headRecords, ...rawSample.tailRecords] : await getClaudeSdkSessionRecords({
         sessionId: session.sessionId,
-        dir: projectRoot,
+        dir: filesystemPathForProjectRoot(projectRoot),
         cwd,
         gitBranch: session.gitBranch,
         limit: 200
@@ -2679,6 +2631,17 @@ async function loadClaudeSessionsViaSdk(projectRoot: string, limit = 12): Promis
 }
 
 async function collectClaudeLoadedSessions(projectRoot: string, limit = 12): Promise<ClaudeLoadedSession[]> {
+  const [loaded, registry] = await Promise.all([
+    collectClaudeLoadedSessionsFromTranscripts(projectRoot, limit),
+    readClaudeSessionRegistry(claudeConfigDirs()).catch(() => new Map())
+  ]);
+  return loaded.map((session) => ({
+    ...session,
+    summary: applyClaudeRegistryStatus(session.summary, registry.get(session.sessionId), RECENT_DONE_WINDOW_MS)
+  }));
+}
+
+async function collectClaudeLoadedSessionsFromTranscripts(projectRoot: string, limit: number): Promise<ClaudeLoadedSession[]> {
   const sdkSessions = await loadClaudeSessionsViaSdk(projectRoot, limit);
   if (sdkSessions !== null) {
     return Promise.all(

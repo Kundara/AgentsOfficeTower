@@ -386,8 +386,14 @@ export class CodexAppServerClient {
     sourceKinds?: string[];
     sortKey?: ThreadListSortKey;
     sortDirection?: SortDirection;
+    useStateDbOnly?: boolean;
   }): Promise<CodexThread[]> {
     const requestedLimit = Math.max(0, params.limit ?? 12);
+    // cwd-filtered lists that scan-and-repair JSONL rollouts can take 20-35s on
+    // large histories (Codex 0.163), far past the observer's list timeout, while
+    // the state DB answers the same query in milliseconds. Unscoped discovery
+    // keeps the repair scan (about 1s) so stale metadata still gets repaired.
+    const useStateDbOnly = params.useStateDbOnly ?? Boolean(params.cwd);
     const sourceKinds = params.sourceKinds ?? [
       "cli",
       "vscode",
@@ -412,7 +418,8 @@ export class CodexAppServerClient {
         sortKey: params.sortKey ?? "updated_at",
         sortDirection: params.sortDirection ?? "desc",
         sourceKinds,
-        archived: false
+        archived: false,
+        ...(useStateDbOnly ? { useStateDbOnly: true } : {})
       });
       const page = result.data ?? [];
       threads.push(...page);
@@ -564,6 +571,28 @@ export class CodexAppServerClient {
       threadId
     });
     return result.status;
+  }
+
+  // Codex Desktop's canonical project registry. Older app-servers reject the
+  // method, so callers treat failure as "no registry" rather than an error.
+  async listProjects(limit = 100): Promise<Array<{ id: string; name: string; roots: string[]; updatedAt: number }>> {
+    const result = await this.request<{ data?: Array<Record<string, unknown>> }>("project/list", { limit });
+    return (Array.isArray(result.data) ? result.data : []).flatMap((project) => {
+      const roots = Array.isArray(project.roots)
+        ? project.roots
+          .map((root) => (typeof root === "object" && root ? (root as Record<string, unknown>).path : null))
+          .filter((path): path is string => typeof path === "string" && path.length > 0)
+        : [];
+      if (typeof project.id !== "string" || roots.length === 0) {
+        return [];
+      }
+      return [{
+        id: project.id,
+        name: typeof project.name === "string" ? project.name : "",
+        roots,
+        updatedAt: typeof project.updatedAt === "number" ? project.updatedAt : 0
+      }];
+    });
   }
 
   async listLoadedThreads(): Promise<string[]> {

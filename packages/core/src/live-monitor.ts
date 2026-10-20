@@ -49,6 +49,7 @@ import {
   extractCollabReceiverThreadIds,
   extractThreadId,
   hasEquivalentRecentMessageEvent,
+  isClientStateOnlyAppServerNotification,
   isFinalAgentMessageNotification,
   latestThreadAgentMessageIsInLastTurn,
   latestThreadAgentMessage,
@@ -71,6 +72,7 @@ export {
   buildThreadReadAgentMessageEvent,
   extractCollabReceiverThreadIds,
   hasEquivalentRecentMessageEvent,
+  isClientStateOnlyAppServerNotification,
   parseApplyPatchInput,
   buildRolloutHookEvent,
   shouldMarkThreadLiveFromAppServerNotification,
@@ -1031,6 +1033,9 @@ export class ProjectLiveMonitor extends EventEmitter {
   }
 
   private handleAppServerNotification(notification: AppServerNotification): void {
+    if (isClientStateOnlyAppServerNotification(notification.method)) {
+      return;
+    }
     const diagnosticNote = buildAppServerDiagnosticNote(notification);
     if (!this.belongsToProject(notification)) {
       if (!extractThreadId(notification.params) && diagnosticNote) {

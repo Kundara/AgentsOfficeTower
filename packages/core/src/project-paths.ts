@@ -375,6 +375,30 @@ export async function discoverCodexProjects(limit = 20): Promise<DiscoveredProje
   const threadLimit = codexProjectDiscoveryThreadLimit(limit);
 
   await withAppServerClient(async (client) => {
+    // Seed Codex Desktop registered projects (primary root only) so workspaces
+    // created in the app appear before any thread has run there.
+    const registeredProjects = await client.listProjects().catch(() => []);
+    await Promise.all(registeredProjects.map(async (project) => {
+      const root = canonicalizeProjectPath(project.roots[0]);
+      const identityKey = root ? projectPathIdentityKey(root) : null;
+      if (!root || !identityKey || projects.has(identityKey)) {
+        return;
+      }
+      try {
+        if (!(await stat(filesystemPathForProjectRoot(root))).isDirectory()) {
+          return;
+        }
+      } catch {
+        return;
+      }
+      projects.set(identityKey, {
+        root,
+        label: projectLabelFromRoot(root),
+        updatedAt: await projectDiscoveryUpdatedAt(root, project.updatedAt),
+        count: 0
+      });
+    }));
+
     const threads = await client.listThreads({ limit: threadLimit });
     for (const thread of threads) {
       const root = canonicalizeProjectPath(thread.cwd);

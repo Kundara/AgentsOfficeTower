@@ -62,7 +62,11 @@ export function createEventPresentation(catalogs: {
       "hook/started",
       "hook/completed"
     ].includes(method)) return eventIconUrls["item/tool/call"] ?? null;
-    if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
+    if (
+      method === "item/autoApprovalReview/started"
+      || method === "item/autoApprovalReview/completed"
+      || method === "autoApprovalReview/strictReviewRequired"
+    ) {
       return eventIconUrls["item/commandExecution/requestApproval"] ?? null;
     }
     if (method === "turn/interrupted" || method === "turn/failed") return eventIconUrls["turn/completed"] ?? null;

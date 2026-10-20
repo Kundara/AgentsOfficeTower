@@ -12,10 +12,17 @@ const NON_FINAL_WORK_ITEM_TYPES = new Set([
   "collabAgentToolCall",
   "webSearch",
   "imageView",
+  "imageGeneration",
+  "sleep",
+  "subAgentActivity",
+  "functionCallOutput",
+  "hookPrompt",
   "enteredReviewMode",
   "exitedReviewMode",
   "contextCompaction"
 ]);
+
+const TERMINAL_ITEM_STATUSES = new Set(["completed", "failed", "declined", "interrupted"]);
 
 function itemString(item: ThreadItem, key: string): string | null {
   const value = item[key];
@@ -37,6 +44,9 @@ export function turnHasNonFinalWorkSignal(turn: CodexTurn): boolean {
   });
 }
 
+// Only items that carry a lifecycle `status` can hold a turn open. Status-less
+// items such as reasoning, plan, webSearch, or sleep are work evidence, not
+// proof that something is still running.
 export function turnHasOpenWorkSignal(turn: CodexTurn): boolean {
   if (turn.status === "inProgress") {
     return true;
@@ -46,6 +56,6 @@ export function turnHasOpenWorkSignal(turn: CodexTurn): boolean {
       return false;
     }
     const status = itemString(item, "status");
-    return status !== "completed" && status !== "failed" && status !== "declined";
+    return status !== null && !TERMINAL_ITEM_STATUSES.has(status);
   });
 }

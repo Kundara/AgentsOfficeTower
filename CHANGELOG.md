@@ -9,6 +9,11 @@ Entries stay under the active version until an explicit version bump is requeste
 
 ### Added
 
+- Added Codex 0.163 app-server coverage for the `subAgentActivity`, `imageGeneration`, `sleep`, `functionCallOutput`, and `hookPrompt` turn items, the `partial_answer` message phase, async agent `questions`, the `interruptAgent`/`listAgents` collab tools, strict auto-approval review, provider auth recovery, and `thread/reverted`. Client-only desktop notifications (read state, attachments, predictions, queued drafts, gateway auth, MCP event streams, realtime voice items) are now dropped before they can trigger thread rereads or discovery.
+- Added Codex Desktop `project/list` registered projects as fleet discovery seeds, using each project's primary root.
+- Added the live Claude Code session registry (`~/.claude/sessions/<pid>.json`) as typed lead-session lifecycle: busy sessions stay at desks with `typed` confidence, waiting sessions surface a read-only Needs You entry, idle sessions settle, and the user-chosen session name becomes the label.
+- Extended `npm run check:codex-protocol` to diff Codex `ThreadItem` variants and `MessagePhase` values in addition to notification and server-request methods.
+
 - Added inferred Claude background-task child rows for `Bash` calls launched with `run_in_background`, including stable parent linkage, live command activity, incremental transcript discovery, bounded local-only output tails, raw task-notification completion/failure handling, a read-only in-scene history card, and a short recent-completion grace without confusing those commands with true Claude Agent subagents.
 - Added compact per-format SVG file badges to the in-scene hot-change board and hover cards. Badges use recognizable format colors, semantic file pictograms, and added/modified/deleted/renamed/mixed change indicators across code, markup, styles, data, configuration, docs, images, audio, video, fonts, archives, Unity/project files, binaries, and unknown formats.
 - Added `/file-format-audit`, an interactive visual-review gallery driven by the production icon renderer and the complete recognized-extension catalog, with search, change-state switching, adjustable sizing, light/dark surfaces, and a 9–32px legibility strip.
@@ -22,6 +27,17 @@ Entries stay under the active version until an explicit version bump is requeste
 - Changed server shutdown to exit within a five-second grace period when observer connections or SSE clients would otherwise keep the process alive after SIGTERM, so `aot stop` and `aot restart` complete reliably.
 
 ### Fixed
+
+- Fixed per-project Codex `thread/list` calls timing out after 15 seconds on large local histories. cwd-scoped listing now reads the app-server state DB (`useStateDbOnly`, milliseconds instead of 20-35 seconds), while unscoped discovery keeps the metadata repair scan.
+- Fixed Codex command details on Windows showing the `"...powershell.exe" -Command '...'` wrapper instead of the script the agent ran; POSIX `bash -lc` wrappers are unwrapped the same way.
+- Fixed finished Codex sessions reading as `blocked` because an earlier command in a turn failed even though the turn ended with a `final_answer`.
+- Fixed Codex v2 `userMessage` prompts always reading "Prompt" (text now comes from `content[]`) and v2 reasoning summaries falling back to "Reasoning" (the latest `summary[]` line is used).
+- Fixed status-less Codex items such as reasoning and plan counting as open work, which kept finished `notLoaded` subagents from settling.
+- Fixed the Claude Agent SDK path returning no sessions on native Windows because it received `/mnt/<drive>/...` identities instead of host paths.
+- Fixed Claude sessions losing their titles on current Claude Code builds, which write `custom-title` and `agent-name` records instead of `session-title`.
+- Fixed Claude background-task notifications, `isMeta` context, peer messages, and system reminders being read as fresh user prompts that flipped finished sessions back to planning.
+- Fixed killed Claude background tasks staying `running` for up to 30 minutes.
+- Fixed `npm start` failing on Windows with `spawnSync npm.cmd EINVAL` under current Node releases.
 
 - Restored the repository lead-agent model, reasoning, and verbosity declarations after they were accidentally removed, bringing the checked-in Codex workflow configuration back into alignment with its structural CI contract.
 - Fixed Windows filesystem operations treating canonical `/mnt/<drive>/...` project identities as native paths. Deleted-worktree cleanup now keeps active Windows projects in fleet discovery, and project image previews resolve against the real host path.

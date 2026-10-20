@@ -96,7 +96,7 @@ function taskNotificationText(record: Record<string, unknown>): string | null {
 }
 
 function descriptionFromSummary(summary: string | null): string | null {
-  return summary?.match(/^Background command ["“]([\s\S]*?)["”] (?:completed|failed|stopped)\b/i)?.[1]?.trim() || null;
+  return summary?.match(/^Background command ["“]([\s\S]*?)["”] (?:completed|failed|stopped|killed)\b/i)?.[1]?.trim() || null;
 }
 
 function taskState(status: string | null, summary: string | null, isOngoing: boolean): ActivityState {
@@ -360,7 +360,7 @@ export async function readClaudeTranscriptBackgroundTasks(input: {
       task.updatedAtMs,
       await outputUpdatedAt(task.outputFile, input.sessionId, task.taskId)
     );
-    const explicitlyFinished = Boolean(task.status && /^(completed|failed|error|stopped|cancelled)$/i.test(task.status));
+    const explicitlyFinished = Boolean(task.status && /^(completed|failed|error|stopped|killed|cancelled)$/i.test(task.status));
     const isOngoing = !explicitlyFinished && now - updatedAtMs <= ORPHANED_TASK_WINDOW_MS;
     return { task, updatedAtMs, explicitlyFinished, isOngoing };
   }));

@@ -28,10 +28,13 @@ function printUsage() {
 }
 
 function runSync(command, args) {
+  // Node refuses to spawn .cmd shims without a shell on Windows (EINVAL since
+  // the CVE-2024-27980 fix). Arguments here are fixed literals, so the shell is safe.
   const result = spawnSync(command, args, {
     cwd: repoRoot,
     stdio: "inherit",
-    env: process.env
+    env: process.env,
+    shell: process.platform === "win32"
   });
 
   if (typeof result.status === "number" && result.status !== 0) {

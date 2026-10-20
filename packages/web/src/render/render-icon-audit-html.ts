@@ -18,6 +18,11 @@ const THREAD_ITEM_LABELS: Record<string, string> = {
   collabAgentToolCall: "Collab agent tool call",
   webSearch: "Web search",
   imageView: "Image view",
+  imageGeneration: "Image generation",
+  sleep: "Sleep",
+  subAgentActivity: "Subagent activity",
+  functionCallOutput: "Function call output",
+  hookPrompt: "Hook prompt",
   scriptEdit: "Script edit",
   enteredReviewMode: "Entered review mode",
   exitedReviewMode: "Exited review mode",
@@ -28,6 +33,11 @@ const THREAD_ITEM_NOTES: Partial<Record<string, string>> = {
   scriptEdit: "Used by script file-change toasts when the event has no more specific method icon.",
   mcpToolCall: "Uses the regular gear icon shared with dynamic tool calls.",
   dynamicToolCall: "Uses the regular gear icon shared with MCP tool calls.",
+  imageGeneration: "Reuses the image-view icon until a dedicated generation sprite exists.",
+  sleep: "Reuses the reasoning icon; sleep is a quiet in-turn wait, not a needs-you state.",
+  subAgentActivity: "Reuses the collab tool icon for typed subagent lifecycle items.",
+  functionCallOutput: "Reuses the gear icon shared with MCP and dynamic tool calls.",
+  hookPrompt: "Reuses the user-message icon for hook-injected prompt fragments.",
   collabAgentToolCall: "Legacy compatibility item retained outside the current official list."
 };
 

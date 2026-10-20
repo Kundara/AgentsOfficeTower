@@ -1,5 +1,6 @@
 import { canonicalizeProjectPath } from "../project-paths";
 import { summarizeWebSearch } from "../web-search";
+import { unwrapShellCommand } from "../utils/text";
 import type { AppServerNotification, AppServerServerRequest } from "../app-server";
 import type {
   CodexThread,
@@ -395,6 +396,9 @@ function isLiveAppServerMethod(method: string): boolean {
     || method === "item/tool/call"
     || method === "item/autoApprovalReview/started"
     || method === "item/autoApprovalReview/completed"
+    || method === "autoApprovalReview/strictReviewRequired"
+    || method === "modelProvider/authRecoveryStarted"
+    || method === "modelProvider/authRecoveryCompleted"
     || method === "hook/started"
     || method === "hook/completed"
     || method === "model/rerouted"
@@ -523,8 +527,13 @@ function summarizeFileChange(item: Record<string, unknown>, fallbackPath: string
   };
 }
 
+function asShellCommand(value: unknown): string | undefined {
+  const command = asString(value);
+  return command === undefined ? undefined : unwrapShellCommand(command);
+}
+
 function summarizeCommand(item: Record<string, unknown>, method: string) {
-  const command = asString(item.command) ?? method;
+  const command = asShellCommand(item.command) ?? method;
   const cwd = asString(item.cwd) ?? null;
   const status = asString(item.status) ?? "inProgress";
   const phase =
@@ -578,6 +587,12 @@ function normalizeCollabToolName(tool: string): string {
   if (normalized === "resumeagent") {
     return "resume";
   }
+  if (normalized === "interruptagent") {
+    return "interrupt";
+  }
+  if (normalized === "listagents") {
+    return "list";
+  }
   return normalized;
 }
 
@@ -597,8 +612,30 @@ function summarizeCollabAgentTool(item: Record<string, unknown>): string {
       return receiverCount > 1 ? `Closing ${receiverCount} subagents` : "Closing subagent";
     case "resume":
       return receiverCount > 1 ? `Resuming ${receiverCount} subagents` : "Resuming subagent";
+    case "interrupt":
+      return receiverCount > 1 ? `Interrupting ${receiverCount} subagents` : "Interrupting subagent";
+    case "list":
+      return "Checking subagents";
     default:
       return rawTool;
+  }
+}
+
+export function summarizeSubAgentActivity(item: Record<string, unknown>): string {
+  const kind = asString(item.kind);
+  const agentPath = asString(item.agentPath);
+  const name = agentPath ? agentPath.split(/[\\/]/).filter(Boolean).at(-1) ?? agentPath : "subagent";
+  switch (kind) {
+    case "started":
+      return shorten(`Started ${name}`);
+    case "interacted":
+      return shorten(`Messaged ${name}`);
+    case "interrupted":
+      return shorten(`Interrupted ${name}`);
+    case "completed":
+      return shorten(`${name} finished`);
+    default:
+      return shorten(`Subagent ${name}`);
   }
 }
 
@@ -611,6 +648,13 @@ function collabReceiverIsNotFound(item: Record<string, unknown>, receiverThreadI
 export function extractCollabReceiverThreadIds(message: AppServerNotification | AppServerServerRequest): string[] {
   const params = asRecord(message.params) ?? {};
   const item = asRecord(params.item);
+  if (item && asString(item.type) === "subAgentActivity") {
+    // Only starts and follow-ups wake the child; interrupted/completed activity
+    // is refreshed through the normal parent reread instead of reseating it.
+    const kind = asString(item.kind);
+    const agentThreadId = asString(item.agentThreadId);
+    return agentThreadId && (kind === "started" || kind === "interacted") ? [agentThreadId] : [];
+  }
   if (!item || asString(item.type) !== "collabAgentToolCall") {
     return [];
   }
@@ -930,7 +974,80 @@ function buildEventFromItem(
       kind: "item",
       phase,
       title: "Reasoning updated",
-      detail: shorten(asString(item.text) ?? asString(item.summary) ?? "Reasoning")
+      detail: shorten(asString(item.text) ?? asString(item.summary) ?? asStringArray(item.summary).at(-1) ?? "Reasoning")
+    });
+  }
+
+  if (itemType === "subAgentActivity") {
+    const kind = asString(item.kind);
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: "subagent",
+      phase: kind === "interrupted" ? "interrupted" : kind === "completed" ? "completed" : phase,
+      title:
+        kind === "interrupted" ? "Subagent interrupted"
+        : kind === "completed" ? "Subagent finished"
+        : kind === "interacted" ? "Subagent messaged"
+        : "Subagent started",
+      detail: summarizeSubAgentActivity(item)
+    });
+  }
+
+  if (itemType === "imageGeneration") {
+    const savedPath = asString(item.savedPath) ?? null;
+    const failed = Boolean(asRecord(item.failure)) || asString(item.status) === "failed";
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: savedPath && !failed ? "fileChange" : "item",
+      phase: failed ? "failed" : phase,
+      title: failed ? "Image generation failed" : phase === "completed" ? "Image generated" : "Generating image",
+      detail: shorten(asString(item.revisedPrompt) ?? savedPath ?? "Image generation"),
+      path: savedPath,
+      action: savedPath && !failed ? "created" : undefined,
+      isImage: Boolean(savedPath)
+    });
+  }
+
+  if (itemType === "sleep") {
+    const durationMs = typeof item.durationMs === "number" && Number.isFinite(item.durationMs) ? item.durationMs : null;
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: "item",
+      phase,
+      title: phase === "completed" ? "Finished waiting" : "Waiting",
+      detail: durationMs !== null ? `Sleeping ${Math.max(1, Math.round(durationMs / 1000))}s` : "Sleeping"
+    });
+  }
+
+  if (itemType === "functionCallOutput") {
+    const name = asString(item.name) ?? "tool";
+    const namespace = asString(item.namespace);
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: "tool",
+      phase,
+      title: "Tool output",
+      detail: shorten(namespace ? `${namespace}.${name}` : name)
+    });
+  }
+
+  if (itemType === "hookPrompt") {
+    const fragments = Array.isArray(item.fragments) ? item.fragments : [];
+    const text = fragments
+      .map((fragment) => asString(asRecord(fragment)?.text))
+      .filter((entry): entry is string => Boolean(entry))
+      .join(" ");
+    return eventBase(context, method, params, {
+      itemId,
+      itemType,
+      kind: "item",
+      phase,
+      title: "Hook prompt",
+      detail: shorten(text || "Hook prompt")
     });
   }
 
@@ -955,6 +1072,27 @@ function buildEventFromItem(
   });
 }
 
+// Client-facing app-server state (unread markers, attachments, prompt
+// predictions, queued drafts, gateway auth, MCP event streams, realtime voice
+// items) never changes workload. These must not trigger thread rereads or
+// fleet discovery, otherwise desktop UI churn fans out into app-server load.
+const CLIENT_STATE_ONLY_METHODS = new Set([
+  "thread/readState/changed",
+  "thread/attachment/updated",
+  "thread/prediction/updated",
+  "thread/queue/changed",
+  "thread/project/updated",
+  "account/gatewayOAuth/changed",
+  "mcpServer/event/stream/notification",
+  "thread/realtime/item/started",
+  "thread/realtime/item/transcript/delta",
+  "thread/realtime/item/completed"
+]);
+
+export function isClientStateOnlyAppServerNotification(method: string): boolean {
+  return CLIENT_STATE_ONLY_METHODS.has(method);
+}
+
 export function buildDashboardEventFromAppServerMessage(
   context: DashboardEventContext,
   message: AppServerNotification | AppServerServerRequest
@@ -970,6 +1108,31 @@ export function buildDashboardEventFromAppServerMessage(
     // Internal upstream usage accounting is not a user-facing response event.
     case "rawResponse/completed":
       return null;
+    case "thread/reverted":
+      return eventBase(context, method, params, {
+        kind: "status",
+        phase: "updated",
+        title: "Thread reverted",
+        detail: "Conversation rolled back"
+      });
+    case "autoApprovalReview/strictReviewRequired":
+      return eventBase(context, method, params, {
+        kind: "approval",
+        phase: "started",
+        title: "Strict approval review",
+        detail: "Auto-review escalated to strict review"
+      });
+    case "modelProvider/authRecoveryStarted":
+    case "modelProvider/authRecoveryCompleted": {
+      const provider = asString(params.provider) ?? "model provider";
+      const message = asString(params.message);
+      return eventBase(context, method, params, {
+        kind: "status",
+        phase: method.endsWith("Completed") ? "completed" : "started",
+        title: method.endsWith("Completed") ? "Provider auth recovered" : "Recovering provider auth",
+        detail: shorten(message ? `${provider}: ${message}` : provider)
+      });
+    }
     case "error": {
       const detail = diagnosticMessage(params, "message", "error") || "Codex app-server error";
       return eventBase(context, method, params, {
@@ -1220,8 +1383,8 @@ export function buildDashboardEventFromAppServerMessage(
         kind: "approval",
         phase: "waiting",
         title: networkApprovalContext ? "Network approval requested" : "Command approval requested",
-        detail: shorten(asString(params.command) ?? asString(params.reason) ?? "Approval requested"),
-        command: asString(params.command),
+        detail: shorten(asShellCommand(params.command) ?? asString(params.reason) ?? "Approval requested"),
+        command: asShellCommand(params.command),
         cwd: asString(params.cwd),
         reason: asString(params.reason),
         availableDecisions: asStringArray(params.availableDecisions),
@@ -1525,7 +1688,7 @@ export function buildNeedsUserStateFromServerRequest(message: AppServerServerReq
       turnId: extractTurnId(params),
       itemId: extractItemId(params),
       reason: asString(params.reason),
-      command: asString(params.command),
+      command: asShellCommand(params.command),
       cwd: asString(params.cwd),
       availableDecisions: asStringArray(params.availableDecisions),
       networkApprovalContext: asRecord(params.networkApprovalContext) ?? null

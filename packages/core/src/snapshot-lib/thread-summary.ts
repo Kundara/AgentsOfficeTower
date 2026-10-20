@@ -1,4 +1,4 @@
-import { looksLikeValidationCommand, shortenText, isMeaningfulText } from "../utils/text";
+import { looksLikeValidationCommand, shortenText, isMeaningfulText, unwrapShellCommand } from "../utils/text";
 import { summarizeWebSearch } from "../web-search";
 import { turnHasFinalAnswer, turnHasNonFinalWorkSignal } from "../domain/codex-turn-semantics";
 import type {
@@ -230,6 +230,12 @@ function normalizeCollabToolName(tool: string): string {
   if (normalized === "resumeagent") {
     return "resume";
   }
+  if (normalized === "interruptagent") {
+    return "interrupt";
+  }
+  if (normalized === "listagents") {
+    return "list";
+  }
   return normalized;
 }
 
@@ -249,8 +255,64 @@ function collabToolDetail(item: ThreadItem): string {
       return receiverCount > 1 ? `Closing ${receiverCount} subagents` : "Closing subagent";
     case "resume":
       return receiverCount > 1 ? `Resuming ${receiverCount} subagents` : "Resuming subagent";
+    case "interrupt":
+      return receiverCount > 1 ? `Interrupting ${receiverCount} subagents` : "Interrupting subagent";
+    case "list":
+      return "Checking subagents";
     default:
       return rawTool;
+  }
+}
+
+function reasoningText(item: ThreadItem): string {
+  // v2 reasoning carries `summary: string[]` and `content: string[]`.
+  for (const key of ["summary", "text", "content"]) {
+    const value = item[key];
+    if (typeof value === "string" && isMeaningfulText(value)) {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      const latest = [...value].reverse().find((entry): entry is string => typeof entry === "string" && isMeaningfulText(entry));
+      if (latest) {
+        return latest;
+      }
+    }
+  }
+  return "Reasoning";
+}
+
+function userMessageText(item: ThreadItem): string | null {
+  // v2 userMessage carries `content: UserInput[]`; older payloads used `text`.
+  if (typeof item.text === "string" && isMeaningfulText(item.text)) {
+    return item.text;
+  }
+  const text = extractTextContent(item.content).join(" ").trim();
+  return text.length > 0 ? text : null;
+}
+
+function asyncQuestionTitles(item: ThreadItem): string[] {
+  if (!Array.isArray(item.questions)) {
+    return [];
+  }
+  return item.questions
+    .map((question) => asRecord(question)?.title)
+    .filter((title): title is string => typeof title === "string" && title.trim().length > 0);
+}
+
+function subAgentActivityDetail(item: ThreadItem): string {
+  const agentPath = typeof item.agentPath === "string" ? item.agentPath : null;
+  const name = agentPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? "subagent";
+  switch (item.kind) {
+    case "started":
+      return `Started ${name}`;
+    case "interacted":
+      return `Messaged ${name}`;
+    case "interrupted":
+      return `Interrupted ${name}`;
+    case "completed":
+      return `${name} finished`;
+    default:
+      return `Subagent ${name}`;
   }
 }
 
@@ -663,19 +725,24 @@ export function isOngoingThread(thread: CodexThread): boolean {
 function selectRelevantItem(items: ThreadItem[]): ThreadItem | null {
   const priority: ThreadItem["type"][] = [
     "fileChange",
+    "imageGeneration",
     "commandExecution",
     "dynamicToolCall",
     "mcpToolCall",
+    "functionCallOutput",
     "webSearch",
     "imageView",
     "collabToolCall",
     "collabAgentToolCall",
+    "subAgentActivity",
     "enteredReviewMode",
     "exitedReviewMode",
     "plan",
     "reasoning",
+    "sleep",
     "contextCompaction",
     "agentMessage",
+    "hookPrompt",
     "userMessage"
   ];
 
@@ -760,6 +827,14 @@ export function summariseThread(thread: CodexThread): {
     (lastTurn.status === "inProgress" && !dormantPastQuietWindow)
     || freshNotLoadedNonFinalWork
     || activeTopLevelWithoutFinalAnswer;
+  // A completed turn that ends in a final answer already handled its own failed
+  // tool calls; those historical failures must not pin the agent as blocked.
+  const settledWithFinalAnswer =
+    !treatAsInProgress && lastTurn.status === "completed" && turnHasFinalAnswer(lastTurn);
+  const itemStatus = (candidate: ThreadItem): string => {
+    const status = typeof candidate.status === "string" ? candidate.status : "inProgress";
+    return settledWithFinalAnswer && (status === "failed" || status === "declined") ? "completed" : status;
+  };
 
   if (lastTurn.status === "failed") {
     return {
@@ -789,7 +864,7 @@ export function summariseThread(thread: CodexThread): {
   switch (item.type) {
     case "fileChange": {
       const change = summarizeFileChange(item);
-      const status = typeof item.status === "string" ? item.status : "inProgress";
+      const status = itemStatus(item);
       const state =
         status === "failed" || status === "declined" ? "blocked"
         : !treatAsInProgress && status === "completed" ? settledRecentState
@@ -815,9 +890,9 @@ export function summariseThread(thread: CodexThread): {
       };
     }
     case "commandExecution": {
-      const command = typeof item.command === "string" ? item.command : "Command";
+      const command = typeof item.command === "string" ? unwrapShellCommand(item.command) : "Command";
       const cwd = typeof item.cwd === "string" ? item.cwd : thread.cwd;
-      const status = typeof item.status === "string" ? item.status : "inProgress";
+      const status = itemStatus(item);
       if (status === "failed" || status === "declined") {
         return {
           state: "blocked",
@@ -867,7 +942,7 @@ export function summariseThread(thread: CodexThread): {
     case "mcpToolCall": {
       const server = typeof item.server === "string" ? item.server : "mcp";
       const tool = typeof item.tool === "string" ? item.tool : server;
-      const status = typeof item.status === "string" ? item.status : "inProgress";
+      const status = itemStatus(item);
       return {
         state:
           status === "failed" || status === "declined" ? "blocked"
@@ -887,11 +962,11 @@ export function summariseThread(thread: CodexThread): {
     case "collabToolCall":
     case "collabAgentToolCall": {
       const detail = collabToolDetail(item);
-      const status = typeof item.status === "string" ? item.status : "inProgress";
+      const status = itemStatus(item);
       return {
         state:
           status === "failed" || status === "declined" ? "blocked"
-          : !treatAsInProgress && status === "completed" ? settledRecentState
+          : !treatAsInProgress && (status === "completed" || status === "interrupted") ? settledRecentState
           : "delegating",
         detail: status === "failed" || status === "declined" ? summarizeFailedItemDetail(item, detail) : detail,
         paths: [thread.cwd],
@@ -918,8 +993,87 @@ export function summariseThread(thread: CodexThread): {
           isImage: false
         }
       };
+    case "subAgentActivity": {
+      const detail = subAgentActivityDetail(item);
+      const settled = item.kind === "completed" || item.kind === "interrupted";
+      return {
+        state: !treatAsInProgress && settled ? settledRecentState : "delegating",
+        detail,
+        paths: [thread.cwd],
+        activityEvent: {
+          type: "subAgentActivity",
+          action: "updated",
+          path: thread.cwd,
+          title: detail,
+          isImage: false
+        }
+      };
+    }
+    case "imageGeneration": {
+      const savedPath = typeof item.savedPath === "string" ? item.savedPath : null;
+      const failed = Boolean(asRecord(item.failure)) || item.status === "failed";
+      const finished = savedPath !== null || item.status === "completed";
+      const prompt = typeof item.revisedPrompt === "string" ? shortenText(item.revisedPrompt, 88) : null;
+      return {
+        state:
+          failed ? "blocked"
+          : !treatAsInProgress && finished ? settledRecentState
+          : "editing",
+        detail:
+          failed ? "Image generation failed"
+          : finished ? (savedPath ? `Generated ${savedPath}` : "Generated image")
+          : prompt ? `Generating image: ${prompt}` : "Generating image",
+        paths: savedPath ? [savedPath] : [thread.cwd],
+        activityEvent: {
+          type: "imageGeneration",
+          action: savedPath ? "created" : "updated",
+          path: savedPath ?? thread.cwd,
+          title: prompt ?? "Image generation",
+          isImage: Boolean(savedPath)
+        }
+      };
+    }
+    case "functionCallOutput": {
+      const name = typeof item.name === "string" ? item.name : "tool";
+      const label = typeof item.namespace === "string" ? `${item.namespace}.${name}` : name;
+      return {
+        state: treatAsInProgress ? "scanning" : settledRecentState,
+        detail: label,
+        paths: [thread.cwd],
+        activityEvent: {
+          type: "functionCallOutput",
+          action: "updated",
+          path: thread.cwd,
+          title: label,
+          isImage: false
+        }
+      };
+    }
+    case "sleep": {
+      const durationMs = typeof item.durationMs === "number" && Number.isFinite(item.durationMs) ? item.durationMs : null;
+      const detail = durationMs !== null ? `Sleeping ${Math.max(1, Math.round(durationMs / 1000))}s` : "Sleeping";
+      return {
+        state: treatAsInProgress ? "running" : settledRecentState,
+        detail: treatAsInProgress ? detail : "Finished waiting",
+        paths: [thread.cwd],
+        activityEvent: null
+      };
+    }
+    case "hookPrompt": {
+      const fragments = Array.isArray(item.fragments) ? item.fragments : [];
+      const text = fragments
+        .map((fragment) => asRecord(fragment)?.text)
+        .filter((entry): entry is string => typeof entry === "string")
+        .join(" ");
+      return {
+        state: treatAsInProgress ? "planning" : settledRecentState,
+        detail: shortenText(text || "Hook prompt", 88),
+        paths: [thread.cwd],
+        activityEvent: null
+      };
+    }
     case "reasoning": {
-      const text = typeof item.summary === "string" ? item.summary : typeof item.text === "string" ? item.text : "Reasoning";
+      const text = reasoningText(item);
       return {
         state:
           !treatAsInProgress && item.status === "completed" ? settledRecentState : "thinking",
@@ -939,7 +1093,23 @@ export function summariseThread(thread: CodexThread): {
       const message = describeAgentMessage(item);
       const interruptedCommentary =
         interruptedWithoutFinalAnswer
-        && (item.phase === "commentary" || item.phase === "assistant_response");
+        && (item.phase === "commentary" || item.phase === "partial_answer" || item.phase === "assistant_response");
+      const questionTitles = asyncQuestionTitles(item);
+      if (questionTitles.length > 0 && !treatAsInProgress && ageMs <= DONE_WINDOW_MS) {
+        // Async-delivered questions end the turn but leave the agent waiting on the user.
+        return {
+          state: "waiting",
+          detail: shortenText(`Asked: ${questionTitles[0]}`, 88),
+          paths: message.paths.length > 0 ? message.paths : [thread.cwd],
+          activityEvent: {
+            type: "agentMessage",
+            action: "said",
+            path: message.paths[0] ?? thread.cwd,
+            title: questionTitles[0],
+            isImage: false
+          }
+        };
+      }
       return {
         state:
           treatAsInProgress || (interruptedCommentary && ageMs <= DONE_WINDOW_MS) ? "thinking"
@@ -957,7 +1127,8 @@ export function summariseThread(thread: CodexThread): {
       };
     }
     case "userMessage": {
-      const text = typeof item.text === "string" ? shortenText(item.text, 88) : "Prompt";
+      const rawText = userMessageText(item);
+      const text = rawText ? shortenText(rawText, 88) : "Prompt";
       return {
         state:
           treatAsInProgress || ageMs <= USER_PROMPT_ACTIVE_WINDOW_MS ? "planning"

@@ -111,6 +111,11 @@ export type AgentActivityEventType =
   | "collabAgentToolCall"
   | "webSearch"
   | "imageView"
+  | "imageGeneration"
+  | "sleep"
+  | "subAgentActivity"
+  | "functionCallOutput"
+  | "hookPrompt"
   | "enteredReviewMode"
   | "exitedReviewMode"
   | "contextCompaction"
@@ -124,10 +129,14 @@ export type ThreadStatus =
 
 export interface CodexTurn {
   id: string;
+  rootTurnId?: string | null;
   itemsView?: "notLoaded" | "summary" | "full";
   status: "completed" | "interrupted" | "failed" | "inProgress";
   error: { message?: string } | null;
   items: ThreadItem[];
+  startedAt?: number | null;
+  completedAt?: number | null;
+  durationMs?: number | null;
 }
 
 export interface CodexThread {
@@ -140,6 +149,11 @@ export interface CodexThread {
   ephemeral: boolean;
   historyMode?: string;
   modelProvider: string;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  projectId?: string | null;
+  originator?: string | null;
+  canAcceptDirectInput?: boolean | null;
   createdAt: number;
   updatedAt: number;
   recencyAt?: number | null;

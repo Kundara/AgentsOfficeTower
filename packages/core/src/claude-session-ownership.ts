@@ -1,4 +1,4 @@
-import { sameProjectPath } from "./project-paths";
+import { filesystemPathForProjectRoot, sameProjectPath } from "./project-paths";
 
 export function claudeSdkSessionListOptions(projectRoot: string, limit: number): {
   dir: string;
@@ -6,7 +6,8 @@ export function claudeSdkSessionListOptions(projectRoot: string, limit: number):
   includeWorktrees: false;
 } {
   return {
-    dir: projectRoot,
+    // The SDK matches host-native paths; `/mnt/<drive>/...` finds nothing on native Windows.
+    dir: filesystemPathForProjectRoot(projectRoot),
     limit,
     includeWorktrees: false
   };

@@ -70,7 +70,7 @@ Current use:
 - normalizes newer activity/diagnostic notifications including file patch updates, MCP progress, terminal interaction, Codex hook runs, guardian auto-review, model reroute/verification notices, warnings, MCP startup/login failures, rate-limit notices, and Windows sandbox/setup warnings
 - provides an explicit unsuccessful response to `item/tool/call` dynamic-tool requests because Agents Office does not execute arbitrary dynamic tools for observed Codex turns
 - answers `currentTime/read` server requests with Unix seconds without treating that request as workload, and opts out of `attestation/generate` requests because Agents Office cannot mint client attestation tokens
-- exposes `npm run check:codex-protocol` as a local drift check against the installed `codex app-server generate-ts --experimental` method set
+- exposes `npm run check:codex-protocol` as a local drift check against the installed `codex app-server generate-ts --experimental` notification and server-request method sets, the `ThreadItem` variant set, and the `MessagePhase` union
 
 Important note:
 
@@ -101,6 +101,24 @@ Signals intentionally classified as low-workload or no-op today:
 - `turn/moderationMetadata`
 - `model/safetyBuffering/updated`
 - `account/login/completed`
+- `project/changed` (triggers fleet rediscovery only)
+
+Client-state notifications that are dropped before any thread reread or discovery, because they describe desktop UI state rather than workload:
+
+- `thread/readState/changed`
+- `thread/attachment/updated`
+- `thread/prediction/updated`
+- `thread/queue/changed`
+- `thread/project/updated`
+- `account/gatewayOAuth/changed`
+- `mcpServer/event/stream/notification` (only delivered after `mcpServer/event/stream/start`, which the observer never calls)
+- `thread/realtime/item/started`, `thread/realtime/item/transcript/delta`, `thread/realtime/item/completed`
+
+Live, non-terminal signals added for Codex 0.163:
+
+- `autoApprovalReview/strictReviewRequired` keeps the thread live and renders a strict-review approval event; it is not a Needs You request because there is no server request to answer
+- `modelProvider/authRecoveryStarted` / `modelProvider/authRecoveryCompleted` keep the thread live and render provider auth status events
+- `thread/reverted` renders a status event and rereads the thread so rolled-back turns disappear; it never stops a desk by itself
 
 Current stance:
 
@@ -154,10 +172,12 @@ What we read:
 
 - `~/.codex/config.toml`
 - configured `[projects."..."]` roots
+- the app-server `project/list` registry used by Codex Desktop (primary root of each registered project; extra roots are not seeded as separate workspaces)
 
 How we use it:
 
 - seed fleet startup with configured Codex workspace roots even when no recent thread has been spawned there yet
+- seed Codex Desktop registered projects whose primary root still exists; older app-servers that reject `project/list` simply contribute nothing
 - keep workspace tabs aligned with the user's known Codex project list instead of only the subset already exercised in the current observer session
 
 ### `thread/read`
@@ -310,15 +330,20 @@ Current item-to-state mapping:
 | `imageView` | `scanning` | active worker, image-view icon coverage and viewing summary |
 | `mcpToolCall` | `scanning` or `blocked` | active worker, detail text names `server.tool` |
 | `dynamicToolCall` | `scanning` or `blocked` | active worker, tool-call summary |
-| `collabAgentToolCall` | `delegating` | active worker, delegation summary |
+| `collabAgentToolCall` | `delegating` | active worker, delegation summary, including `interruptAgent` and `listAgents`; `interrupted` calls settle like completed ones |
 | `collabToolCall` | `delegating` | active worker, subagent spawn/wait summary |
 | `plan` | `planning` or `done` | planning summary while in progress, recent finished summary once the turn completes |
-| `reasoning` | `thinking` or `done` | thinking summary while in progress, recent finished summary once the turn completes |
+| `reasoning` | `thinking` or `done` | latest v2 `summary[]` line while in progress, recent finished summary once the turn completes |
 | `enteredReviewMode` | `validating` | review-start summary and icon coverage |
 | `exitedReviewMode` | `thinking` or `done` | review-finished summary and icon coverage |
 | `contextCompaction` | `thinking` or `done` | compaction summary while active, recent finished summary once the turn completes |
-| `agentMessage` | `thinking` or `done` | message summary, live notification when subscribed, fallback notification from reread desktop threads |
-| `userMessage` | `planning` or `idle` | assigned-work summary and icon coverage |
+| `agentMessage` | `thinking`, `waiting`, or `done` | message summary, live notification when subscribed, fallback notification from reread desktop threads; `commentary` and `partial_answer` are non-final, only `final_answer` releases a desk; async-delivered `questions` on a settled turn read as `waiting` with an `Asked:` detail |
+| `userMessage` | `planning` or `idle` | assigned-work summary from v2 `content[]` text inputs (legacy `text` still accepted) and icon coverage |
+| `hookPrompt` | `planning` or `done` | hook-injected prompt fragments summarized as a prompt |
+| `subAgentActivity` | `delegating` or `done` | typed subagent lifecycle (`started`, `interacted`, `interrupted`, `completed`); `started` and `interacted` wake and reread the child thread |
+| `imageGeneration` | `editing`, `done`, or `blocked` | image-creation toast anchored to `savedPath` when present |
+| `functionCallOutput` | `scanning` or `done` | tool-output summary named `namespace.name` |
+| `sleep` | `running` or `done` | quiet in-turn wait such as `Sleeping 30s`; never a Needs You state |
 
 ### File change semantics
 
@@ -600,8 +625,10 @@ How we use it:
 
 What we read:
 
-- `getSessionMessages()` from `@anthropic-ai/claude-agent-sdk` when available
-- recent JSONL records from the head and tail of each session file as fallback
+- `listSessions()` from `@anthropic-ai/claude-agent-sdk` for session listing and titles, called with the host-native project path (`F:...` on native Windows; the canonical `/mnt/<drive>/...` identity matches nothing there)
+- recent JSONL records from the head and tail of each session file as the state source on every platform; `getSessionMessages()` is only a fallback when the raw transcript is unreadable, because its message chain drops attachments, system records, and title records
+- the live Claude Code session registry `<config>/sessions/<pid>.json` (the same data `claude agents --json` prints): `sessionId`, `cwd`, `status` (`busy`, `shell`, `idle`, `waiting`), `waitingFor`, `name`, `kind`, `entrypoint`, and `statusUpdatedAt`; entries whose pid has exited are ignored, and the sibling `.key` files are never read
+- title records in priority order: `custom-title.customTitle` (user rename), `agent-name.agentName`, then legacy `ai-title.aiTitle` and `session-title`
 - local workflow/subagent JSONL files under `~/.claude/projects/<encoded-cwd>/<session-id>/subagents/**/agent-*.jsonl`
 - matching workflow/subagent metadata files such as `agent-*.meta.json`
 - workflow journals such as `~/.claude/projects/<encoded-cwd>/<session-id>/subagents/workflows/<workflow-id>/journal.jsonl`
@@ -624,10 +651,12 @@ How we use it:
 - derive a display label from the Claude model
 - prefer supported Agent SDK session reads over raw transcript layout assumptions
 - infer the most recent meaningful activity from transcript data when no hook sidecar exists
+- treat the session registry as typed lifecycle truth for lead sessions: `busy`/`shell` keep the session ongoing (the transcript still supplies the detail), `waiting` becomes `waiting` with a read-only Needs You entry (`input` when `waitingFor` mentions input, otherwise `approval`), and `idle` settles a stale mid-work transcript tail to `done`/`idle`; the registry `name` becomes the label and confidence becomes `typed`
+- only count human user records as new prompts: `isMeta` records and non-human `origin` kinds (`task-notification`, `peer`, ...) are ignored, as are `<task-notification>`, `<system-reminder>`, `<local-command-caveat>`, and `[Request interrupted by user]` text
 - prefer typed Claude hook events when a sidecar exists for that session
 - assign the Claude `sessionId` to the normalized `threadId` field so browser event matching can treat Claude like other tracked sessions
 - derive inferred child Claude agents from local workflow/subagent transcripts, metadata, and journals when hooks are absent
-- derive inferred `claude:background-task` children from background Bash launch/result pairs, keep their command activity and latest bounded output visible, and end them from raw completion/failure/stop records that the Agent SDK can omit
+- derive inferred `claude:background-task` children from background Bash launch/result pairs, keep their command activity and latest bounded output visible, and end them from raw completion/failure/stop/killed records that the Agent SDK can omit
 - derive typed child Claude agents from hook `agent_id` and Agent Teams `leadSessionId` / teammate metadata when those typed identifiers are available
 - add teammate `worktreePath` or `cwd` values to Claude project discovery so cowork/team workspaces can appear as floors
 - add Agent View background jobs as read-only `claude:background` agents keyed by the Claude session id when available, otherwise by the background job id
